@@ -48,6 +48,7 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             minor_threshold=1000,
             apply=False,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=True,
@@ -64,6 +65,7 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             minor_threshold=1000,
             apply=True,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=False,
@@ -80,6 +82,7 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             minor_threshold=1000,
             apply=False,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=False,
@@ -96,6 +99,24 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             minor_threshold=1000,
             apply=True,
             assume_yes=True,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        accept_all=True,
+        has_review_required_rules=True,
+    )
+    assert not _needs_interactive_input(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            skip_review_required=True,
             summary=None,
             context=3,
             learn_variants=False,
@@ -119,6 +140,9 @@ def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
         review_variants = []
         active_rules = []
         ignored_hashes = set()
+
+        def ensure_rule_saved(self, rule):
+            return False
 
     class FakeSite:
         pass
@@ -174,6 +198,7 @@ def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
             minor_threshold=1000,
             apply=False,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=True,
@@ -265,6 +290,7 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
             minor_threshold=1000,
             apply=True,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=False,
@@ -365,6 +391,7 @@ def test_accept_all_still_prompts_review_required_matches(monkeypatch, tmp_path)
             minor_threshold=1000,
             apply=True,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=False,
@@ -444,6 +471,7 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
             minor_threshold=1000,
             apply=True,
             assume_yes=False,
+            skip_review_required=False,
             summary=None,
             context=3,
             learn_variants=False,
@@ -458,3 +486,257 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
         ("Page", "Edited summary", True),
         ("Page", "Edited summary", True),
     ]
+
+
+def test_learn_only_run_can_promote_review_required_match_to_review_variants(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+        @property
+        def review_keys(self):
+            return set(self.review_variants)
+
+        def add_review_variant(self, review_line):
+            if review_line in self.review_variants:
+                return False
+            self.review_variants.append(review_line)
+            return True
+
+        def add_ignored_hash(self, value):
+            self.ignored_hashes.add(value)
+            return True
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self.text = "content for review"
+
+    class FakePywikibot:
+        Page = FakePage
+
+    state = FakeState()
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_state", lambda *args, **kwargs: state)
+    monkeypatch.setattr(
+        "bewiki_biblio.runner.create_site",
+        lambda *args, **kwargs: (FakePywikibot, FakeSite()),
+    )
+    monkeypatch.setattr("bewiki_biblio.runner._load_titles", lambda *args, **kwargs: (1, ["Review page"]))
+    monkeypatch.setattr(
+        "bewiki_biblio.runner.replace_text",
+        lambda *args, **kwargs: ReplacementResult(
+            text="{{Крыніцы/Тэст}}",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["entry_only"],
+            rendered_templates=["{{Крыніцы/Тэст}}"],
+            page_arguments=[],
+            entry_arguments=["Mismatch One"],
+            review_reasons=["Heuristic entry match."],
+            matched_review_lines=["Mismatch One // Demo encyclopedia"],
+        ),
+    )
+    monkeypatch.setattr("bewiki_biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+    monkeypatch.setattr(ui, "prompt_review_match_action", lambda: "r")
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=False,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=True,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert state.review_variants == ["Mismatch One // Demo encyclopedia"]
+    assert "[review] Added 1 line(s) to review_variants.json" in stream.getvalue()
+
+
+def test_skip_review_required_avoids_prompt_and_save(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+    prompted = []
+    saved = []
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self.text = f"content for {title}"
+
+        def save(self, **kwargs):
+            saved.append(self.title_value)
+
+    class FakePywikibot:
+        Page = FakePage
+
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr("bewiki_biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr("bewiki_biblio.runner._load_titles", lambda *args, **kwargs: (1, ["One"]))
+    monkeypatch.setattr(
+        "bewiki_biblio.runner.replace_text",
+        lambda *args, **kwargs: ReplacementResult(
+            text="{{Крыніцы/Тэст|Mismatch One}}",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["entry_only"],
+            rendered_templates=["{{Крыніцы/Тэст|Mismatch One}}"],
+            page_arguments=[],
+            entry_arguments=["Mismatch One"],
+            review_reasons=["Heuristic entry match."],
+            matched_review_lines=["Mismatch One // Demo encyclopedia"],
+        ),
+    )
+    monkeypatch.setattr("bewiki_biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    def fake_prompt_page_action(current_summary, *, review_required=False):
+        prompted.append((current_summary, review_required))
+        return "y"
+
+    monkeypatch.setattr(ui, "prompt_page_action", fake_prompt_page_action)
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            skip_review_required=True,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert prompted == []
+    assert saved == []
+    assert "[review-skip] Heuristic entry match." in stream.getvalue()
+
+
+def test_learned_exact_rule_no_longer_requires_title_review(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+        def ensure_rule_saved(self, rule):
+            return False
+
+    prompted = []
+    saved = []
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self.text = f"content for {title}"
+
+        def save(self, **kwargs):
+            saved.append(self.title_value)
+
+    class FakePywikibot:
+        Page = FakePage
+
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr("bewiki_biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr("bewiki_biblio.runner._load_titles", lambda *args, **kwargs: (1, ["Page Title"]))
+    monkeypatch.setattr(
+        "bewiki_biblio.runner.replace_text",
+        lambda *args, **kwargs: ReplacementResult(
+            text="{{Крыніцы/Тэст|Mismatch One}}",
+            replacements=1,
+            used_line_rules=[{"kind": "line_exact", "match": "demo", "replacement": "{{Крыніцы/Тэст|Mismatch One}}"}],
+            used_rule_names=["line_exact"],
+            rendered_templates=["{{Крыніцы/Тэст|Mismatch One}}"],
+            page_arguments=[],
+            entry_arguments=["Mismatch One"],
+            review_reasons=[],
+            matched_review_lines=[],
+        ),
+    )
+    monkeypatch.setattr("bewiki_biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    def fake_prompt_page_action(current_summary, *, review_required=False):
+        prompted.append((current_summary, review_required))
+        return "y"
+
+    monkeypatch.setattr(ui, "prompt_page_action", fake_prompt_page_action)
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert prompted == []
+    assert saved == ["Page Title"]

@@ -583,6 +583,35 @@ def test_replace_belen11_template_citation_with_pages_only(repo_root):
     assert result.page_arguments == ["374"]
 
 
+def test_line_exact_rule_takes_precedence_over_review_required_belen_regex(repo_root):
+    spec = load_source_spec("belen1", root=repo_root)
+    body = (
+        "Агол Іосіф (Ізраіль) Іосіфавіч // [[Беларуская энцыклапедыя]]: У 18 т. "
+        "Т. 1: А — Аршын / Рэдкал.: [[Генадзь Пятровіч Пашкоў|Г. П. Пашкоў]] і інш. "
+        "— Мн. : [[Беларуская Энцыклапедыя імя Петруся Броўкі|БелЭн]], 1996. "
+        "— Т. 1. — 552 с. — 10 000 экз. — ISBN 985-11-0035-8. "
+        "— ISBN 985-11-0036-6 (т. 1)."
+    )
+
+    result = replace_text(
+        f"* {body}",
+        spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": make_review_key(body, spec),
+                "replacement": "{{Крыніцы/БелЭн|1|Агол Іосіф (Ізраіль) Іосіфавіч}}",
+                "enabled": True,
+            }
+        ],
+    )
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/БелЭн|1|Агол Іосіф (Ізраіль) Іосіфавіч}}"
+    assert result.used_rule_names == ["line_exact"]
+    assert result.review_reasons == []
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

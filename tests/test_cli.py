@@ -35,6 +35,7 @@ def test_run_command_accepts_multiple_source_ids(monkeypatch):
     assert exit_code == 0
     assert captured["options"].source_ids == ("gvb1", "gvb2")
     assert captured["options"].minor_threshold == 1000
+    assert captured["options"].skip_review_required is False
 
 
 def test_run_command_splits_comma_separated_source_ids(monkeypatch):
@@ -85,6 +86,21 @@ def test_run_command_accepts_minor_threshold(monkeypatch):
 
     assert exit_code == 0
     assert captured["options"].minor_threshold == 250
+
+
+def test_run_command_accepts_skip_review_required(monkeypatch):
+    captured = {}
+
+    def fake_run_sources(options, ui):
+        captured["options"] = options
+        return 0
+
+    monkeypatch.setattr("bewiki_biblio.cli.run_sources", fake_run_sources)
+
+    exit_code = main(["run", "gvb1", "--skip-review-required", "--no-color"])
+
+    assert exit_code == 0
+    assert captured["options"].skip_review_required is True
 
 
 def test_run_command_rejects_all_with_explicit_sources(capsys):
@@ -195,6 +211,7 @@ def test_run_guidance_mentions_interactive_controls():
         apply=True,
         assume_yes=False,
         has_review_required_rules=True,
+        skip_review_required=True,
         learn_variants=True,
         show_candidates=True,
     )
@@ -204,6 +221,7 @@ def test_run_guidance_mentions_interactive_controls():
     assert "review_variants.json" in output
     assert "`y` save" in output
     assert "still stop for confirmation" in output
+    assert "skipped automatically instead of prompting" in output
     assert "candidate lines" in output
     assert "one key directly" in output
 
@@ -315,4 +333,34 @@ def test_prompt_page_action_shows_help_once(monkeypatch):
     assert labels == [
         "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
         "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
+    ]
+
+
+def test_prompt_review_match_action_shows_help_once(monkeypatch):
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=120,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    labels = []
+
+    def fake_prompt_choice(label, **kwargs):
+        labels.append(label)
+        return "s"
+
+    monkeypatch.setattr(ui, "prompt_choice", fake_prompt_choice)
+
+    assert ui.prompt_review_match_action() == "s"
+    assert ui.prompt_review_match_action() == "s"
+
+    output = stream.getvalue()
+    assert output.count("Manual review controls") == 1
+    assert "future exact replacement" in output
+    assert labels == [
+        "Choose review action [r=learn exact, i=ignore, s=skip]",
+        "Choose review action [r=learn exact, i=ignore, s=skip]",
     ]

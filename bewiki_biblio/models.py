@@ -14,6 +14,8 @@ class RegexRule:
     compiled: re.Pattern[str] = field(repr=False, compare=False)
     flags: str = ""
     enabled: bool = True
+    review_required: bool = False
+    review_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,7 @@ class ReplacementResult:
     page_arguments: list[str] = field(default_factory=list)
     entry_arguments: list[str] = field(default_factory=list)
     extra_argument_values: dict[str, list[str]] = field(default_factory=dict)
+    review_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from bewiki_biblio.models import RunOptions, RunStats
 from bewiki_biblio.query import build_search_query
 from bewiki_biblio.specs import load_source_spec, project_root
 from bewiki_biblio.state import load_source_state
+from bewiki_biblio.text import entry_matches_page_title
 from bewiki_biblio.ui import AppUI
 
 
@@ -53,8 +54,15 @@ def _load_titles(site, query: str, limit: int) -> tuple[int, list[str]]:
     return total_hits, titles
 
 
-def _needs_interactive_input(options: RunOptions) -> bool:
-    return options.learn_variants or (options.apply and not options.assume_yes)
+def _needs_interactive_input(
+    options: RunOptions,
+    *,
+    accept_all: bool,
+    has_review_required_rules: bool,
+) -> bool:
+    return options.learn_variants or (
+        options.apply and (not accept_all or has_review_required_rules)
+    )
 
 
 def _changed_bytes(old_text: str, new_text: str) -> int:
@@ -90,6 +98,17 @@ def _get_site_bundle(spec, actual_root: Path, site_cache: dict[tuple[str, str], 
     return bundle
 
 
+def _append_title_review_reasons(result, title: str) -> None:
+    seen = set(result.review_reasons)
+    for entry in result.entry_arguments:
+        if entry_matches_page_title(entry, title):
+            continue
+        reason = f'Entry differs from page title: "{entry}" vs "{title}".'
+        if reason not in seen:
+            result.review_reasons.append(reason)
+            seen.add(reason)
+
+
 def _run_single_source(
     spec,
     options: RunOptions,
@@ -105,7 +124,14 @@ def _run_single_source(
     query = options.query or build_search_query(spec)
     current_summary = session.summary_override or options.summary or spec.render_default_summary()
     stats = RunStats()
-    interactive_run = _needs_interactive_input(options)
+    can_require_manual_review = any(rule.review_required for rule in spec.regex_rules) or (
+        "{entry}" in spec.template_without_pages or "{entry}" in spec.template_with_pages
+    )
+    interactive_run = _needs_interactive_input(
+        options,
+        accept_all=session.accept_all,
+        has_review_required_rules=can_require_manual_review,
+    )
 
     ui.print_startup_panel(
         spec,
@@ -118,6 +144,7 @@ def _run_single_source(
     ui.print_run_guidance(
         apply=options.apply,
         assume_yes=session.accept_all,
+        has_review_required_rules=can_require_manual_review,
         learn_variants=options.learn_variants,
         show_candidates=options.show_candidates,
     )
@@ -148,6 +175,7 @@ def _run_single_source(
         stats.processed += 1
         old_text = page.text
         result = replace_text(old_text, spec, state.active_rules)
+        _append_title_review_reasons(result, title)
 
         if result.replacements == 0 and options.learn_variants:
             infos = extract_unknown_variant_infos(old_text, spec)
@@ -198,9 +226,15 @@ def _run_single_source(
             ui.info("[dry-run] No changes saved")
             continue
 
-        if not session.accept_all:
+        requires_review = bool(result.review_reasons)
+        if not session.accept_all or requires_review:
+            if requires_review:
+                ui.warn("[review-required] " + " ".join(result.review_reasons))
             while True:
-                choice = ui.prompt_page_action(current_summary)
+                choice = ui.prompt_page_action(
+                    current_summary,
+                    review_required=requires_review,
+                )
                 if choice != "e":
                     break
                 current_summary = ui.prompt_summary(current_summary)

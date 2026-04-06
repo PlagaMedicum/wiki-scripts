@@ -47,6 +47,8 @@ def replace_line_exact_rules(
     page_arguments: list[str] = []
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
+    review_reasons: list[str] = []
+    review_reasons: list[str] = []
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
@@ -98,7 +100,16 @@ def replace_line_exact_rules(
 def apply_regex_rules(
     text: str,
     spec: SourceSpec,
-) -> tuple[str, int, list[str], list[str], list[str], list[str], dict[str, list[str]]]:
+) -> tuple[
+    str,
+    int,
+    list[str],
+    list[str],
+    list[str],
+    list[str],
+    dict[str, list[str]],
+    list[str],
+]:
     current = text
     replacements = 0
     used_rule_names: list[str] = []
@@ -106,6 +117,7 @@ def apply_regex_rules(
     page_arguments: list[str] = []
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
+    review_reasons: list[str] = []
 
     for rule in spec.regex_rules:
         if not rule.enabled:
@@ -136,6 +148,10 @@ def apply_regex_rules(
                 entry_arguments.append(entry)
             for key, value in template_arguments.items():
                 extra_argument_values.setdefault(key, []).append(value)
+            if rule.review_required:
+                review_reasons.append(
+                    rule.review_note or f"Rule {rule.name} requires manual review."
+                )
 
             mapping = {
                 **groups,
@@ -158,13 +174,23 @@ def apply_regex_rules(
         page_arguments,
         entry_arguments,
         extra_argument_values,
+        review_reasons,
     )
 
 
 def apply_normalized_unit_regex_rules(
     text: str,
     spec: SourceSpec,
-) -> tuple[str, int, list[str], list[str], list[str], list[str], dict[str, list[str]]]:
+) -> tuple[
+    str,
+    int,
+    list[str],
+    list[str],
+    list[str],
+    list[str],
+    dict[str, list[str]],
+    list[str],
+]:
     parts: list[str] = []
     position = 0
     replacements = 0
@@ -173,6 +199,7 @@ def apply_normalized_unit_regex_rules(
     page_arguments: list[str] = []
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
+    review_reasons: list[str] = []
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
@@ -227,6 +254,10 @@ def apply_normalized_unit_regex_rules(
                 entry_arguments.append(entry)
             for key, value in template_arguments.items():
                 extra_argument_values.setdefault(key, []).append(value)
+            if rule.review_required:
+                review_reasons.append(
+                    rule.review_note or f"Rule {rule.name} requires manual review."
+                )
             matched = True
             break
 
@@ -243,6 +274,7 @@ def apply_normalized_unit_regex_rules(
         page_arguments,
         entry_arguments,
         extra_argument_values,
+        review_reasons,
     )
 
 
@@ -259,6 +291,7 @@ def _replace_segment(
         page_arguments,
         entry_arguments,
         extra_argument_values,
+        regex_review_reasons,
     ) = apply_regex_rules(
         text,
         spec,
@@ -271,6 +304,7 @@ def _replace_segment(
         normalized_pages,
         normalized_entries,
         normalized_extra_argument_values,
+        normalized_review_reasons,
     ) = apply_normalized_unit_regex_rules(
         current,
         spec,
@@ -305,6 +339,7 @@ def _replace_segment(
         page_arguments=page_arguments + normalized_pages + line_pages,
         entry_arguments=entry_arguments + normalized_entries + line_entries,
         extra_argument_values=merged_extra_argument_values,
+        review_reasons=regex_review_reasons + normalized_review_reasons,
     )
 
 
@@ -321,6 +356,7 @@ def replace_text(
     page_arguments: list[str] = []
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
+    review_reasons: list[str] = []
 
     for kind, segment, open_tag, close_tag in split_ref_aware_segments(text):
         result = _replace_segment(segment, spec, active_rules)
@@ -337,6 +373,7 @@ def replace_text(
         entry_arguments.extend(result.entry_arguments)
         for key, values in result.extra_argument_values.items():
             extra_argument_values.setdefault(key, []).extend(values)
+        review_reasons.extend(result.review_reasons)
 
     return ReplacementResult(
         text="".join(parts),
@@ -347,6 +384,7 @@ def replace_text(
         page_arguments=page_arguments,
         entry_arguments=entry_arguments,
         extra_argument_values=extra_argument_values,
+        review_reasons=review_reasons,
     )
 
 

@@ -238,6 +238,8 @@ def _compile_regex_rules(
                 replacement=_require_string(item, "replacement", "regex_rules"),
                 flags=flags,
                 enabled=bool(item.get("enabled", True)),
+                review_required=bool(item.get("review_required", False)),
+                review_note=str(item.get("review_note", "")).strip(),
                 compiled=re.compile(pattern, parse_regex_flags(flags)),
             )
         )

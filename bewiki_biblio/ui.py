@@ -100,6 +100,7 @@ class AppUI:
         *,
         apply: bool,
         assume_yes: bool,
+        has_review_required_rules: bool,
         learn_variants: bool,
         show_candidates: bool,
     ) -> None:
@@ -115,8 +116,15 @@ class AppUI:
             rows.extend(
                 [
                     ("Matched pages", "You will be prompted before saving each matched page."),
-                    ("Save keys", "`y` save, `n` skip, `a` save all remaining, `e` edit summary, `q` quit the run."),
+                    ("Save keys", "`y` save, `n` skip, `a` save all remaining safe matches, `e` edit summary, `q` quit the run."),
                 ]
+            )
+        if apply and has_review_required_rules:
+            rows.append(
+                (
+                    "Manual review",
+                    "Heuristic matches or entry/title mismatches still stop for confirmation even after `a` or `--yes`.",
+                )
             )
         if show_candidates:
             rows.append(
@@ -247,6 +255,12 @@ class AppUI:
             "Entry args",
             ", ".join(dict.fromkeys(result.entry_arguments)) or "none",
         )
+        meta.add_row(
+            "Review",
+            "required" if result.review_reasons else "automatic",
+        )
+        if result.review_reasons:
+            meta.add_row("Review reasons", " ".join(dict.fromkeys(result.review_reasons)))
         for key, values in sorted(result.extra_argument_values.items()):
             meta.add_row(
                 f"{key.replace('_', ' ').title()} args",
@@ -421,16 +435,18 @@ class AppUI:
         table.add_column()
         table.add_row("y", "Save this page.")
         table.add_row("n", "Skip this page.")
-        table.add_row("a", "Save this page and all remaining matched pages.")
+        table.add_row("a", "Save this page and all remaining non-review-required pages.")
         table.add_row("e", "Edit the summary for the rest of the run.")
         table.add_row("q", "Stop the run immediately.")
         self.print(Panel(table, title="Save controls", border_style="green"))
 
-    def prompt_page_action(self, current_summary: str) -> str:
+    def prompt_page_action(self, current_summary: str, *, review_required: bool = False) -> str:
         if not self._shown_page_controls:
             self.print_page_controls()
             self._shown_page_controls = True
         self.info(f"Current edit summary: {current_summary}")
+        if review_required:
+            self.warn("Manual review is required for this change. Bulk apply is paused.")
         return self.prompt_choice(
             "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
             choices=["y", "n", "a", "e", "q"],

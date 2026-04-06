@@ -68,6 +68,16 @@ def normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalize_title_for_match(text: str) -> str:
+    text = text.replace("_", " ").replace("\u00A0", " ")
+    text = re.sub(r"\s*[—–-]\s*", " — ", text)
+    return normalize_whitespace(text).casefold()
+
+
+def entry_matches_page_title(entry: str, page_title: str) -> bool:
+    return normalize_title_for_match(entry) == normalize_title_for_match(page_title)
+
+
 def normalize_argument_value(value: str, normalizer: str) -> str:
     if normalizer == "pages":
         return normalize_pages_arg(value)

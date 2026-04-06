@@ -5,13 +5,13 @@ import re
 from bewiki_biblio.models import ReplacementResult, SourceSpec, VariantInfo
 from bewiki_biblio.state import variant_hash
 from bewiki_biblio.text import (
+    coalesce_entry_arg,
     extract_entry_arg,
     extract_pages_arg,
     extract_template_arguments,
     make_review_key,
     normalize_biblio_wikitext,
     normalize_argument_value,
-    normalize_entry_arg,
     normalize_pages_arg,
     normalize_review_line,
     normalized_unit_variants,
@@ -141,7 +141,7 @@ def apply_regex_rules(
             extracted_entry = extract_entry_arg(match_text, spec)
             extracted_arguments = extract_template_arguments(match_text, spec)
             pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else extracted_pages
-            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else extracted_entry
+            entry = coalesce_entry_arg(groups.get("entry"), extracted_entry, spec)
             template_arguments: dict[str, str] = dict(extracted_arguments)
             for key, value in groups.items():
                 if key in {"pages", "entry", "prefix"} or not value:
@@ -245,7 +245,7 @@ def apply_normalized_unit_regex_rules(
             extracted_entry = extract_entry_arg(unit_text, spec)
             extracted_arguments = extract_template_arguments(unit_text, spec)
             pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else extracted_pages
-            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else extracted_entry
+            entry = coalesce_entry_arg(groups.get("entry"), extracted_entry, spec)
             template_arguments: dict[str, str] = dict(extracted_arguments)
             for key, value in groups.items():
                 if key in {"pages", "entry", "prefix"} or not value:

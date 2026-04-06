@@ -629,6 +629,47 @@ def test_line_exact_rule_takes_precedence_over_review_required_belen_regex(repo_
     assert result.review_reasons == []
 
 
+def test_extract_unknown_belen16_variant_separates_author_entry_and_responsible(repo_root):
+    spec = load_source_spec("belen16", root=repo_root)
+    text = (
+        "* Ярмоленка, В. А. Фялінская Ева Зыгмунтаўна / В. А. Ярмоленка // "
+        "Беларуская энцыклапедыя: У 18 т. / Беларуская энцыклапедыя; "
+        "Рэдкал.: Г. П. Пашкоў (гал. рэд.) [і інш.]. Т. 16: Трыпалі — Хвіліна. "
+        "— Мн.: «Беларуская энцыклапедыя», 2003. — 576 с.: іл. — С. 512."
+    )
+
+    infos = extract_unknown_variant_infos(text, spec)
+
+    assert len(infos) == 1
+    assert infos[0].entry == "Фялінская Ева Зыгмунтаўна"
+    assert infos[0].pages == "512"
+    assert infos[0].extra_arguments == {
+        "author": "Ярмоленка, В. А.",
+        "responsible": "В. А. Ярмоленка",
+    }
+    assert (
+        spec.render_template(infos[0].pages, infos[0].entry, **infos[0].extra_arguments)
+        == "{{Крыніцы/БелЭн|16|Фялінская Ева Зыгмунтаўна|Ярмоленка, В. А.|512|В. А. Ярмоленка}}"
+    )
+
+
+def test_extract_unknown_belen17_variant_strips_author_from_entry(repo_root):
+    spec = load_source_spec("belen17", root=repo_root)
+    text = (
+        "* Касцюковіч М. Шарпак // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. "
+        "Т. 17: Хвінявічы — Шчытні|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=2003|том=17|старонак=512|isbn=985-11-0279-2}}"
+    )
+
+    infos = extract_unknown_variant_infos(text, spec)
+
+    assert len(infos) == 1
+    assert infos[0].entry == "Шарпак"
+    assert infos[0].extra_arguments == {
+        "author": "Касцюковіч М.",
+    }
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

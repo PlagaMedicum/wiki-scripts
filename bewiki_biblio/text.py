@@ -127,6 +127,31 @@ VOLUME_MARKER_RE = re.compile(
     r"\bт\.\s*\d+\b|\bкн\.\s*\d+\b",
     re.IGNORECASE | re.UNICODE,
 )
+NAME_TOKEN_RE = r"[A-ZА-ЯЁІЎ][^\s,/.():;]+(?:[-'][^\s,/.():;]+)*"
+SURNAME_INITIALS_RE = (
+    rf"{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*,?(?:\s+[A-ZА-ЯЁІЎ]\.){{1,3}}"
+)
+INITIALS_SURNAME_RE = (
+    rf"(?:[A-ZА-ЯЁІЎ]\.\s*){{1,3}}{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*"
+)
+QUOTED_SURNAME_INITIALS_RE = rf"[\"'«“„]?{SURNAME_INITIALS_RE}[\"'»”]?"
+QUOTED_INITIALS_SURNAME_RE = rf"[\"'«“„]?{INITIALS_SURNAME_RE}[\"'»”]?"
+AUTHOR_LIKE_RE = rf"(?:{QUOTED_SURNAME_INITIALS_RE}|{QUOTED_INITIALS_SURNAME_RE})"
+AUTHOR_ENTRY_RESPONSIBLE_RE = re.compile(
+    rf"^(?P<author>{AUTHOR_LIKE_RE})\s+(?P<entry>.+?)\s*/\s*(?P<responsible>{AUTHOR_LIKE_RE})$",
+    re.UNICODE,
+)
+AUTHOR_ENTRY_RE = re.compile(
+    rf"^(?P<author>{AUTHOR_LIKE_RE})\s+(?P<entry>.+)$",
+    re.UNICODE,
+)
+
+
+@dataclass(frozen=True)
+class PrefixComponents:
+    entry: str
+    author: str | None = None
+    responsible: str | None = None
 
 
 @dataclass(frozen=True)
@@ -288,6 +313,66 @@ def _looks_like_bibliography_prefix(entry: str, spec: SourceSpec) -> bool:
     return signals >= 2
 
 
+def _normalize_person_arg(value: str) -> str:
+    value = normalize_whitespace(value)
+    value = value.strip("\"'«»“”„")
+    return value.strip()
+
+
+def _parse_prefix_components(prefix: str, spec: SourceSpec) -> PrefixComponents | None:
+    prefix = normalize_entry_arg(prefix)
+    if not prefix or _looks_like_bibliography_prefix(prefix, spec):
+        return None
+
+    match = AUTHOR_ENTRY_RESPONSIBLE_RE.match(prefix)
+    if match:
+        entry = normalize_entry_arg(match.group("entry"))
+        if entry and not _looks_like_bibliography_prefix(entry, spec):
+            return PrefixComponents(
+                entry=entry,
+                author=_normalize_person_arg(match.group("author")),
+                responsible=_normalize_person_arg(match.group("responsible")),
+            )
+
+    match = AUTHOR_ENTRY_RE.match(prefix)
+    if match:
+        entry = normalize_entry_arg(match.group("entry"))
+        if entry and not _looks_like_bibliography_prefix(entry, spec):
+            return PrefixComponents(
+                entry=entry,
+                author=_normalize_person_arg(match.group("author")),
+            )
+
+    return PrefixComponents(entry=prefix)
+
+
+def extract_prefix_components(text: str, spec: SourceSpec) -> PrefixComponents | None:
+    normalized = normalize_biblio_wikitext(
+        re.sub(r"^\s*[*#;:]+\s*", "", text).strip(),
+        spec,
+    )
+    match = ENTRY_LIST_PREFIX_RE.match(normalized)
+    if not match:
+        return None
+    return _parse_prefix_components(match.group("entry"), spec)
+
+
+def coalesce_entry_arg(
+    group_value: str | None,
+    extracted_value: str | None,
+    spec: SourceSpec,
+) -> str | None:
+    if extracted_value:
+        return extracted_value
+    if not group_value:
+        return None
+
+    normalized = normalize_entry_arg(group_value)
+    if not normalized or _looks_like_bibliography_prefix(normalized, spec):
+        return None
+    return normalized
+
+
 def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
     raw = re.sub(r"^\s*[*#;:]+\s*", "", text).strip()
     entry = extract_template_param_value(
@@ -311,16 +396,14 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
         if title_value:
             match = TITLE_WITH_ENTRY_RE.match(title_value)
             if match:
-                entry = normalize_entry_arg(match.group("entry"))
-                if entry and len(entry) <= 200 and not _looks_like_bibliography_prefix(entry, spec):
-                    return entry
+                components = _parse_prefix_components(match.group("entry"), spec)
+                if components and components.entry and len(components.entry) <= 200:
+                    return components.entry
         return None
 
-    match = ENTRY_LIST_PREFIX_RE.match(normalized)
-    if match:
-        entry = normalize_entry_arg(match.group("entry"))
-        if entry and len(entry) <= 200 and not _looks_like_bibliography_prefix(entry, spec):
-            return entry
+    components = extract_prefix_components(raw, spec)
+    if components and len(components.entry) <= 200:
+        return components.entry
 
     return None
 
@@ -357,6 +440,7 @@ def normalized_unit_variants(text: str, spec: SourceSpec) -> tuple[str, ...]:
 
 def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
     normalized = normalize_biblio_wikitext(text.strip(), spec)
+    prefix_components = extract_prefix_components(text, spec)
     values: dict[str, str] = {}
     for extractor in spec.argument_extractors:
         value = extract_template_param_value(
@@ -383,6 +467,14 @@ def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
                 value = normalize_argument_value(raw_value, extractor.normalizer)
                 if value:
                     break
+        if not value and prefix_components:
+            if extractor.name == "author" and prefix_components.author:
+                value = normalize_argument_value(prefix_components.author, extractor.normalizer)
+            elif extractor.name == "responsible" and prefix_components.responsible:
+                value = normalize_argument_value(
+                    prefix_components.responsible,
+                    extractor.normalizer,
+                )
         if value:
             values[extractor.name] = value
     return values

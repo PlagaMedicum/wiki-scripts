@@ -190,6 +190,50 @@ def test_extract_list_style_arguments_for_belen10(repo_root):
     }
 
 
+def test_extract_list_style_arguments_for_belen16_comma_author(repo_root):
+    spec = load_source_spec("belen16", root=repo_root)
+    line = (
+        "* Ярмоленка, В. А. Фялінская Ева Зыгмунтаўна / В. А. Ярмоленка // "
+        "Беларуская энцыклапедыя: У 18 т. / Беларуская энцыклапедыя; "
+        "Рэдкал.: Г. П. Пашкоў (гал. рэд.) [і інш.]. Т. 16: Трыпалі — Хвіліна. "
+        "— Мн.: «Беларуская энцыклапедыя», 2003. — 576 с.: іл. — С. 512."
+    )
+
+    assert extract_entry_arg(line, spec) == "Фялінская Ева Зыгмунтаўна"
+    assert extract_template_arguments(line, spec) == {
+        "author": "Ярмоленка, В. А.",
+        "responsible": "В. А. Ярмоленка",
+    }
+
+
+def test_extract_entry_arg_from_quoted_author_prefix_for_belen16(repo_root):
+    spec = load_source_spec("belen16", root=repo_root)
+    line = (
+        '* "Лапцэвіч Л. Г." Хатынь // Беларуская энцыклапедыя: У 18 т. '
+        "/ Беларуская энцыклапедыя; Рэдкал.: Г. П. Пашкоў і інш. "
+        "Т. 16: Трыпалі — Хвіліна. — Мн.: БелЭн, 2003."
+    )
+
+    assert extract_entry_arg(line, spec) == "Хатынь"
+    assert extract_template_arguments(line, spec) == {
+        "author": "Лапцэвіч Л. Г.",
+    }
+
+
+def test_extract_entry_arg_from_author_prefix_before_template_belen17(repo_root):
+    spec = load_source_spec("belen17", root=repo_root)
+    line = (
+        "* Касцюковіч М. Шарпак // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. "
+        "Т. 17: Хвінявічы — Шчытні|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=2003|том=17|старонак=512|isbn=985-11-0279-2}}"
+    )
+
+    assert extract_entry_arg(line, spec) == "Шарпак"
+    assert extract_template_arguments(line, spec) == {
+        "author": "Касцюковіч М.",
+    }
+
+
 def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
     text = (
         'Text<ref name="one" /> more <ref name="two"/>'

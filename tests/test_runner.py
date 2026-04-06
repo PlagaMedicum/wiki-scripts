@@ -12,7 +12,7 @@ from bewiki_biblio.models import (
     RunOptions,
     SourceSpec,
 )
-from bewiki_biblio.runner import _needs_interactive_input, run_source, run_sources
+from bewiki_biblio.runner import _changed_bytes, _is_minor_edit, _needs_interactive_input, run_source, run_sources
 from bewiki_biblio.ui import AppUI
 
 
@@ -79,6 +79,12 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             show_candidates=True,
         )
     )
+
+
+def test_minor_edit_threshold_uses_changed_utf8_bytes():
+    assert _changed_bytes("abc", "adc") == 2
+    assert _is_minor_edit("a" * 400, "b" * 400)
+    assert not _is_minor_edit("a" * 500, "b" * 500)
 
 
 def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
@@ -178,7 +184,7 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
             self.text = f"content for {title}"
 
         def save(self, **kwargs):
-            saved.append((self.title_value, kwargs["summary"]))
+            saved.append((self.title_value, kwargs["summary"], kwargs["minor"]))
 
     class FakePywikibot:
         Page = FakePage
@@ -243,8 +249,8 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
     assert exit_code == 0
     assert prompts == ["Замена {{Крыніцы/Тэст}}"]
     assert saved == [
-        ("First page", "Замена {{Крыніцы/Тэст}}"),
-        ("Second page", "Замена {{Крыніцы/Тэст}}"),
+        ("First page", "Замена {{Крыніцы/Тэст}}", True),
+        ("Second page", "Замена {{Крыніцы/Тэст}}", True),
     ]
     assert "[1/2]" in stream.getvalue()
     assert "[2/2]" in stream.getvalue()
@@ -270,7 +276,7 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
             self.text = f"content for {title}"
 
         def save(self, **kwargs):
-            saved.append((self.title_value, kwargs["summary"]))
+            saved.append((self.title_value, kwargs["summary"], kwargs["minor"]))
 
     class FakePywikibot:
         Page = FakePage
@@ -316,6 +322,6 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
 
     assert exit_code == 0
     assert saved == [
-        ("Page", "Edited summary"),
-        ("Page", "Edited summary"),
+        ("Page", "Edited summary", True),
+        ("Page", "Edited summary", True),
     ]

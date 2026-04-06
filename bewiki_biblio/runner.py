@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,6 +55,22 @@ def _load_titles(site, query: str, limit: int) -> tuple[int, list[str]]:
 
 def _needs_interactive_input(options: RunOptions) -> bool:
     return options.learn_variants or (options.apply and not options.assume_yes)
+
+
+def _changed_bytes(old_text: str, new_text: str) -> int:
+    old_bytes = old_text.encode("utf-8")
+    new_bytes = new_text.encode("utf-8")
+    matcher = difflib.SequenceMatcher(None, old_bytes, new_bytes, autojunk=False)
+    changed = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        changed += (i2 - i1) + (j2 - j1)
+    return changed
+
+
+def _is_minor_edit(old_text: str, new_text: str) -> bool:
+    return _changed_bytes(old_text, new_text) < 1000
 
 
 @dataclass
@@ -204,7 +221,7 @@ def _run_single_source(
             page.text = result.text
             page.save(
                 summary=current_summary,
-                minor=False,
+                minor=_is_minor_edit(old_text, result.text),
                 bot=True,
                 asynchronous=False,
             )

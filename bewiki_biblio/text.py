@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 
 from bewiki_biblio.models import SourceSpec
@@ -20,6 +21,7 @@ REVIEW_LINE_PREFIX_RE = re.compile(
     r"^(?P<prefix>\s*(?:[*#;:]+\s*)?)(?P<body>.*)$",
     re.UNICODE,
 )
+TEMPLATE_DELIMITER_RE = re.compile(r"\{\{|\}\}")
 
 
 def normalize_biblio_wikitext(text: str, spec: SourceSpec) -> str:
@@ -99,6 +101,16 @@ VOLUME_MARKER_RE = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class CandidateUnit:
+    raw_text: str
+    body: str
+    prefix: str
+    start: int
+    end: int
+    trailing_newline: str = ""
+
+
 def split_ref_aware_segments(
     text: str,
 ) -> list[tuple[str, str, str | None, str | None]]:
@@ -125,6 +137,76 @@ def split_ref_aware_segments(
         segments.append(("text", text, None, None))
 
     return segments
+
+
+def _template_balance_delta(text: str) -> int:
+    delta = 0
+    for match in TEMPLATE_DELIMITER_RE.finditer(text):
+        delta += 1 if match.group() == "{{" else -1
+    return delta
+
+
+def split_candidate_units(text: str) -> list[CandidateUnit]:
+    units: list[CandidateUnit] = []
+    lines = text.splitlines(keepends=True)
+    index = 0
+    offset = 0
+
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.rstrip("\r\n")
+        newline = line[len(stripped) :]
+        match = REVIEW_LINE_PREFIX_RE.match(stripped)
+        prefix = match.group("prefix") if match else ""
+        body = match.group("body") if match else stripped
+        start = offset
+
+        if body.lstrip().startswith("{{"):
+            block_parts = [body + newline]
+            trailing_newline = newline
+            balance = _template_balance_delta(body)
+            end = offset + len(line)
+            index += 1
+            offset += len(line)
+
+            while balance > 0 and index < len(lines):
+                next_line = lines[index]
+                block_parts.append(next_line)
+                trailing_newline = next_line[len(next_line.rstrip("\r\n")) :]
+                balance += _template_balance_delta(next_line)
+                offset += len(next_line)
+                end = offset
+                index += 1
+
+            raw_text = text[start:end]
+            body_text = "".join(block_parts).rstrip("\r\n")
+            units.append(
+                CandidateUnit(
+                    raw_text=raw_text,
+                    body=body_text,
+                    prefix=prefix,
+                    start=start,
+                    end=end,
+                    trailing_newline=trailing_newline,
+                )
+            )
+            continue
+
+        end = offset + len(line)
+        units.append(
+            CandidateUnit(
+                raw_text=line,
+                body=body,
+                prefix=prefix,
+                start=start,
+                end=end,
+                trailing_newline=newline,
+            )
+        )
+        index += 1
+        offset += len(line)
+
+    return units
 
 
 def make_review_key(line: str, spec: SourceSpec) -> str:

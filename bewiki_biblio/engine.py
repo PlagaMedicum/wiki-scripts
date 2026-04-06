@@ -5,7 +5,6 @@ import re
 from bewiki_biblio.models import ReplacementResult, SourceSpec, VariantInfo
 from bewiki_biblio.state import variant_hash
 from bewiki_biblio.text import (
-    REVIEW_LINE_PREFIX_RE,
     extract_entry_arg,
     extract_pages_arg,
     make_review_key,
@@ -13,6 +12,7 @@ from bewiki_biblio.text import (
     normalize_entry_arg,
     normalize_pages_arg,
     normalize_review_line,
+    split_candidate_units,
     split_ref_aware_segments,
 )
 from bewiki_biblio.utils import substitute_tokens
@@ -37,29 +37,22 @@ def replace_line_exact_rules(
     if not exact_map:
         return text, 0, [], [], [], []
 
-    lines = text.splitlines(keepends=True)
-    new_lines: list[str] = []
+    parts: list[str] = []
+    position = 0
     replaced = 0
     used_rules: list[dict] = []
     rendered_templates: list[str] = []
     page_arguments: list[str] = []
     entry_arguments: list[str] = []
 
-    for line in lines:
-        stripped = line.rstrip("\r\n")
-        newline = line[len(stripped) :]
-
-        match = REVIEW_LINE_PREFIX_RE.match(stripped)
-        if not match:
-            new_lines.append(line)
-            continue
-
-        prefix = match.group("prefix") or ""
-        body = (match.group("body") or "").strip()
+    for unit in split_candidate_units(text):
+        parts.append(text[position : unit.start])
+        body = unit.body.strip()
         normalized_body = make_review_key(body, spec)
         rule = exact_map.get(normalized_body)
         if not rule:
-            new_lines.append(line)
+            parts.append(text[unit.start : unit.end])
+            position = unit.end
             continue
 
         stored_replacement = str(rule["replacement"])
@@ -72,7 +65,8 @@ def replace_line_exact_rules(
             )
         else:
             replacement = stored_replacement
-        new_lines.append(f"{prefix}{replacement}{newline}")
+        parts.append(f"{unit.prefix}{replacement}{unit.trailing_newline}")
+        position = unit.end
         replaced += 1
         used_rules.append(rule)
         rendered_templates.append(replacement)
@@ -82,8 +76,9 @@ def replace_line_exact_rules(
         if extracted_entry:
             entry_arguments.append(extracted_entry)
 
+    parts.append(text[position:])
     return (
-        "".join(new_lines),
+        "".join(parts),
         replaced,
         used_rules,
         rendered_templates,
@@ -244,14 +239,14 @@ def extract_unknown_variant_infos(text: str, spec: SourceSpec) -> list[VariantIn
     infos: list[VariantInfo] = []
     seen: set[str] = set()
 
-    for kind, segment, _, _ in split_ref_aware_segments(text):
-        raw_candidates = [segment] if kind == "ref" else segment.splitlines()
-        for raw_line in raw_candidates:
-            stripped = raw_line.strip()
-            if not stripped or not is_candidate_line(stripped, spec):
+    for _, segment, _, _ in split_ref_aware_segments(text):
+        units = split_candidate_units(segment)
+        for unit in units:
+            body = unit.body.strip()
+            if not body or not is_candidate_line(body, spec):
                 continue
 
-            review_line = re.sub(r"^\s*[*#;:]+\s*", "", stripped).strip()
+            review_line = body
             normalized_line = normalize_review_line(review_line, spec)
             key = normalized_line.casefold()
             if key in seen:
@@ -260,11 +255,11 @@ def extract_unknown_variant_infos(text: str, spec: SourceSpec) -> list[VariantIn
             seen.add(key)
             infos.append(
                 VariantInfo(
-                    full_line=stripped,
+                    full_line=unit.raw_text.strip(),
                     review_line=review_line,
                     normalized_line=normalized_line,
-                    pages=extract_pages_arg(normalized_line, spec),
-                    entry=extract_entry_arg(stripped, spec),
+                    pages=extract_pages_arg(review_line, spec),
+                    entry=extract_entry_arg(review_line, spec),
                 )
             )
 
@@ -275,19 +270,19 @@ def debug_candidate_lines(text: str, spec: SourceSpec) -> list[str]:
     lines: list[str] = []
     seen: set[str] = set()
 
-    for kind, segment, _, _ in split_ref_aware_segments(text):
-        raw_candidates = [segment] if kind == "ref" else segment.splitlines()
-        for raw_line in raw_candidates:
-            stripped = raw_line.strip()
-            if not stripped or not is_candidate_line(stripped, spec):
+    for _, segment, _, _ in split_ref_aware_segments(text):
+        units = split_candidate_units(segment)
+        for unit in units:
+            body = unit.body.strip()
+            if not body or not is_candidate_line(body, spec):
                 continue
 
-            normalized = normalize_review_line(stripped, spec)
+            normalized = normalize_review_line(body, spec)
             if normalized in seen:
                 continue
 
             seen.add(normalized)
-            lines.append(stripped)
+            lines.append(unit.raw_text.strip())
 
     return lines
 

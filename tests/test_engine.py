@@ -453,6 +453,60 @@ def test_extract_unknown_variants_ignores_self_closing_refs_before_target_ref(tm
     assert "<ref" not in infos[0].review_line
 
 
+def test_extract_unknown_variants_use_full_multiline_template_block(repo_root):
+    spec = load_source_spec("gvb7", root=repo_root)
+    text = (
+        "* {{кніга\n"
+        " | частка         = Юзяфоўка\n"
+        " | загаловак      = Гарады і вёскі Беларусі: Энцыклапедыя. Т. 7, кн. 3. Магілёўская вобласць\n"
+        " | адказны        = рэдкал.: Т. У. Бялова (дырэктар) [і інш.]\n"
+        " | месца          = Мн.\n"
+        " | выдавецтва     = Беларуская Энцыклапедыя імя Петруся Броўкі\n"
+        " | год            = 2009\n"
+        " | isbn           = 978-985-11-0452-5\n"
+        "}}\n"
+    )
+
+    infos = extract_unknown_variant_infos(text, spec)
+
+    assert len(infos) == 1
+    assert "| частка         = Юзяфоўка" in infos[0].review_line
+    assert infos[0].entry == "Юзяфоўка"
+    assert infos[0].pages is None
+
+
+def test_replace_line_exact_rule_replaces_full_multiline_template_block(repo_root):
+    spec = load_source_spec("gvb7", root=repo_root)
+    body = (
+        "{{кніга\n"
+        " | частка         = Юзяфоўка\n"
+        " | загаловак      = Гарады і вёскі Беларусі: Энцыклапедыя. Т. 7, кн. 3. Магілёўская вобласць\n"
+        " | адказны        = рэдкал.: Т. У. Бялова (дырэктар) [і інш.]\n"
+        " | месца          = Мн.\n"
+        " | выдавецтва     = Беларуская Энцыклапедыя імя Петруся Броўкі\n"
+        " | год            = 2009\n"
+        " | isbn           = 978-985-11-0452-5\n"
+        "}}"
+    )
+
+    result = replace_text(
+        f"* {body}\n",
+        spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": make_review_key(body, spec),
+                "replacement": "{{Крыніцы/ГВБ|7-3}}",
+                "enabled": True,
+            }
+        ],
+    )
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/ГВБ|7-3|Юзяфоўка}}\n"
+    assert result.entry_arguments == ["Юзяфоўка"]
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

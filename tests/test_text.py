@@ -162,6 +162,21 @@ def test_extract_template_arguments_for_belen10(repo_root):
     }
 
 
+def test_extract_list_style_arguments_for_belen10(repo_root):
+    spec = load_source_spec("belen10", root=repo_root)
+    line = (
+        "* Шаблюк В. У. Маркава / В. У. Шаблюк // Беларуская энцыклапедыя: У 18 т. "
+        "Т. 10: Малайзія — Мугаджары / Рэдкал.: Г. П. Пашкоў і інш. — Мн. : БелЭн, 2000. "
+        "— Т. 10. — С. 114. — 544 с. — 10 000 экз. — ISBN 985-11-0035-8. "
+        "— ISBN 985-11-0169-9 (т. 10)."
+    )
+
+    assert extract_template_arguments(line, spec) == {
+        "author": "Шаблюк В. У.",
+        "responsible": "В. У. Шаблюк",
+    }
+
+
 def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
     text = (
         'Text<ref name="one" /> more <ref name="two"/>'

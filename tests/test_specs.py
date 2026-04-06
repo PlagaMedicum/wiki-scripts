@@ -34,6 +34,7 @@ def test_load_belen10_spec(repo_root):
 
     assert spec.source_id == "belen10"
     assert spec.template_name == "Крыніцы/БелЭн"
+    assert spec.render_template(entry="Маркава") == "{{Крыніцы/БелЭн|10|Маркава}}"
     assert spec.render_template(
         entry="Маркава",
         author="Шаблюк В. У.",

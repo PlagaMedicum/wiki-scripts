@@ -296,6 +296,7 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
 
 
 def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
+    normalized = normalize_biblio_wikitext(text.strip(), spec)
     values: dict[str, str] = {}
     for extractor in spec.argument_extractors:
         value = extract_template_param_value(
@@ -304,6 +305,24 @@ def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
             extractor.template_params,
             normalizer=extractor.normalizer,
         )
+        if not value:
+            for pattern in extractor.patterns:
+                match = pattern.search(normalized)
+                if not match:
+                    continue
+
+                if "value" in match.re.groupindex:
+                    raw_value = match.group("value")
+                elif extractor.name in match.re.groupindex:
+                    raw_value = match.group(extractor.name)
+                elif match.groups():
+                    raw_value = match.group(1)
+                else:
+                    continue
+
+                value = normalize_argument_value(raw_value, extractor.normalizer)
+                if value:
+                    break
         if value:
             values[extractor.name] = value
     return values

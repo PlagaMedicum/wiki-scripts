@@ -244,7 +244,10 @@ def _compile_regex_rules(
     return tuple(regex_rules)
 
 
-def _load_argument_extractors(data: dict) -> tuple[ArgumentExtractor, ...]:
+def _load_argument_extractors(
+    data: dict,
+    macros: dict[str, str],
+) -> tuple[ArgumentExtractor, ...]:
     raw = data.get("argument_extractors", {})
     if not isinstance(raw, dict):
         raise ValueError("Missing or invalid [argument_extractors] section")
@@ -254,8 +257,11 @@ def _load_argument_extractors(data: dict) -> tuple[ArgumentExtractor, ...]:
         if not isinstance(config, dict):
             raise ValueError(f"argument_extractors.{name} must be a table")
         template_params = _string_list(config, "template_params")
-        if not template_params:
-            raise ValueError(f"argument_extractors.{name}.template_params must not be empty")
+        pattern_templates = _string_list(config, "patterns")
+        if not template_params and not pattern_templates:
+            raise ValueError(
+                f"argument_extractors.{name} must define template_params or patterns"
+            )
         normalizer = config.get("normalizer", "entry")
         if normalizer not in {"entry", "pages", "whitespace", "raw"}:
             raise ValueError(
@@ -265,6 +271,11 @@ def _load_argument_extractors(data: dict) -> tuple[ArgumentExtractor, ...]:
             ArgumentExtractor(
                 name=name,
                 template_params=template_params,
+                patterns=_compile_patterns(
+                    pattern_templates,
+                    macros,
+                    flags=re.UNICODE | re.IGNORECASE | re.MULTILINE,
+                ),
                 normalizer=normalizer,
             )
         )
@@ -319,7 +330,7 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
 
     macros = _load_macro_map(data)
     regex_rules = _compile_regex_rules(data.get("regex_rules", []), macros)
-    argument_extractors = _load_argument_extractors(data)
+    argument_extractors = _load_argument_extractors(data, macros)
 
     alias_rules: list[AliasRule] = []
     for item in normalization.get("alias_replacements", []):

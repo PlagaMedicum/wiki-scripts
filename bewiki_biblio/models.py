@@ -32,7 +32,12 @@ class CandidateSpec:
 @dataclass(frozen=True)
 class ArgumentExtractor:
     name: str
-    template_params: tuple[str, ...]
+    template_params: tuple[str, ...] = ()
+    patterns: tuple[re.Pattern[str], ...] = field(
+        default_factory=tuple,
+        repr=False,
+        compare=False,
+    )
     normalizer: str = "entry"
 
 
@@ -79,6 +84,8 @@ class SourceSpec:
             "entry": entry or "",
             "pages": pages or "",
         }
+        for extractor in self.argument_extractors:
+            values.setdefault(extractor.name, "")
         for key, value in arguments.items():
             values[key] = value or ""
 

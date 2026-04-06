@@ -528,6 +528,24 @@ def test_replace_belen10_bibliography_line_with_author_and_responsible(repo_root
     }
 
 
+def test_replace_belen1_wikilinked_entry_only_line(repo_root):
+    spec = load_source_spec("belen1", root=repo_root)
+    text = (
+        "Агол Іосіф (Ізраіль) Іосіфавіч // [[Беларуская энцыклапедыя]]: У 18 т. "
+        "Т. 1: А — Аршын / Рэдкал.: [[Генадзь Пятровіч Пашкоў|Г. П. Пашкоў]] і інш. "
+        "— Мн. : [[Беларуская Энцыклапедыя імя Петруся Броўкі|БелЭн]], 1996. "
+        "— Т. 1. — 552 с. — 10 000 экз. — ISBN 985-11-0035-8. "
+        "— ISBN 985-11-0036-6 (т. 1)."
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "{{Крыніцы/БелЭн|1|Агол Іосіф (Ізраіль) Іосіфавіч}}"
+    assert result.entry_arguments == ["Агол Іосіф (Ізраіль) Іосіфавіч"]
+    assert result.extra_argument_values == {}
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

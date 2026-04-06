@@ -53,14 +53,20 @@ flags = "IGNORECASE|UNICODE"
 
 [argument_extractors.author]
 template_params = ["аўтар", "author", "частка аўтар"]
+patterns = [
+  '^(?:{{LIST_PREFIX}})(?P<value>{{ARTICLE_AUTHOR}}){{WS}}[^/\n]+?{{OPT_WS}}/{{OPT_WS}}{{ARTICLE_RESPONSIBLE}}{{OPT_WS}}//',
+]
 normalizer = "whitespace"
 
 [argument_extractors.responsible]
 template_params = ["частка адказны", "адказны частка", "chapter responsible", "part responsible"]
+patterns = [
+  '^(?:{{LIST_PREFIX}}){{ARTICLE_AUTHOR}}{{WS}}[^/\n]+?{{OPT_WS}}/{{OPT_WS}}(?P<value>{{ARTICLE_RESPONSIBLE}}){{OPT_WS}}//',
+]
 normalizer = "whitespace"
 
 [macros]
-TITLE = "Беларуская{{WS}}энцыклапедыя"
+TITLE = "(?:Беларуская{{WS}}энцыклапедыя|БелЭн)"
 SERIES = '{{TITLE}}:{{OPT_WS}}У{{WS}}18{{WS}}т\.'
 VOLUME = 'Т\.{{OPT_WS}}7:{{WS}}Застаўка{{WS}}{{DASH}}{{WS}}Кантата'
 EDITOR = 'Рэдкал\.:{{OPT_WS}}Г\.{{OPT_WS}}П\.{{OPT_WS}}Пашкоў{{WS}}і{{WS}}інш\.?'

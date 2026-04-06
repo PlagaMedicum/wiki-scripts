@@ -112,10 +112,7 @@ def apply_regex_rules(
             continue
 
         def replace(match: re.Match[str]) -> str:
-            groups = {
-                key: (value or "")
-                for key, value in match.groupdict().items()
-            }
+            groups = {key: (value or "") for key, value in match.groupdict().items()}
             pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else None
             entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else None
             template_arguments: dict[str, str] = {}
@@ -164,6 +161,91 @@ def apply_regex_rules(
     )
 
 
+def apply_normalized_unit_regex_rules(
+    text: str,
+    spec: SourceSpec,
+) -> tuple[str, int, list[str], list[str], list[str], list[str], dict[str, list[str]]]:
+    parts: list[str] = []
+    position = 0
+    replacements = 0
+    used_rule_names: list[str] = []
+    rendered_templates: list[str] = []
+    page_arguments: list[str] = []
+    entry_arguments: list[str] = []
+    extra_argument_values: dict[str, list[str]] = {}
+
+    for unit in split_candidate_units(text):
+        parts.append(text[position : unit.start])
+        normalized_unit = normalize_biblio_wikitext(
+            text[unit.start : unit.end].rstrip("\r\n"),
+            spec,
+        )
+        matched = False
+
+        for rule in spec.regex_rules:
+            if not rule.enabled:
+                continue
+            match = rule.compiled.search(normalized_unit)
+            if not match:
+                continue
+
+            groups = {key: (value or "") for key, value in match.groupdict().items()}
+            pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else None
+            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else None
+            template_arguments: dict[str, str] = {}
+            for key, value in groups.items():
+                if key in {"pages", "entry", "prefix"} or not value:
+                    continue
+                template_arguments[key] = normalize_argument_value(
+                    value,
+                    spec.argument_normalizer(key),
+                )
+            template = spec.render_template(
+                pages=pages,
+                entry=entry,
+                **template_arguments,
+            )
+            mapping = {
+                **groups,
+                "entry": entry or "",
+                "pages": pages or "",
+                "prefix": unit.prefix,
+                "template": template,
+                "template_name": spec.template_name,
+                "source_id": spec.source_id,
+            }
+            replacement = substitute_tokens(rule.replacement, mapping)
+
+            parts.append(f"{replacement}{unit.trailing_newline}")
+            position = unit.end
+            replacements += 1
+            used_rule_names.append(rule.name)
+            rendered_templates.append(template)
+            if pages:
+                page_arguments.append(pages)
+            if entry:
+                entry_arguments.append(entry)
+            for key, value in template_arguments.items():
+                extra_argument_values.setdefault(key, []).append(value)
+            matched = True
+            break
+
+        if not matched:
+            parts.append(text[unit.start : unit.end])
+            position = unit.end
+
+    parts.append(text[position:])
+    return (
+        "".join(parts),
+        replacements,
+        used_rule_names,
+        rendered_templates,
+        page_arguments,
+        entry_arguments,
+        extra_argument_values,
+    )
+
+
 def _replace_segment(
     text: str,
     spec: SourceSpec,
@@ -183,6 +265,18 @@ def _replace_segment(
     )
     (
         current,
+        normalized_regex_count,
+        normalized_rule_names,
+        normalized_templates,
+        normalized_pages,
+        normalized_entries,
+        normalized_extra_argument_values,
+    ) = apply_normalized_unit_regex_rules(
+        current,
+        spec,
+    )
+    (
+        current,
         line_count,
         used_line_rules,
         line_templates,
@@ -198,16 +292,18 @@ def _replace_segment(
         key: values[:]
         for key, values in extra_argument_values.items()
     }
+    for key, values in normalized_extra_argument_values.items():
+        merged_extra_argument_values.setdefault(key, []).extend(values)
     for key, values in line_extra_argument_values.items():
         merged_extra_argument_values.setdefault(key, []).extend(values)
     return ReplacementResult(
         text=current,
-        replacements=regex_count + line_count,
+        replacements=regex_count + normalized_regex_count + line_count,
         used_line_rules=used_line_rules,
-        used_rule_names=used_rule_names + (["line_exact"] * line_count),
-        rendered_templates=rendered_templates + line_templates,
-        page_arguments=page_arguments + line_pages,
-        entry_arguments=entry_arguments + line_entries,
+        used_rule_names=used_rule_names + normalized_rule_names + (["line_exact"] * line_count),
+        rendered_templates=rendered_templates + normalized_templates + line_templates,
+        page_arguments=page_arguments + normalized_pages + line_pages,
+        entry_arguments=entry_arguments + normalized_entries + line_entries,
         extra_argument_values=merged_extra_argument_values,
     )
 

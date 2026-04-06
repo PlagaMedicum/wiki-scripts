@@ -190,12 +190,16 @@ Validation exits nonzero when the source layout is incomplete or misnamed.
 - `[candidate]`:
   - `must_contain_all` is used for review/debug candidate detection
   - `must_contain_any` is an additional broadening/narrowing layer independent from search generation
+- `[argument_extractors.<name>]`:
+  - declares extra template arguments beyond `entry` and `pages`
+  - each extractor currently maps a placeholder name to one or more template parameter aliases
+  - `normalizer` can be `entry`, `pages`, `whitespace`, or `raw`
 - `[macros]`:
   - regex rules may reference `{{MACRO_NAME}}`
   - built-in structural macros are available automatically: `LIST_PREFIX`, `WS`, `OPT_WS`, `SEP`, `DASH`, `OPT_DASH`, `PAGES`, `YEAR4`, `ISBN_TOKEN`
   - built-in names are reserved and cannot be overridden
 
-Regex rules are compiled once at source-load time after recursive macro expansion.
+Regex rules are compiled once at source-load time after recursive macro expansion. They can also capture extra named groups such as `author` or `responsible`; if those names appear in the replacement template, the shared renderer will fill them automatically.
 
 ## Development
 

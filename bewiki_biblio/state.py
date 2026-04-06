@@ -8,6 +8,7 @@ from bewiki_biblio.models import SourceSpec
 from bewiki_biblio.text import (
     extract_entry_arg,
     extract_pages_arg,
+    extract_template_arguments,
     make_review_key,
     normalize_review_line,
 )
@@ -45,11 +46,16 @@ def make_line_exact_rule(
     match_text: str,
     pages: str | None = None,
     entry: str | None = None,
+    arguments: dict[str, str] | None = None,
 ) -> dict:
     return {
         "kind": "line_exact",
         "match": make_review_key(match_text, spec),
-        "replacement": spec.render_template(pages=pages, entry=entry),
+        "replacement": spec.render_template(
+            pages=pages,
+            entry=entry,
+            **(arguments or {}),
+        ),
         "enabled": True,
     }
 
@@ -78,7 +84,8 @@ def merge_rules(spec: SourceSpec, base_rules: list[dict], review_lines: list[str
         normalized = normalize_review_line(line, spec)
         pages = extract_pages_arg(line, spec)
         entry = extract_entry_arg(line, spec)
-        rule = make_line_exact_rule(spec, normalized, pages, entry)
+        arguments = extract_template_arguments(line, spec)
+        rule = make_line_exact_rule(spec, normalized, pages, entry, arguments)
         key = make_rule_key(rule, spec)
         if key not in seen:
             merged.append(rule)

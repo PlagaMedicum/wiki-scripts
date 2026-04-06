@@ -68,6 +68,16 @@ def normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalize_argument_value(value: str, normalizer: str) -> str:
+    if normalizer == "pages":
+        return normalize_pages_arg(value)
+    if normalizer == "entry":
+        return normalize_entry_arg(value)
+    if normalizer == "whitespace":
+        return normalize_whitespace(value)
+    return value.strip()
+
+
 def normalize_review_line(line: str, spec: SourceSpec) -> str:
     line = re.sub(r"^\s*[*#;:]+\s*", "", line).strip()
     line = normalize_biblio_wikitext(line, spec)
@@ -213,6 +223,27 @@ def make_review_key(line: str, spec: SourceSpec) -> str:
     return normalize_review_line(line, spec).casefold()
 
 
+def extract_template_param_value(
+    text: str,
+    spec: SourceSpec,
+    param_names: tuple[str, ...],
+    *,
+    normalizer: str = "entry",
+) -> str | None:
+    normalized = normalize_biblio_wikitext(text, spec)
+    patterns = []
+    for name in param_names:
+        canonical = normalize_whitespace(name)
+        escaped = re.escape(canonical).replace(r"\ ", r"\s+")
+        patterns.append(escaped)
+    pattern = r"\|\s*(?:" + "|".join(patterns) + r")\s*=\s*(?P<value>[^|}]+)"
+    match = re.search(pattern, normalized, flags=re.IGNORECASE | re.UNICODE)
+    if not match:
+        return None
+    value = normalize_argument_value(match.group("value"), normalizer)
+    return value or None
+
+
 def _looks_like_bibliography_prefix(entry: str, spec: SourceSpec) -> bool:
     candidate = normalize_biblio_wikitext(entry, spec).casefold()
     if not candidate:
@@ -241,12 +272,16 @@ def _looks_like_bibliography_prefix(entry: str, spec: SourceSpec) -> bool:
 
 def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
     raw = re.sub(r"^\s*[*#;:]+\s*", "", text).strip()
-    normalized = normalize_biblio_wikitext(raw, spec)
-
-    match = ENTRY_TEMPLATE_PARAM_RE.search(normalized)
-    if match:
-        entry = normalize_entry_arg(match.group("entry"))
+    entry = extract_template_param_value(
+        raw,
+        spec,
+        ("частка", "раздзел", "chapter", "entry", "article", "артыкул"),
+        normalizer="entry",
+    )
+    if entry:
         return entry or None
+
+    normalized = normalize_biblio_wikitext(raw, spec)
 
     if normalized.startswith("{{"):
         return None
@@ -258,6 +293,20 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
             return entry
 
     return None
+
+
+def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for extractor in spec.argument_extractors:
+        value = extract_template_param_value(
+            text,
+            spec,
+            extractor.template_params,
+            normalizer=extractor.normalizer,
+        )
+        if value:
+            values[extractor.name] = value
+    return values
 
 
 def extract_pages_arg(text: str, spec: SourceSpec) -> str | None:

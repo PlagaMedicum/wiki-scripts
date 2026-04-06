@@ -247,6 +247,11 @@ class AppUI:
             "Entry args",
             ", ".join(dict.fromkeys(result.entry_arguments)) or "none",
         )
+        for key, values in sorted(result.extra_argument_values.items()):
+            meta.add_row(
+                f"{key.replace('_', ' ').title()} args",
+                ", ".join(dict.fromkeys(values)) or "none",
+            )
 
         diff_text = self.build_diff_text(
             old_text=old_text,
@@ -290,9 +295,17 @@ class AppUI:
         table.add_row("Full line", info.full_line)
         table.add_row("Review line", info.review_line)
         table.add_row("Normalized line", info.normalized_line)
-        table.add_row("Suggested template", spec.render_template(info.pages, info.entry))
+        table.add_row(
+            "Suggested template",
+            spec.render_template(info.pages, info.entry, **info.extra_arguments),
+        )
         table.add_row("Extracted pages", info.pages or "none")
         table.add_row("Extracted entry", info.entry or "none")
+        for key, value in sorted(info.extra_arguments.items()):
+            table.add_row(
+                f"Extracted {key.replace('_', ' ')}",
+                value or "none",
+            )
         self.print(Panel(table, title="Unknown candidate variant", border_style="yellow"))
 
     def print_variant_controls(self) -> None:

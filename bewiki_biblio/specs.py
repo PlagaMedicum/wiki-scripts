@@ -7,6 +7,7 @@ from pathlib import Path
 
 from bewiki_biblio.models import (
     AliasRule,
+    ArgumentExtractor,
     CandidateSpec,
     NormalizationOptions,
     RegexRule,
@@ -243,6 +244,33 @@ def _compile_regex_rules(
     return tuple(regex_rules)
 
 
+def _load_argument_extractors(data: dict) -> tuple[ArgumentExtractor, ...]:
+    raw = data.get("argument_extractors", {})
+    if not isinstance(raw, dict):
+        raise ValueError("Missing or invalid [argument_extractors] section")
+
+    extractors: list[ArgumentExtractor] = []
+    for name, config in raw.items():
+        if not isinstance(config, dict):
+            raise ValueError(f"argument_extractors.{name} must be a table")
+        template_params = _string_list(config, "template_params")
+        if not template_params:
+            raise ValueError(f"argument_extractors.{name}.template_params must not be empty")
+        normalizer = config.get("normalizer", "entry")
+        if normalizer not in {"entry", "pages", "whitespace", "raw"}:
+            raise ValueError(
+                f"argument_extractors.{name}.normalizer must be one of entry, pages, whitespace, raw"
+            )
+        extractors.append(
+            ArgumentExtractor(
+                name=name,
+                template_params=template_params,
+                normalizer=normalizer,
+            )
+        )
+    return tuple(extractors)
+
+
 def _compile_patterns(
     patterns: tuple[str, ...],
     macros: dict[str, str],
@@ -291,6 +319,7 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
 
     macros = _load_macro_map(data)
     regex_rules = _compile_regex_rules(data.get("regex_rules", []), macros)
+    argument_extractors = _load_argument_extractors(data)
 
     alias_rules: list[AliasRule] = []
     for item in normalization.get("alias_replacements", []):
@@ -360,6 +389,7 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
             flags=re.UNICODE | re.IGNORECASE,
         ),
         regex_rules=regex_rules,
+        argument_extractors=argument_extractors,
         alias_rules=tuple(alias_rules),
         normalization=normalization_options,
     )

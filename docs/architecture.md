@@ -64,6 +64,7 @@ Hand-authored and reviewed by humans. These are the persistent source files that
 - replacement template forms
 - default Belarusian edit summary format
 - page-number extraction patterns
+- optional extra-argument extractors for source-specific template parameters
 - normalization toggles and alias normalization
 - source-local regex macros
 - declarative regex replacements with required rule names
@@ -98,6 +99,8 @@ The normalization behavior is configurable per source through `[normalization]` 
 
 Page extraction is source-driven. Each source can provide one or more patterns with a named `pages` group, plus reject patterns for false-positive tails such as illustration extents. Page patterns are compiled once when the source is loaded.
 
+Additional template arguments are also source-driven. A source can declare `[argument_extractors.<name>]` subtables for placeholders such as `author`, `responsible`, or future source-specific fields. This keeps the renderer and exact-rule promotion path expandable without introducing source-specific Python code.
+
 ## Replacement Flow
 
 The engine applies two layers in order:
@@ -106,6 +109,7 @@ The engine applies two layers in order:
 2. line-exact rules derived from `rules.json` plus promoted `review_variants.json`
 
 Regex-rule replacements can use named match groups and the shared `{template}` token. The shared engine renders the correct template form depending on whether a `pages` group was captured.
+If a regex rule captures extra named groups like `author` or `responsible`, those values are passed into the shared template renderer as well.
 
 Regex rules are macro-aware:
 

@@ -30,6 +30,13 @@ class CandidateSpec:
 
 
 @dataclass(frozen=True)
+class ArgumentExtractor:
+    name: str
+    template_params: tuple[str, ...]
+    normalizer: str = "entry"
+
+
+@dataclass(frozen=True)
 class NormalizationOptions:
     strip_nowiki: bool = True
     resolve_wikilinks: bool = True
@@ -57,6 +64,7 @@ class SourceSpec:
     page_patterns: tuple[re.Pattern[str], ...]
     reject_patterns: tuple[re.Pattern[str], ...]
     regex_rules: tuple[RegexRule, ...]
+    argument_extractors: tuple[ArgumentExtractor, ...] = ()
     alias_rules: tuple[AliasRule, ...] = ()
     normalization: NormalizationOptions = NormalizationOptions()
 
@@ -64,14 +72,35 @@ class SourceSpec:
         self,
         pages: str | None = None,
         entry: str | None = None,
+        **arguments: str | None,
     ) -> str:
         template = self.template_with_pages if pages else self.template_without_pages
-        template = template.replace("{entry}", entry or "")
-        if pages:
-            template = template.replace("{pages}", pages)
-        while "|}}" in template:
-            template = template.replace("|}}", "}}")
+        values = {
+            "entry": entry or "",
+            "pages": pages or "",
+        }
+        for key, value in arguments.items():
+            values[key] = value or ""
+
+        for key, value in values.items():
+            template = template.replace(f"{{{key}}}", value)
+
+        if template.startswith("{{") and template.endswith("}}"):
+            parts = template[2:-2].split("|")
+            while parts and parts[-1] == "":
+                parts.pop()
+            template = "{{" + "|".join(parts) + "}}"
         return template
+
+    def argument_normalizer(self, name: str) -> str:
+        if name == "pages":
+            return "pages"
+        if name == "entry":
+            return "entry"
+        for extractor in self.argument_extractors:
+            if extractor.name == name:
+                return extractor.normalizer
+        return "entry"
 
     def render_default_summary(self) -> str:
         return self.default_summary_format.replace(
@@ -129,6 +158,7 @@ class ReplacementResult:
     rendered_templates: list[str] = field(default_factory=list)
     page_arguments: list[str] = field(default_factory=list)
     entry_arguments: list[str] = field(default_factory=list)
+    extra_argument_values: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -138,6 +168,7 @@ class VariantInfo:
     normalized_line: str
     pages: str | None = None
     entry: str | None = None
+    extra_arguments: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

@@ -234,6 +234,22 @@ def test_extract_entry_arg_from_author_prefix_before_template_belen17(repo_root)
     }
 
 
+def test_extract_multi_author_prefix_before_template_for_belen15(repo_root):
+    spec = load_source_spec("belen15", root=repo_root)
+    line = (
+        "* 'Вештарт І. Ф., Цярохін С. Ф.' Сыта // "
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.15: Следавікі — Трыо|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2002|"
+        "том=15|старонкі=324|старонак=552|isbn=985-11-0251-2 (Т. 15)|тыраж=10&nbsp;000}}"
+    )
+
+    assert extract_entry_arg(line, spec) == "Сыта"
+    assert extract_pages_arg(line, spec) == "324"
+    assert extract_template_arguments(line, spec) == {
+        "author": "Вештарт І. Ф., Цярохін С. Ф.",
+    }
+
+
 def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
     text = (
         'Text<ref name="one" /> more <ref name="two"/>'

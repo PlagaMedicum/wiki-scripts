@@ -136,13 +136,14 @@ INITIALS_SURNAME_RE = (
 )
 QUOTED_SURNAME_INITIALS_RE = rf"[\"'«“„]?{SURNAME_INITIALS_RE}[\"'»”]?"
 QUOTED_INITIALS_SURNAME_RE = rf"[\"'«“„]?{INITIALS_SURNAME_RE}[\"'»”]?"
-AUTHOR_LIKE_RE = rf"(?:{QUOTED_SURNAME_INITIALS_RE}|{QUOTED_INITIALS_SURNAME_RE})"
+AUTHOR_ITEM_RE = rf"(?:{QUOTED_SURNAME_INITIALS_RE}|{QUOTED_INITIALS_SURNAME_RE})"
+AUTHOR_LIST_RE = rf"{AUTHOR_ITEM_RE}(?:\s*,\s*{AUTHOR_ITEM_RE})*"
 AUTHOR_ENTRY_RESPONSIBLE_RE = re.compile(
-    rf"^(?P<author>{AUTHOR_LIKE_RE})\s+(?P<entry>.+?)\s*/\s*(?P<responsible>{AUTHOR_LIKE_RE})$",
+    rf"^(?P<author>{AUTHOR_LIST_RE})\s+(?P<entry>.+?)\s*/\s*(?P<responsible>{AUTHOR_LIST_RE})$",
     re.UNICODE,
 )
 AUTHOR_ENTRY_RE = re.compile(
-    rf"^(?P<author>{AUTHOR_LIKE_RE})\s+(?P<entry>.+)$",
+    rf"^(?P<author>{AUTHOR_LIST_RE})\s+(?P<entry>.+)$",
     re.UNICODE,
 )
 

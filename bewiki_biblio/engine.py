@@ -8,6 +8,7 @@ from bewiki_biblio.text import (
     coalesce_entry_arg,
     extract_entry_arg,
     extract_pages_arg,
+    extract_prefix_components,
     extract_template_arguments,
     make_review_key,
     normalize_biblio_wikitext,
@@ -19,6 +20,42 @@ from bewiki_biblio.text import (
     split_ref_aware_segments,
 )
 from bewiki_biblio.utils import substitute_tokens
+
+
+PREFIX_TEMPLATE_REVIEW_REASON = (
+    "Entry or author inferred from bibliography prefix before template citation; confirm manually."
+)
+
+
+def _add_prefix_template_review(
+    *,
+    match_text: str,
+    extracted_entry: str | None,
+    extracted_arguments: dict[str, str],
+    review_reasons: list[str],
+    matched_review_lines: list[str],
+    spec: SourceSpec,
+) -> None:
+    if "{{" not in match_text:
+        return
+
+    prefix = extract_prefix_components(match_text, spec)
+    if prefix is None:
+        return
+
+    inferred = extracted_entry == prefix.entry
+    if extracted_arguments.get("author") and prefix.author:
+        inferred = inferred or extracted_arguments["author"] == prefix.author
+    if extracted_arguments.get("responsible") and prefix.responsible:
+        inferred = inferred or extracted_arguments["responsible"] == prefix.responsible
+
+    if not inferred:
+        return
+
+    if PREFIX_TEMPLATE_REVIEW_REASON not in review_reasons:
+        review_reasons.append(PREFIX_TEMPLATE_REVIEW_REASON)
+    if match_text not in matched_review_lines:
+        matched_review_lines.append(match_text)
 
 
 def replace_line_exact_rules(
@@ -168,6 +205,14 @@ def apply_regex_rules(
                     rule.review_note or f"Rule {rule.name} requires manual review."
                 )
                 matched_review_lines.append(match_text)
+            _add_prefix_template_review(
+                match_text=match_text,
+                extracted_entry=entry,
+                extracted_arguments=template_arguments,
+                review_reasons=review_reasons,
+                matched_review_lines=matched_review_lines,
+                spec=spec,
+            )
 
             mapping = {
                 **groups,
@@ -286,6 +331,14 @@ def apply_normalized_unit_regex_rules(
                     rule.review_note or f"Rule {rule.name} requires manual review."
                 )
                 matched_review_lines.append(unit.body)
+            _add_prefix_template_review(
+                match_text=unit_text,
+                extracted_entry=entry,
+                extracted_arguments=template_arguments,
+                review_reasons=review_reasons,
+                matched_review_lines=matched_review_lines,
+                spec=spec,
+            )
             matched = True
             break
 

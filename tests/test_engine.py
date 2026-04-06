@@ -687,6 +687,28 @@ def test_extract_unknown_belen17_variant_strips_author_from_entry(repo_root):
     }
 
 
+def test_belen15_template_prefix_with_author_list_requires_review(repo_root):
+    spec = load_source_spec("belen15", root=repo_root)
+    text = (
+        "* 'Вештарт І. Ф., Цярохін С. Ф.' Сыта // "
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.15: Следавікі — Трыо|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2002|"
+        "том=15|старонкі=324|старонак=552|isbn=985-11-0251-2 (Т. 15)|тыраж=10&nbsp;000}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/БелЭн|15|Сыта|Вештарт І. Ф., Цярохін С. Ф.|324}}"
+    assert result.entry_arguments == ["Сыта"]
+    assert result.extra_argument_values == {
+        "author": ["Вештарт І. Ф., Цярохін С. Ф."],
+    }
+    assert result.review_reasons == [
+        "Entry or author inferred from bibliography prefix before template citation; confirm manually."
+    ]
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

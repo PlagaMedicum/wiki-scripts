@@ -250,6 +250,23 @@ def test_extract_multi_author_prefix_before_template_for_belen15(repo_root):
     }
 
 
+def test_extract_author_entry_from_multi_author_prefix_with_page_title_belen8(repo_root):
+    spec = load_source_spec("belen8", root=repo_root)
+    line = (
+        "* Трусаў, А. А., Угрыновіч, У. В. Кафля / А. А. Трусаў, У. В. Угрыновіч // "
+        "Беларуская энцыклапедыя: У 18 т. / Беларуская Энцыклапедыя; "
+        "рэдкалэ: Г. П. Пашкоў (гал. рэд.) [і інш.]. Т. 8: Канто — Кулі. "
+        "— Мн.: БелЭн, 1999. — 572 с.: іл. — С. 188 — 189. — ISBN 985-11-0144-3."
+    )
+
+    assert extract_entry_arg(line, spec, "Кафля") == "Кафля"
+    assert extract_pages_arg(line, spec) == "188—189"
+    assert extract_template_arguments(line, spec, "Кафля") == {
+        "author": "Трусаў, А. А., Угрыновіч, У. В.",
+        "responsible": "А. А. Трусаў, У. В. Угрыновіч",
+    }
+
+
 def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
     text = (
         'Text<ref name="one" /> more <ref name="two"/>'

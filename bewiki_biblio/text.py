@@ -146,6 +146,10 @@ AUTHOR_ENTRY_RE = re.compile(
     rf"^(?P<author>{AUTHOR_LIST_RE})\s+(?P<entry>.+)$",
     re.UNICODE,
 )
+AUTHOR_LIST_FULL_RE = re.compile(
+    rf"^{AUTHOR_LIST_RE}$",
+    re.UNICODE,
+)
 
 
 @dataclass(frozen=True)
@@ -320,10 +324,54 @@ def _normalize_person_arg(value: str) -> str:
     return value.strip()
 
 
-def _parse_prefix_components(prefix: str, spec: SourceSpec) -> PrefixComponents | None:
+def _match_author_entry_with_page_title(
+    prefix: str,
+    page_title: str,
+) -> tuple[str, str] | None:
+    normalized_prefix = normalize_whitespace(prefix)
+    normalized_title = normalize_whitespace(page_title)
+    if (
+        not normalized_prefix
+        or not normalized_title
+        or not normalized_prefix.casefold().endswith(normalized_title.casefold())
+    ):
+        return None
+
+    author_part = normalized_prefix[: -len(normalized_title)].rstrip(" ,;:/")
+    if not author_part or not AUTHOR_LIST_FULL_RE.fullmatch(author_part):
+        return None
+
+    return author_part, normalized_title
+
+
+def _parse_prefix_components(
+    prefix: str,
+    spec: SourceSpec,
+    page_title: str | None = None,
+) -> PrefixComponents | None:
     prefix = normalize_entry_arg(prefix)
     if not prefix or _looks_like_bibliography_prefix(prefix, spec):
         return None
+
+    if page_title:
+        split = re.split(r"\s*/\s*", prefix, maxsplit=1)
+        if len(split) == 2 and AUTHOR_LIST_FULL_RE.fullmatch(split[1]):
+            matched = _match_author_entry_with_page_title(split[0], page_title)
+            if matched:
+                author, entry = matched
+                return PrefixComponents(
+                    entry=entry,
+                    author=_normalize_person_arg(author),
+                    responsible=_normalize_person_arg(split[1]),
+                )
+
+        matched = _match_author_entry_with_page_title(prefix, page_title)
+        if matched:
+            author, entry = matched
+            return PrefixComponents(
+                entry=entry,
+                author=_normalize_person_arg(author),
+            )
 
     match = AUTHOR_ENTRY_RESPONSIBLE_RE.match(prefix)
     if match:
@@ -347,7 +395,11 @@ def _parse_prefix_components(prefix: str, spec: SourceSpec) -> PrefixComponents 
     return PrefixComponents(entry=prefix)
 
 
-def extract_prefix_components(text: str, spec: SourceSpec) -> PrefixComponents | None:
+def extract_prefix_components(
+    text: str,
+    spec: SourceSpec,
+    page_title: str | None = None,
+) -> PrefixComponents | None:
     normalized = normalize_biblio_wikitext(
         re.sub(r"^\s*[*#;:]+\s*", "", text).strip(),
         spec,
@@ -355,7 +407,7 @@ def extract_prefix_components(text: str, spec: SourceSpec) -> PrefixComponents |
     match = ENTRY_LIST_PREFIX_RE.match(normalized)
     if not match:
         return None
-    return _parse_prefix_components(match.group("entry"), spec)
+    return _parse_prefix_components(match.group("entry"), spec, page_title)
 
 
 def coalesce_entry_arg(
@@ -374,7 +426,11 @@ def coalesce_entry_arg(
     return normalized
 
 
-def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
+def extract_entry_arg(
+    text: str,
+    spec: SourceSpec,
+    page_title: str | None = None,
+) -> str | None:
     raw = re.sub(r"^\s*[*#;:]+\s*", "", text).strip()
     entry = extract_template_param_value(
         raw,
@@ -397,12 +453,12 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
         if title_value:
             match = TITLE_WITH_ENTRY_RE.match(title_value)
             if match:
-                components = _parse_prefix_components(match.group("entry"), spec)
+                components = _parse_prefix_components(match.group("entry"), spec, page_title)
                 if components and components.entry and len(components.entry) <= 200:
                     return components.entry
         return None
 
-    components = extract_prefix_components(raw, spec)
+    components = extract_prefix_components(raw, spec, page_title)
     if components and len(components.entry) <= 200:
         return components.entry
 
@@ -439,9 +495,13 @@ def normalized_unit_variants(text: str, spec: SourceSpec) -> tuple[str, ...]:
     return tuple(dict.fromkeys(variants))
 
 
-def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
+def extract_template_arguments(
+    text: str,
+    spec: SourceSpec,
+    page_title: str | None = None,
+) -> dict[str, str]:
     normalized = normalize_biblio_wikitext(text.strip(), spec)
-    prefix_components = extract_prefix_components(text, spec)
+    prefix_components = extract_prefix_components(text, spec, page_title)
     values: dict[str, str] = {}
     for extractor in spec.argument_extractors:
         value = extract_template_param_value(
@@ -450,6 +510,14 @@ def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:
             extractor.template_params,
             normalizer=extractor.normalizer,
         )
+        if not value and prefix_components and page_title:
+            if extractor.name == "author" and prefix_components.author:
+                value = normalize_argument_value(prefix_components.author, extractor.normalizer)
+            elif extractor.name == "responsible" and prefix_components.responsible:
+                value = normalize_argument_value(
+                    prefix_components.responsible,
+                    extractor.normalizer,
+                )
         if not value:
             for pattern in extractor.patterns:
                 match = pattern.search(normalized)

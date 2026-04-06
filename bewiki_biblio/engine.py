@@ -62,6 +62,8 @@ def replace_line_exact_rules(
     text: str,
     spec: SourceSpec,
     rules: list[dict],
+    *,
+    page_title: str | None = None,
 ) -> tuple[
     str,
     int,
@@ -108,8 +110,8 @@ def replace_line_exact_rules(
 
         stored_replacement = str(rule["replacement"])
         extracted_pages = extract_pages_arg(body, spec)
-        extracted_entry = extract_entry_arg(body, spec)
-        extracted_arguments = extract_template_arguments(body, spec)
+        extracted_entry = extract_entry_arg(body, spec, page_title)
+        extracted_arguments = extract_template_arguments(body, spec, page_title)
         if spec.template_name in stored_replacement:
             replacement = spec.render_template(
                 pages=extracted_pages,
@@ -146,6 +148,8 @@ def replace_line_exact_rules(
 def apply_regex_rules(
     text: str,
     spec: SourceSpec,
+    *,
+    page_title: str | None = None,
 ) -> tuple[
     str,
     int,
@@ -175,8 +179,8 @@ def apply_regex_rules(
             match_text = match.group(0)
             groups = {key: (value or "") for key, value in match.groupdict().items()}
             extracted_pages = extract_pages_arg(match_text, spec)
-            extracted_entry = extract_entry_arg(match_text, spec)
-            extracted_arguments = extract_template_arguments(match_text, spec)
+            extracted_entry = extract_entry_arg(match_text, spec, page_title)
+            extracted_arguments = extract_template_arguments(match_text, spec, page_title)
             pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else extracted_pages
             entry = coalesce_entry_arg(groups.get("entry"), extracted_entry, spec)
             template_arguments: dict[str, str] = dict(extracted_arguments)
@@ -243,6 +247,8 @@ def apply_regex_rules(
 def apply_normalized_unit_regex_rules(
     text: str,
     spec: SourceSpec,
+    *,
+    page_title: str | None = None,
 ) -> tuple[
     str,
     int,
@@ -287,8 +293,8 @@ def apply_normalized_unit_regex_rules(
             unit_text = unit.body
             groups = {key: (value or "") for key, value in match.groupdict().items()}
             extracted_pages = extract_pages_arg(unit_text, spec)
-            extracted_entry = extract_entry_arg(unit_text, spec)
-            extracted_arguments = extract_template_arguments(unit_text, spec)
+            extracted_entry = extract_entry_arg(unit_text, spec, page_title)
+            extracted_arguments = extract_template_arguments(unit_text, spec, page_title)
             pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else extracted_pages
             entry = coalesce_entry_arg(groups.get("entry"), extracted_entry, spec)
             template_arguments: dict[str, str] = dict(extracted_arguments)
@@ -343,6 +349,40 @@ def apply_normalized_unit_regex_rules(
             break
 
         if not matched:
+            if page_title and is_candidate_line(unit.body, spec):
+                extracted_entry = extract_entry_arg(unit.body, spec, page_title)
+                if extracted_entry and normalize_biblio_wikitext(
+                    extracted_entry,
+                    spec,
+                ).casefold() == normalize_biblio_wikitext(page_title, spec).casefold():
+                    normalized_body = normalize_biblio_wikitext(unit.body, spec).casefold()
+                    if not spec.isbns or any(isbn.casefold() in normalized_body for isbn in spec.isbns):
+                        extracted_pages = extract_pages_arg(unit.body, spec)
+                        extracted_arguments = extract_template_arguments(
+                            unit.body,
+                            spec,
+                            page_title,
+                        )
+                        template = spec.render_template(
+                            pages=extracted_pages,
+                            entry=extracted_entry,
+                            **extracted_arguments,
+                        )
+                        parts.append(f"{unit.prefix}{template}{unit.trailing_newline}")
+                        position = unit.end
+                        replacements += 1
+                        used_rule_names.append("page_title_candidate")
+                        rendered_templates.append(template)
+                        if extracted_pages:
+                            page_arguments.append(extracted_pages)
+                        entry_arguments.append(extracted_entry)
+                        for key, value in extracted_arguments.items():
+                            extra_argument_values.setdefault(key, []).append(value)
+                        matched = True
+
+            if matched:
+                continue
+
             parts.append(text[unit.start : unit.end])
             position = unit.end
 
@@ -364,6 +404,8 @@ def _replace_segment(
     text: str,
     spec: SourceSpec,
     active_rules: list[dict],
+    *,
+    page_title: str | None = None,
 ) -> ReplacementResult:
     (
         current,
@@ -378,6 +420,7 @@ def _replace_segment(
         text,
         spec,
         active_rules,
+        page_title=page_title,
     )
     (
         current,
@@ -392,6 +435,7 @@ def _replace_segment(
     ) = apply_regex_rules(
         current,
         spec,
+        page_title=page_title,
     )
     (
         current,
@@ -406,6 +450,7 @@ def _replace_segment(
     ) = apply_normalized_unit_regex_rules(
         current,
         spec,
+        page_title=page_title,
     )
     merged_extra_argument_values = {
         key: values[:]
@@ -433,6 +478,8 @@ def replace_text(
     text: str,
     spec: SourceSpec,
     active_rules: list[dict],
+    *,
+    page_title: str | None = None,
 ) -> ReplacementResult:
     parts: list[str] = []
     total_replacements = 0
@@ -446,7 +493,12 @@ def replace_text(
     matched_review_lines: list[str] = []
 
     for kind, segment, open_tag, close_tag in split_ref_aware_segments(text):
-        result = _replace_segment(segment, spec, active_rules)
+        result = _replace_segment(
+            segment,
+            spec,
+            active_rules,
+            page_title=page_title,
+        )
         if kind == "ref":
             parts.append(f"{open_tag}{result.text}{close_tag}")
         else:
@@ -495,7 +547,12 @@ def is_candidate_line(raw_line: str, spec: SourceSpec) -> bool:
     return True
 
 
-def extract_unknown_variant_infos(text: str, spec: SourceSpec) -> list[VariantInfo]:
+def extract_unknown_variant_infos(
+    text: str,
+    spec: SourceSpec,
+    *,
+    page_title: str | None = None,
+) -> list[VariantInfo]:
     infos: list[VariantInfo] = []
     seen: set[str] = set()
 
@@ -519,8 +576,12 @@ def extract_unknown_variant_infos(text: str, spec: SourceSpec) -> list[VariantIn
                     review_line=review_line,
                     normalized_line=normalized_line,
                     pages=extract_pages_arg(review_line, spec),
-                    entry=extract_entry_arg(review_line, spec),
-                    extra_arguments=extract_template_arguments(review_line, spec),
+                    entry=extract_entry_arg(review_line, spec, page_title),
+                    extra_arguments=extract_template_arguments(
+                        review_line,
+                        spec,
+                        page_title,
+                    ),
                 )
             )
 

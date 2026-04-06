@@ -194,11 +194,20 @@ def _run_single_source(
         page = pywikibot.Page(site, title)
         stats.processed += 1
         old_text = page.text
-        result = replace_text(old_text, spec, state.active_rules)
+        result = replace_text(
+            old_text,
+            spec,
+            state.active_rules,
+            page_title=title,
+        )
         _append_title_review_reasons(result, title)
 
         if result.replacements == 0 and options.learn_variants:
-            infos = extract_unknown_variant_infos(old_text, spec)
+            infos = extract_unknown_variant_infos(
+                old_text,
+                spec,
+                page_title=title,
+            )
             for info in infos:
                 key = variant_review_key(info)
                 hashed = variant_review_hash(info)
@@ -223,7 +232,12 @@ def _run_single_source(
                         ui.info("[ignore] Added candidate to ignored_variants.json")
                     break
 
-            result = replace_text(old_text, spec, state.active_rules)
+            result = replace_text(
+                old_text,
+                spec,
+                state.active_rules,
+                page_title=title,
+            )
 
         if result.replacements == 0:
             if options.show_candidates:

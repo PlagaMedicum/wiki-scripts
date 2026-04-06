@@ -726,6 +726,32 @@ def test_belen15_template_prefix_with_author_list_requires_review(repo_root):
     ]
 
 
+def test_replace_belen8_candidate_with_page_title_matched_entry(repo_root):
+    spec = load_source_spec("belen8", root=repo_root)
+    text = (
+        "* Трусаў, А. А., Угрыновіч, У. В. Кафля / А. А. Трусаў, У. В. Угрыновіч // "
+        "Беларуская энцыклапедыя: У 18 т. / Беларуская Энцыклапедыя; "
+        "рэдкалэ: Г. П. Пашкоў (гал. рэд.) [і інш.]. Т. 8: Канто — Кулі. "
+        "— Мн.: БелЭн, 1999. — 572 с.: іл. — С. 188 — 189. — ISBN 985-11-0144-3."
+    )
+
+    result = replace_text(text, spec, [], page_title="Кафля")
+
+    assert result.replacements == 1
+    assert (
+        result.text
+        == "* {{Крыніцы/БелЭн|8|Кафля|Трусаў, А. А., Угрыновіч, У. В.|188—189|А. А. Трусаў, У. В. Угрыновіч}}"
+    )
+    assert result.used_rule_names == ["page_title_candidate"]
+    assert result.entry_arguments == ["Кафля"]
+    assert result.page_arguments == ["188—189"]
+    assert result.extra_argument_values == {
+        "author": ["Трусаў, А. А., Угрыновіч, У. В."],
+        "responsible": ["А. А. Трусаў, У. В. Угрыновіч"],
+    }
+    assert result.review_reasons == []
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

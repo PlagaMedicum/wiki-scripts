@@ -89,6 +89,14 @@ ENTRY_LIST_PREFIX_RE = re.compile(
     r"^\s*(?:[*#;:]+\s*)?(?P<entry>.+?)\s*(?://|/\s*/)\s*(?=\S)",
     re.UNICODE,
 )
+BIBLIOGRAPHY_DESCRIPTOR_RE = re.compile(
+    r"\b(?:isbn|энцыклап(?:едыя)?|encyclop(?:aedia|edia)?|том)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+VOLUME_MARKER_RE = re.compile(
+    r"\bт\.\s*\d+\b|\bкн\.\s*\d+\b",
+    re.IGNORECASE | re.UNICODE,
+)
 
 
 def split_ref_aware_segments(
@@ -123,6 +131,32 @@ def make_review_key(line: str, spec: SourceSpec) -> str:
     return normalize_review_line(line, spec).casefold()
 
 
+def _looks_like_bibliography_prefix(entry: str, spec: SourceSpec) -> bool:
+    candidate = normalize_biblio_wikitext(entry, spec).casefold()
+    if not candidate:
+        return False
+
+    signals = 0
+    if ":" in candidate:
+        signals += 1
+    if BIBLIOGRAPHY_DESCRIPTOR_RE.search(candidate):
+        signals += 1
+    if VOLUME_MARKER_RE.search(candidate):
+        signals += 1
+
+    source_name = normalize_biblio_wikitext(spec.name, spec).casefold()
+    if source_name and source_name in candidate:
+        signals += 1
+
+    for term in spec.insource_terms + spec.keywords:
+        normalized_term = normalize_biblio_wikitext(term, spec).casefold()
+        if len(normalized_term) >= 4 and normalized_term in candidate:
+            signals += 1
+            break
+
+    return signals >= 2
+
+
 def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
     raw = re.sub(r"^\s*[*#;:]+\s*", "", text).strip()
     normalized = normalize_biblio_wikitext(raw, spec)
@@ -138,7 +172,7 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
     match = ENTRY_LIST_PREFIX_RE.match(normalized)
     if match:
         entry = normalize_entry_arg(match.group("entry"))
-        if entry and len(entry) <= 200:
+        if entry and len(entry) <= 200 and not _looks_like_bibliography_prefix(entry, spec):
             return entry
 
     return None

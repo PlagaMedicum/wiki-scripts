@@ -90,6 +90,17 @@ def test_extract_entry_arg_from_list_prefix(repo_root):
     assert extract_entry_arg(line, spec) == "Асмолавічы"
 
 
+def test_extract_entry_arg_ignores_bibliography_title_before_double_slash(repo_root):
+    spec = load_source_spec("gvb9", root=repo_root)
+    line = (
+        "* Гарады і вёскі Беларусі: Энцыклапедыя. Т.8, кн.2. Мінская вобласць "
+        "// Рэдкалегія: Т. У. Бялова (дырэктар) і інш. — Мн.: БелЭн, 2011. "
+        "— 464 с.: іл. ISBN 978-985-11-0554-6"
+    )
+
+    assert extract_entry_arg(line, spec) is None
+
+
 def test_extract_entry_arg_from_template_param(repo_root):
     spec = load_source_spec("gvb2", root=repo_root)
     line = (

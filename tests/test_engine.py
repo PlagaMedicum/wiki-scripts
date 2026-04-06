@@ -277,6 +277,32 @@ def test_replace_line_exact_rule_keeps_pages_and_empty_entry_for_template_withou
     assert result.entry_arguments == []
 
 
+def test_replace_line_exact_rule_does_not_infer_entry_from_bibliography_title(repo_root):
+    spec = load_source_spec("gvb9", root=repo_root)
+    body = (
+        "Гарады і вёскі Беларусі: Энцыклапедыя. Т.8, кн.2. Мінская вобласць "
+        "// Рэдкалегія: Т. У. Бялова (дырэктар) і інш. — Мн.: БелЭн, 2011. "
+        "— 464 с.: іл. ISBN 978-985-11-0554-6"
+    )
+
+    result = replace_text(
+        f"* {body}",
+        spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": make_review_key(body, spec),
+                "replacement": "{{Крыніцы/ГВБ|8-2}}",
+                "enabled": True,
+            }
+        ],
+    )
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/ГВБ|8-2}}"
+    assert result.entry_arguments == []
+
+
 def test_replace_regex_rule_only_inside_ref_tags(tmp_path):
     spec = _load_regex_demo_spec(tmp_path)
     text = (

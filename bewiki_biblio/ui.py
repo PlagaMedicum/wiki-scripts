@@ -4,6 +4,7 @@ import difflib
 import os
 import sys
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from rich.console import Console
 from rich.panel import Panel
@@ -14,6 +15,13 @@ from rich.table import Table
 from rich.text import Text
 
 from bewiki_biblio.models import ReplacementResult, RunStats, SourceSpec, VariantInfo
+
+
+@dataclass(frozen=True)
+class ChecklistOption:
+    value: str
+    label: str
+    detail: str = ""
 
 
 class AppUI:
@@ -53,6 +61,16 @@ class AppUI:
 
     def print_sources(self, specs: list[SourceSpec]) -> None:
         self.print(self.build_source_table(specs))
+
+    def print_startup_wizard_intro(self, source_count: int) -> None:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style="" if self.no_color else "bold cyan")
+        table.add_column()
+        table.add_row("Mode", "Startup wizard")
+        table.add_row("Sources", str(source_count))
+        table.add_row("Flow", "Select sources, choose the run mode, pick flags, and start the run.")
+        table.add_row("Input", "Use single-key prompts where available. Press `q` in checklist screens to cancel.")
+        self.print(Panel(table, title="Interactive startup", border_style="blue"))
 
     def build_startup_panel(
         self,
@@ -423,6 +441,178 @@ class AppUI:
             self.console.print(choice)
             return choice
 
+    def build_checklist_panel(
+        self,
+        title: str,
+        options: list[ChecklistOption],
+        *,
+        selected: set[str],
+        cursor: int,
+        notice: str | None = None,
+    ) -> Panel:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(width=1)
+        table.add_column(width=3, style="" if self.no_color else "bold cyan")
+        table.add_column(no_wrap=True)
+        table.add_column()
+
+        for index, option in enumerate(options):
+            marker = ">" if index == cursor else " "
+            checkbox = "[x]" if option.value in selected else "[ ]"
+            table.add_row(marker, checkbox, option.label, option.detail)
+
+        footer = Table.grid(padding=(0, 1))
+        footer.add_column(style="" if self.no_color else "bold cyan")
+        footer.add_column()
+        footer.add_row(
+            "Controls",
+            "space toggle, j/k move, a select all, x clear, Enter continue, q cancel",
+        )
+        footer.add_row("Selected", f"{len(selected)}/{len(options)}")
+        if notice:
+            footer.add_row("Notice", notice)
+
+        layout = Table.grid()
+        layout.add_row(table)
+        layout.add_row(footer)
+        return Panel(layout, title=title, border_style="cyan")
+
+    def prompt_checklist(
+        self,
+        title: str,
+        options: list[ChecklistOption],
+        *,
+        default_selected: tuple[str, ...] = (),
+        allow_empty: bool = False,
+    ) -> tuple[str, ...] | None:
+        if not options:
+            return ()
+
+        selected = {
+            option.value
+            for option in options
+            if option.value in set(default_selected)
+        }
+        ordered_values = [option.value for option in options]
+
+        if not self._supports_single_key_input():
+            self.print(
+                self.build_checklist_panel(
+                    title,
+                    options,
+                    selected=selected,
+                    cursor=0,
+                )
+            )
+            valid = {option.value for option in options}
+            while True:
+                raw = Prompt.ask(
+                    f"{title} (comma-separated values, `all`, or `q` to cancel)",
+                    console=self.console,
+                ).strip()
+                lowered = raw.casefold()
+                if lowered == "q":
+                    return None
+                if lowered == "all":
+                    return tuple(ordered_values)
+                chosen = [item.strip() for item in raw.split(",") if item.strip()]
+                unknown = [item for item in chosen if item not in valid]
+                if unknown:
+                    self.warn(f"Unknown values: {', '.join(unknown)}")
+                    continue
+                if not chosen and not allow_empty:
+                    self.warn("Select at least one item or type q to cancel.")
+                    continue
+                chosen_set = set(chosen)
+                return tuple(value for value in ordered_values if value in chosen_set)
+
+        cursor = 0
+        notice: str | None = None
+        while True:
+            if self.console.is_terminal:
+                self.console.clear(home=True)
+            self.print(
+                self.build_checklist_panel(
+                    title,
+                    options,
+                    selected=selected,
+                    cursor=cursor,
+                    notice=notice,
+                )
+            )
+
+            raw = self._read_single_key()
+            if raw == "\x03":
+                raise KeyboardInterrupt
+            key = raw.casefold()
+            notice = None
+
+            if key == "j":
+                cursor = (cursor + 1) % len(options)
+                continue
+            if key == "k":
+                cursor = (cursor - 1) % len(options)
+                continue
+            if raw == " ":
+                value = options[cursor].value
+                if value in selected:
+                    selected.remove(value)
+                else:
+                    selected.add(value)
+                continue
+            if key == "a":
+                selected = set(ordered_values)
+                continue
+            if key == "x":
+                selected.clear()
+                continue
+            if key == "q":
+                if self.console.is_terminal:
+                    self.console.clear(home=True)
+                return None
+            if raw in ("\r", "\n"):
+                if selected or allow_empty:
+                    if self.console.is_terminal:
+                        self.console.clear(home=True)
+                    return tuple(value for value in ordered_values if value in selected)
+                notice = "Select at least one item or press q to cancel."
+                continue
+
+            notice = "Use space, j, k, a, x, Enter, or q."
+
+    def prompt_source_selection(self, specs: list[SourceSpec]) -> tuple[str, ...] | None:
+        options = [
+            ChecklistOption(
+                value=spec.source_id,
+                label=spec.source_id,
+                detail=f"{spec.name} [{spec.template_name}]",
+            )
+            for spec in specs
+        ]
+        return self.prompt_checklist(
+            "Select sources",
+            options,
+            allow_empty=False,
+        )
+
+    def prompt_run_mode(self) -> str | None:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style="" if self.no_color else "bold cyan")
+        table.add_column()
+        table.add_row("d", "Dry-run: inspect matches without saving.")
+        table.add_row("i", "Interactive apply: save with per-page confirmation.")
+        table.add_row("b", "Background apply: save safe matches automatically and skip review-required ones.")
+        table.add_row("q", "Cancel the startup wizard.")
+        self.print(Panel(table, title="Run mode", border_style="magenta"))
+        choice = self.prompt_choice(
+            "Choose run mode [d=dry-run, i=interactive apply, b=background apply, q=quit]",
+            choices=["d", "i", "b", "q"],
+            default="d",
+        )
+        if choice == "q":
+            return None
+        return choice
+
     def prompt_variant_action(self) -> str:
         if not self._shown_variant_controls:
             self.print_variant_controls()
@@ -447,6 +637,29 @@ class AppUI:
         if default is None:
             return Prompt.ask(label, console=self.console)
         return Prompt.ask(label, default=default, console=self.console)
+
+    def prompt_optional_text(self, label: str, *, default: str = "") -> str | None:
+        value = Prompt.ask(label, default=default, console=self.console).strip()
+        return value or None
+
+    def prompt_int(
+        self,
+        label: str,
+        *,
+        default: int,
+        minimum: int = 0,
+    ) -> int:
+        while True:
+            raw = Prompt.ask(label, default=str(default), console=self.console).strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                self.warn("Enter a whole number.")
+                continue
+            if value < minimum:
+                self.warn(f"Enter a value >= {minimum}.")
+                continue
+            return value
 
     def prompt_csv(
         self,
@@ -523,3 +736,21 @@ class AppUI:
 
     def print_final_summary(self, stats: RunStats) -> None:
         self.print(self.build_final_summary(stats))
+
+    def print_startup_run_summary(
+        self,
+        *,
+        source_ids: tuple[str, ...],
+        mode_label: str,
+        options: dict[str, str],
+        command_preview: str,
+    ) -> None:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style="" if self.no_color else "bold cyan")
+        table.add_column()
+        table.add_row("Sources", ", ".join(source_ids))
+        table.add_row("Mode", mode_label)
+        for key, value in options.items():
+            table.add_row(key, value)
+        table.add_row("Command", command_preview)
+        self.print(Panel(table, title="Startup run summary", border_style="green"))

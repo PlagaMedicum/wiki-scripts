@@ -45,6 +45,7 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             source_ids=("demo",),
             query=None,
             limit=1,
+            minor_threshold=1000,
             apply=False,
             assume_yes=False,
             summary=None,
@@ -58,6 +59,7 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             source_ids=("demo",),
             query=None,
             limit=1,
+            minor_threshold=1000,
             apply=True,
             assume_yes=False,
             summary=None,
@@ -71,6 +73,7 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             source_ids=("demo",),
             query=None,
             limit=1,
+            minor_threshold=1000,
             apply=False,
             assume_yes=False,
             summary=None,
@@ -83,8 +86,9 @@ def test_needs_interactive_input_only_when_run_can_prompt():
 
 def test_minor_edit_threshold_uses_changed_utf8_bytes():
     assert _changed_bytes("abc", "adc") == 2
-    assert _is_minor_edit("a" * 400, "b" * 400)
-    assert not _is_minor_edit("a" * 500, "b" * 500)
+    assert _is_minor_edit("a" * 400, "b" * 400, 1000)
+    assert not _is_minor_edit("a" * 500, "b" * 500, 1000)
+    assert _is_minor_edit("a" * 500, "b" * 500, 1001)
 
 
 def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
@@ -145,6 +149,7 @@ def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
             source_ids=("demo",),
             query=None,
             limit=1,
+            minor_threshold=1000,
             apply=False,
             assume_yes=False,
             summary=None,
@@ -235,6 +240,7 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
             source_ids=("first", "second"),
             query=None,
             limit=1,
+            minor_threshold=1000,
             apply=True,
             assume_yes=False,
             summary=None,
@@ -309,6 +315,7 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
             source_ids=("first", "second"),
             query=None,
             limit=1,
+            minor_threshold=1000,
             apply=True,
             assume_yes=False,
             summary=None,

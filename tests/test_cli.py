@@ -34,6 +34,7 @@ def test_run_command_accepts_multiple_source_ids(monkeypatch):
 
     assert exit_code == 0
     assert captured["options"].source_ids == ("gvb1", "gvb2")
+    assert captured["options"].minor_threshold == 1000
 
 
 def test_run_command_splits_comma_separated_source_ids(monkeypatch):
@@ -69,6 +70,21 @@ def test_run_command_accepts_all_sources_flag(monkeypatch):
 
     assert exit_code == 0
     assert captured["options"].source_ids == ("gvb1", "gvb2")
+
+
+def test_run_command_accepts_minor_threshold(monkeypatch):
+    captured = {}
+
+    def fake_run_sources(options, ui):
+        captured["options"] = options
+        return 0
+
+    monkeypatch.setattr("bewiki_biblio.cli.run_sources", fake_run_sources)
+
+    exit_code = main(["run", "gvb1", "--minor-threshold", "250", "--no-color"])
+
+    assert exit_code == 0
+    assert captured["options"].minor_threshold == 250
 
 
 def test_run_command_rejects_all_with_explicit_sources(capsys):

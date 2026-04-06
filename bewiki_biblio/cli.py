@@ -9,6 +9,13 @@ from bewiki_biblio.specs import discover_source_specs
 from bewiki_biblio.ui import AppUI
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bewiki-biblio",
@@ -71,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum number of pages to inspect.",
     )
     run_parser.add_argument(
+        "--minor-threshold",
+        type=_non_negative_int,
+        default=1000,
+        help="Mark a saved edit as minor when total changed UTF-8 bytes stay below this threshold.",
+    )
+    run_parser.add_argument(
         "--apply",
         action="store_true",
         help="Save changes to the wiki instead of running a dry-run.",
@@ -131,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         source_ids=tuple(source_ids),
         query=args.query,
         limit=args.limit,
+        minor_threshold=args.minor_threshold,
         apply=args.apply,
         assume_yes=args.yes,
         summary=args.summary,

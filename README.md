@@ -109,6 +109,12 @@ Override the default edit summary:
 python3 -m bewiki_biblio run gvb1 --apply --summary 'Замена бібліяграфічнай спасылкі шаблонам {{Крыніцы/ГВБ}}'
 ```
 
+Change the minor-edit threshold:
+
+```bash
+python3 -m bewiki_biblio run gvb1 --apply --minor-threshold 250
+```
+
 Disable Rich colors and styling:
 
 ```bash
@@ -121,6 +127,7 @@ python3 -m bewiki_biblio run gvb1 --no-color
 - `--apply` enables saving.
 - `--apply` without `--yes` keeps the per-page review loop.
 - `--all` runs every configured source in discovery order.
+- `--minor-threshold` controls when saved edits are marked minor, based on changed UTF-8 bytes.
 - when you run multiple sources, they are processed in the order you entered them
 - in a multi-source `--apply` run, pressing `a` saves all remaining matched pages across the rest of the entered sources
 - During interactive apply runs:

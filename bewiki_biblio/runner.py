@@ -69,8 +69,8 @@ def _changed_bytes(old_text: str, new_text: str) -> int:
     return changed
 
 
-def _is_minor_edit(old_text: str, new_text: str) -> bool:
-    return _changed_bytes(old_text, new_text) < 1000
+def _is_minor_edit(old_text: str, new_text: str, threshold: int) -> bool:
+    return _changed_bytes(old_text, new_text) < threshold
 
 
 @dataclass
@@ -221,7 +221,7 @@ def _run_single_source(
             page.text = result.text
             page.save(
                 summary=current_summary,
-                minor=_is_minor_edit(old_text, result.text),
+                minor=_is_minor_edit(old_text, result.text, options.minor_threshold),
                 bot=True,
                 asynchronous=False,
             )

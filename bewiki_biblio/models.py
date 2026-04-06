@@ -107,6 +107,7 @@ class RunOptions:
     source_ids: tuple[str, ...]
     query: str | None
     limit: int
+    minor_threshold: int
     apply: bool
     assume_yes: bool
     summary: str | None

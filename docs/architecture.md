@@ -1,0 +1,145 @@
+# Architecture
+
+## Vision
+
+This repository hosts reusable bibliography replacement tools for be.wikipedia.org. Each source-specific bibliography family lives in its own folder, while a shared CLI and engine handle wiki login, search, normalization, replacement, review state, diffs, and operator prompts.
+
+The goal is to make new bibliography replacers mostly declarative:
+
+- describe the source in `source.toml`
+- keep machine state in JSON
+- reuse the same English operator CLI
+- preserve Belarusian wiki-facing behavior where needed
+
+## Folder Layout
+
+```text
+bewiki_biblio/
+  bootstrap.py
+  cli.py
+  engine.py
+  query.py
+  runner.py
+  specs.py
+  state.py
+  text.py
+  ui.py
+sources/
+  gvb1/
+    source.toml
+    rules.json
+    review_variants.json
+    ignored_variants.json
+    README.md
+  gvb2/
+    ...
+docs/
+  architecture.md
+tests/
+  ...
+```
+
+## Source Lifecycle
+
+1. The operator selects one source ID, multiple source IDs, or `--all`.
+2. The CLI loads `sources/<source_id>/source.toml`.
+3. `add-source` can create a fresh `sources/<source_id>/` scaffold with the canonical filenames and a starter `source.toml`. Search terms are entered explicitly, and the candidate prompts then suggest defaults derived from those entered terms rather than copied from an existing source.
+4. `validate` checks that existing source folders follow the repository conventions and reports missing or misnamed files.
+5. The query builder generates an `insource:` query from configured search terms unless `--query` overrides it.
+6. Pywikibot logs into be.wiki using `.env` credentials and a runtime-generated `.pywikibot/` config directory.
+7. The runner searches matching pages, loads page text, and passes it through the shared replacement engine.
+8. The Rich UI shows colored diffs, replacement metadata, progress, and interactive prompts.
+9. When `--learn-variants` is enabled, unknown candidates can be added to review or ignore state.
+10. Promoted line-exact rules are persisted back into `rules.json` after successful saves.
+
+## Config And State Separation
+
+### `source.toml`
+
+Hand-authored and reviewed by humans. It defines:
+
+- source identity and target wiki
+- generated search terms
+- independent candidate-detection terms
+- replacement template forms
+- default Belarusian edit summary format
+- page-number extraction patterns
+- normalization toggles and alias normalization
+- source-local regex macros
+- declarative regex replacements with required rule names
+
+The source scaffold and validation commands both assume canonical filenames:
+
+- `source.toml`
+- `rules.json`
+- `review_variants.json`
+- `ignored_variants.json`
+- `README.md`
+
+This convention keeps the folder predictable for automation and for future source generators.
+
+### JSON State
+
+Machine-managed and updated by the workflow:
+
+- `rules.json`: active exact-match rules
+- `review_variants.json`: raw candidate bibliography lines waiting to be promoted
+- `ignored_variants.json`: hashes of rejected candidates
+
+## Normalization And Page Extraction
+
+The shared text pipeline removes common wiki markup noise before comparison:
+
+- strips `nowiki`
+- resolves piped and plain wikilinks
+- removes italic/bold apostrophes
+- normalizes non-breaking spaces
+- normalizes en/em dashes
+- applies optional source-specific alias replacements
+
+The normalization behavior is configurable per source through `[normalization]` booleans, so future bibliography families can opt out of aggressive cleanup if their raw formatting matters for matching.
+
+Page extraction is source-driven. Each source can provide one or more patterns with a named `pages` group, plus reject patterns for false-positive tails such as illustration extents. Page patterns are compiled once when the source is loaded.
+
+## Replacement Flow
+
+The engine applies two layers in order:
+
+1. declarative regex rules from `source.toml`
+2. line-exact rules derived from `rules.json` plus promoted `review_variants.json`
+
+Regex-rule replacements can use named match groups and the shared `{template}` token. The shared engine renders the correct template form depending on whether a `pages` group was captured.
+
+Regex rules are macro-aware:
+
+- every `[[regex_rules]].pattern` is expanded through `[macros]`
+- built-in macros cover structural fragments only
+- bibliography-specific fragments must live in the source file
+- macro expansion is recursive, with undefined-macro and cycle detection at load time
+
+Candidate detection for review/debug flows is intentionally separate from query generation. Search terms help find candidate pages, while `[candidate]` terms decide whether a specific source line looks like the target bibliography.
+
+## CLI UX Rules
+
+- The operator CLI is English.
+- The wiki-facing edits remain Belarusian where required.
+- Dry-run is the default.
+- Rich is used for:
+  - startup panels
+  - progress tracking
+  - colored unified diffs
+  - variant review panels
+  - final summary tables
+- `--no-color` keeps the same flow without terminal styling.
+
+## Development Tooling
+
+- Ruff is the standard Python linter and formatter for this repository.
+- `make lint` runs `ruff check .` and `ruff format --check .`.
+- `make format` applies safe Ruff fixes and formatting to the Python tree.
+- `make check` runs compile checks, tests, and linting before a commit.
+- `.gitignore` excludes Ruff cache, packaging artifacts, coverage output, and local virtual environments.
+
+## Extending The System
+
+To add a new source, use `add-source` for the initial scaffold or copy an existing per-book source such as `sources/gvb1/`, then tailor `source.toml`, validate the layout, and add tests for normalization, page extraction, replacement rendering, and CLI output relevant to that source.

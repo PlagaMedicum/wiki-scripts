@@ -5,7 +5,7 @@
 ## Layout
 
 - `bewiki_biblio/`: shared Python package
-- `sources/<source_id>/`: per-source config and machine-managed state
+- `sources/<source_id>/`: per-source config plus optional local runtime state
 - `docs/architecture.md`: architecture and extension guide
 - `tests/`: unit and CLI coverage
 
@@ -134,21 +134,26 @@ python3 -m bewiki_biblio run gvb1 --no-color
 
 1. Create `sources/<source_id>/`.
 2. Add `source.toml` with `[source]`, `[search]`, `[candidate]`, `[replacement]`, `[summary]`, `[pages]`, `[normalization]`, `[macros]`, and `[[regex_rules]]`.
-3. Add `rules.json`, `review_variants.json`, and `ignored_variants.json`.
-4. Add `sources/<source_id>/README.md` with operator notes and examples.
+3. Add `sources/<source_id>/README.md` with operator notes and examples.
+4. Optionally create `rules.json`, `review_variants.json`, and `ignored_variants.json` locally, or let the workflow create them on first use.
 5. Add or update tests covering the new source behavior.
 
-`source.toml` is hand-authored. The JSON state files are machine-managed and updated during review/learning workflows.
+`source.toml` and `README.md` are the persistent source definition. The JSON state files are local machine-managed runtime data and are gitignored.
 
 ## Source Scaffolding
 
 `add-source` is the interactive bootstrap command for a new bibliography source. It should create the canonical source folder and canonical filenames:
 
 - `sources/<source_id>/source.toml`
+- `sources/<source_id>/README.md`
+
+It also creates local runtime state files for convenience:
+
 - `sources/<source_id>/rules.json`
 - `sources/<source_id>/review_variants.json`
 - `sources/<source_id>/ignored_variants.json`
-- `sources/<source_id>/README.md`
+
+Those JSON files are gitignored and do not need to be committed.
 
 The scaffold keeps search-term prompts blank. Candidate prompts are then guessed from what you entered:
 
@@ -165,8 +170,8 @@ The folder name must be source-id-safe: lowercase ASCII letters, digits, and hyp
 
 - each source lives in `sources/<source_id>/`
 - the directory name matches `source.toml`'s `[source].id`
-- required files exist under their canonical names
-- obvious misnamings such as `rules.JSON` or `readme.md` are reported as invalid
+- persistent files exist under their canonical names
+- obvious misnamings such as `readme.md` are reported as invalid
 
 Validation exits nonzero when the source layout is incomplete or misnamed.
 

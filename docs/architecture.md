@@ -7,7 +7,7 @@ This repository hosts reusable bibliography replacement tools for be.wikipedia.o
 The goal is to make new bibliography replacers mostly declarative:
 
 - describe the source in `source.toml`
-- keep machine state in JSON
+- keep machine state in local JSON files
 - reuse the same English operator CLI
 - preserve Belarusian wiki-facing behavior where needed
 
@@ -27,10 +27,10 @@ bewiki_biblio/
 sources/
   gvb1/
     source.toml
+    README.md
     rules.json
     review_variants.json
     ignored_variants.json
-    README.md
   gvb2/
     ...
 docs/
@@ -43,20 +43,20 @@ tests/
 
 1. The operator selects one source ID, multiple source IDs, or `--all`.
 2. The CLI loads `sources/<source_id>/source.toml`.
-3. `add-source` can create a fresh `sources/<source_id>/` scaffold with the canonical filenames and a starter `source.toml`. Search terms are entered explicitly, and the candidate prompts then suggest defaults derived from those entered terms rather than copied from an existing source.
-4. `validate` checks that existing source folders follow the repository conventions and reports missing or misnamed files.
+3. `add-source` can create a fresh `sources/<source_id>/` scaffold with the tracked definition files plus empty local runtime JSON files. Search terms are entered explicitly, and the candidate prompts then suggest defaults derived from those entered terms rather than copied from an existing source.
+4. `validate` checks that existing source folders follow the repository conventions for persistent files and reports missing or misnamed files.
 5. The query builder generates an `insource:` query from configured search terms unless `--query` overrides it.
 6. Pywikibot logs into be.wiki using `.env` credentials and a runtime-generated `.pywikibot/` config directory.
 7. The runner searches matching pages, loads page text, and passes it through the shared replacement engine.
 8. The Rich UI shows colored diffs, replacement metadata, progress, and interactive prompts.
 9. When `--learn-variants` is enabled, unknown candidates can be added to review or ignore state.
-10. Promoted line-exact rules are persisted back into `rules.json` after successful saves.
+10. Promoted line-exact rules are persisted back into the local `rules.json` runtime file after successful saves.
 
 ## Config And State Separation
 
 ### `source.toml`
 
-Hand-authored and reviewed by humans. It defines:
+Hand-authored and reviewed by humans. These are the persistent source files that belong in git:
 
 - source identity and target wiki
 - generated search terms
@@ -71,16 +71,13 @@ Hand-authored and reviewed by humans. It defines:
 The source scaffold and validation commands both assume canonical filenames:
 
 - `source.toml`
-- `rules.json`
-- `review_variants.json`
-- `ignored_variants.json`
 - `README.md`
 
 This convention keeps the folder predictable for automation and for future source generators.
 
 ### JSON State
 
-Machine-managed and updated by the workflow:
+Machine-managed, local to the operator, and gitignored:
 
 - `rules.json`: active exact-match rules
 - `review_variants.json`: raw candidate bibliography lines waiting to be promoted
@@ -138,7 +135,7 @@ Candidate detection for review/debug flows is intentionally separate from query 
 - `make lint` runs `ruff check .` and `ruff format --check .`.
 - `make format` applies safe Ruff fixes and formatting to the Python tree.
 - `make check` runs compile checks, tests, and linting before a commit.
-- `.gitignore` excludes Ruff cache, packaging artifacts, coverage output, and local virtual environments.
+- `.gitignore` excludes Ruff cache, packaging artifacts, coverage output, local virtual environments, and per-source runtime JSON state.
 
 ## Extending The System
 

@@ -37,12 +37,15 @@ DEFAULT_REJECT_PATTERNS = (
     r"^\s*:\s*іл",
 )
 
-REQUIRED_SOURCE_FILENAMES = (
+PERSISTENT_SOURCE_FILENAMES = (
     "source.toml",
+    "README.md",
+)
+
+RUNTIME_STATE_FILENAMES = (
     "rules.json",
     "review_variants.json",
     "ignored_variants.json",
-    "README.md",
 )
 
 COMMON_FILENAME_ALIASES = {
@@ -125,7 +128,7 @@ def validate_source_layouts(root: Path | None = None) -> list[SourceValidationIs
         names = {item.name for item in child.iterdir() if item.is_file()}
         lowered = {name.lower(): name for name in names}
 
-        for required in REQUIRED_SOURCE_FILENAMES:
+        for required in PERSISTENT_SOURCE_FILENAMES:
             if required in names:
                 continue
 

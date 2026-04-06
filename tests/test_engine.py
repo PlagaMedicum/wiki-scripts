@@ -96,14 +96,23 @@ def _load_regex_demo_spec(tmp_path):
 
 
 def test_replace_exact_reference_variant(gvb_spec):
-    state = load_source_state(gvb_spec)
     text = (
         "Гарады і вёскі Беларусі: Энцыклапедыя. Т.1, кн.1. Гомельская вобласць/С. В. Марцэлеў; "
         "Рэдкалегія: Г. П. Пашкоў (галоўны рэдактар) і інш. — Мн.: БелЭн, 2004. "
         "632с.: іл. Тыраж 4000 экз. ISBN 985-11-0303-9 ISBN 985-11-0302-0"
     )
-
-    result = replace_text(text, gvb_spec, state.active_rules)
+    result = replace_text(
+        text,
+        gvb_spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": make_review_key(text, gvb_spec),
+                "replacement": "{{Крыніцы/ГВБ|1-1}}",
+                "enabled": True,
+            }
+        ],
+    )
 
     assert result.replacements == 1
     assert result.text == "{{Крыніцы/ГВБ|1-1}}"
@@ -160,7 +169,6 @@ def test_full_line_rule_matches_broader_variant(tmp_path):
 
 
 def test_replace_exact_rule_only_inside_ref_tags(gvb_spec):
-    state = load_source_state(gvb_spec)
     text = (
         'Ручаёўка<ref name="энцык">'
         "Гарады і вёскі Беларусі: Энцыклапедыя. Т.1, кн.1. Гомельская вобласць/С. В. Марцэлеў; "
@@ -168,8 +176,23 @@ def test_replace_exact_rule_only_inside_ref_tags(gvb_spec):
         "632с.: іл. Тыраж 4000 экз. ISBN 985-11-0303-9 ISBN 985-11-0302-0"
         "</ref> is a village."
     )
-
-    result = replace_text(text, gvb_spec, state.active_rules)
+    body = (
+        "Гарады і вёскі Беларусі: Энцыклапедыя. Т.1, кн.1. Гомельская вобласць/С. В. Марцэлеў; "
+        "Рэдкалегія: Г. П. Пашкоў (галоўны рэдактар) і інш. — Мн.: БелЭн, 2004. "
+        "632с.: іл. Тыраж 4000 экз. ISBN 985-11-0303-9 ISBN 985-11-0302-0"
+    )
+    result = replace_text(
+        text,
+        gvb_spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": make_review_key(body, gvb_spec),
+                "replacement": "{{Крыніцы/ГВБ|1-1}}",
+                "enabled": True,
+            }
+        ],
+    )
 
     assert result.replacements == 1
     assert (

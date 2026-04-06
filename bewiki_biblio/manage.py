@@ -10,7 +10,8 @@ from bewiki_biblio.models import SourceScaffold
 from bewiki_biblio.specs import (
     DEFAULT_PAGE_PATTERNS,
     DEFAULT_REJECT_PATTERNS,
-    REQUIRED_SOURCE_FILENAMES,
+    PERSISTENT_SOURCE_FILENAMES,
+    RUNTIME_STATE_FILENAMES,
     project_root,
     source_root,
     validate_source_id,
@@ -123,7 +124,8 @@ def render_source_readme(scaffold: SourceScaffold) -> str:
             "",
             "- Add bibliography-specific macros in `source.toml` under `[macros]`.",
             "- Add broad regex rules in `[[regex_rules]]`.",
-            "- `rules.json`, `review_variants.json`, and `ignored_variants.json` are managed by the workflow.",
+            "- `rules.json`, `review_variants.json`, and `ignored_variants.json` are local runtime state managed by the workflow.",
+            "- The runtime JSON files are gitignored and do not need to be committed.",
             "",
         ]
     )
@@ -309,7 +311,8 @@ def add_source(ui: AppUI, root: Path | None = None) -> int:
     summary.add_column()
     summary.add_row("Source ID", scaffold.source_id)
     summary.add_row("Name", scaffold.name)
-    summary.add_row("Files", ", ".join(REQUIRED_SOURCE_FILENAMES))
+    summary.add_row("Tracked files", ", ".join(PERSISTENT_SOURCE_FILENAMES))
+    summary.add_row("Local runtime files", ", ".join(RUNTIME_STATE_FILENAMES))
     summary.add_row("Template", scaffold.template_name)
     summary.add_row("Insource terms", _csv_default(scaffold.insource_terms) or "none")
     summary.add_row("Candidate all", _csv_default(scaffold.candidate_all) or "none")
@@ -334,7 +337,11 @@ def validate_sources(ui: AppUI, root: Path | None = None) -> int:
         table.add_column("Files")
         for source_dir in sorted(source_root(actual_root).iterdir()):
             if source_dir.is_dir():
-                table.add_row(source_dir.name, ", ".join(REQUIRED_SOURCE_FILENAMES))
+                table.add_row(
+                    source_dir.name,
+                    f"{', '.join(PERSISTENT_SOURCE_FILENAMES)} "
+                    f"(runtime state: {', '.join(RUNTIME_STATE_FILENAMES)})",
+                )
         ui.print(table)
         ui.info("[ok] Source layouts and filenames are valid.")
         return 0

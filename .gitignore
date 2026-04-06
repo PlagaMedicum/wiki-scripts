@@ -13,3 +13,6 @@ apicache/
 throttle.ctrl
 *.pyc
 .coverage
+sources/*/rules.json
+sources/*/review_variants.json
+sources/*/ignored_variants.json

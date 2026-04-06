@@ -107,8 +107,16 @@ ENTRY_TEMPLATE_PARAM_RE = re.compile(
     r"\|\s*(?:частка|раздзел|chapter|entry|article|артыкул)\s*=\s*(?P<entry>[^|}]+)",
     re.IGNORECASE | re.UNICODE,
 )
+TITLE_TEMPLATE_PARAM_RE = re.compile(
+    r"(?P<prefix>\|\s*(?:загаловак|title)\s*=\s*)(?P<value>[^|}]+)",
+    re.IGNORECASE | re.UNICODE,
+)
 ENTRY_LIST_PREFIX_RE = re.compile(
     r"^\s*(?:[*#;:]+\s*)?(?P<entry>.+?)\s*(?://|/\s*/)\s*(?=\S)",
+    re.UNICODE,
+)
+TITLE_WITH_ENTRY_RE = re.compile(
+    r"^\s*(?P<entry>.+?)\s*//\s*(?P<rest>\S.*)$",
     re.UNICODE,
 )
 BIBLIOGRAPHY_DESCRIPTOR_RE = re.compile(
@@ -294,6 +302,18 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
     normalized = normalize_biblio_wikitext(raw, spec)
 
     if normalized.startswith("{{"):
+        title_value = extract_template_param_value(
+            raw,
+            spec,
+            ("загаловак", "title"),
+            normalizer="entry",
+        )
+        if title_value:
+            match = TITLE_WITH_ENTRY_RE.match(title_value)
+            if match:
+                entry = normalize_entry_arg(match.group("entry"))
+                if entry and len(entry) <= 200 and not _looks_like_bibliography_prefix(entry, spec):
+                    return entry
         return None
 
     match = ENTRY_LIST_PREFIX_RE.match(normalized)
@@ -303,6 +323,36 @@ def extract_entry_arg(text: str, spec: SourceSpec) -> str | None:
             return entry
 
     return None
+
+
+def normalized_unit_variants(text: str, spec: SourceSpec) -> tuple[str, ...]:
+    normalized = normalize_biblio_wikitext(text, spec)
+    variants = [normalized]
+
+    if normalized.startswith("{{"):
+        def strip_title_entry(match: re.Match[str]) -> str:
+            value = match.group("value")
+            split = TITLE_WITH_ENTRY_RE.match(value)
+            if not split:
+                return match.group(0)
+
+            entry = normalize_entry_arg(split.group("entry"))
+            if not entry or _looks_like_bibliography_prefix(entry, spec):
+                return match.group(0)
+
+            stripped = normalize_whitespace(split.group("rest"))
+            if not stripped:
+                return match.group(0)
+            return f"{match.group('prefix')}{stripped}"
+
+        stripped_titles = TITLE_TEMPLATE_PARAM_RE.sub(
+            strip_title_entry,
+            normalized,
+        )
+        if stripped_titles != normalized:
+            variants.append(stripped_titles)
+
+    return tuple(dict.fromkeys(variants))
 
 
 def extract_template_arguments(text: str, spec: SourceSpec) -> dict[str, str]:

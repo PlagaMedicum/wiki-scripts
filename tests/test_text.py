@@ -162,6 +162,19 @@ def test_extract_template_arguments_for_belen10(repo_root):
     }
 
 
+def test_extract_entry_arg_from_template_title_prefix_for_belen13(repo_root):
+    spec = load_source_spec("belen13", root=repo_root)
+    line = (
+        "{{кніга|загаловак=Рагоўскае возера // Беларуская энцыклапедыя: У 18 т. "
+        "Т. 13: Праміле — Рэлаксін|адказны=Рэдкал.: Г. П. Пашкоў і інш|"
+        "месца=Мн.|выдавецтва=БелЭн|год=2001|том=13|старонкі=202|"
+        "старонак=576|isbn=985-11-0216-4}}"
+    )
+
+    assert extract_entry_arg(line, spec) == "Рагоўскае возера"
+    assert extract_pages_arg(line, spec) == "202"
+
+
 def test_extract_list_style_arguments_for_belen10(repo_root):
     spec = load_source_spec("belen10", root=repo_root)
     line = (

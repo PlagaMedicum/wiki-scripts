@@ -583,6 +583,23 @@ def test_replace_belen11_template_citation_with_pages_only(repo_root):
     assert result.page_arguments == ["374"]
 
 
+def test_replace_belen13_template_citation_with_entry_inside_title(repo_root):
+    spec = load_source_spec("belen13", root=repo_root)
+    text = (
+        "{{кніга|загаловак=Рагоўскае возера // Беларуская энцыклапедыя: У 18 т. "
+        "Т. 13: Праміле — Рэлаксін|адказны=Рэдкал.: Г. П. Пашкоў і інш|"
+        "месца=Мн.|выдавецтва=БелЭн|год=2001|том=13|старонкі=202|"
+        "старонак=576|isbn=985-11-0216-4 (Т. 13)|тыраж=10 000}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "{{Крыніцы/БелЭн|13|Рагоўскае возера||202}}"
+    assert result.entry_arguments == ["Рагоўскае возера"]
+    assert result.page_arguments == ["202"]
+
+
 def test_line_exact_rule_takes_precedence_over_review_required_belen_regex(repo_root):
     spec = load_source_spec("belen1", root=repo_root)
     body = (

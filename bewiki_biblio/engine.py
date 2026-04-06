@@ -14,6 +14,7 @@ from bewiki_biblio.text import (
     normalize_entry_arg,
     normalize_pages_arg,
     normalize_review_line,
+    normalized_unit_variants,
     split_candidate_units,
     split_ref_aware_segments,
 )
@@ -221,7 +222,7 @@ def apply_normalized_unit_regex_rules(
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
-        normalized_unit = normalize_biblio_wikitext(
+        normalized_variants = normalized_unit_variants(
             text[unit.start : unit.end].rstrip("\r\n"),
             spec,
         )
@@ -230,7 +231,11 @@ def apply_normalized_unit_regex_rules(
         for rule in spec.regex_rules:
             if not rule.enabled:
                 continue
-            match = rule.compiled.search(normalized_unit)
+            match = None
+            for normalized_unit in normalized_variants:
+                match = rule.compiled.search(normalized_unit)
+                if match:
+                    break
             if not match:
                 continue
 

@@ -7,7 +7,7 @@ from rich.console import Console
 
 from bewiki_biblio.cli import main
 from bewiki_biblio.models import ReplacementResult, RunStats
-from bewiki_biblio.ui import AppUI
+from bewiki_biblio.ui import AppUI, ChecklistOption
 
 
 def test_list_command_no_color(capsys):
@@ -19,6 +19,36 @@ def test_list_command_no_color(capsys):
     assert "gvb20" in output
     assert "Available bibliography sources" in output
     assert "\x1b[" not in output
+
+
+def test_main_without_arguments_launches_startup_wizard(monkeypatch):
+    captured = {}
+
+    def fake_startup(ui):
+        captured["no_color"] = ui.no_color
+        return 0
+
+    monkeypatch.setattr("bewiki_biblio.cli._interactive_startup", fake_startup)
+
+    exit_code = main([])
+
+    assert exit_code == 0
+    assert captured["no_color"] is False
+
+
+def test_main_without_command_supports_no_color_startup(monkeypatch):
+    captured = {}
+
+    def fake_startup(ui):
+        captured["no_color"] = ui.no_color
+        return 0
+
+    monkeypatch.setattr("bewiki_biblio.cli._interactive_startup", fake_startup)
+
+    exit_code = main(["--no-color"])
+
+    assert exit_code == 0
+    assert captured["no_color"] is True
 
 
 def test_run_command_accepts_multiple_source_ids(monkeypatch):
@@ -249,6 +279,36 @@ def test_prompt_choice_uses_single_key_input(monkeypatch):
     output = stream.getvalue()
     assert "Choose variant action [r=review, i=ignore, s=skip]" in output
     assert "r" in output
+
+
+def test_prompt_checklist_supports_select_all_single_key(monkeypatch):
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=120,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    keys = iter(["a", "\r"])
+
+    monkeypatch.setattr(ui, "_supports_single_key_input", lambda: True)
+    monkeypatch.setattr(ui, "_read_single_key", lambda: next(keys))
+
+    result = ui.prompt_checklist(
+        "Select sources",
+        [
+            ChecklistOption("gvb1", "gvb1", "First source"),
+            ChecklistOption("gvb2", "gvb2", "Second source"),
+        ],
+        allow_empty=False,
+    )
+
+    assert result == ("gvb1", "gvb2")
+    output = stream.getvalue()
+    assert "Select sources" in output
+    assert "select all" in output
 
 
 def test_prompt_choice_falls_back_to_prompt_ask(monkeypatch):

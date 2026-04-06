@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import json
+
+from bewiki_biblio.specs import load_source_spec
+from bewiki_biblio.text import (
+    extract_entry_arg,
+    extract_pages_arg,
+    normalize_biblio_wikitext,
+    normalize_review_line,
+    split_ref_aware_segments,
+)
+
+
+def test_normalize_review_line_resolves_markup(gvb_spec):
+    line = (
+        "[[Гарады і вёскі Беларусі]]: Энцыклапедыя. Т.1, кн.1. "
+        "[[Гомельская вобласць]]/[[Станіслаў Віктаравіч Марцэлеў|С. В. Марцэлеў]]; "
+        "Рэдкалегія: [[Генадзь Пятровіч Пашкоў|Г. П. Пашкоў]] "
+        "(галоўны рэдактар) і інш. — Мн.: [[Беларуская энцыклапедыя|БелЭн]], 2004. "
+        "632с.: іл. Тыраж 4000 экз. <nowiki>ISBN 985-11-0303-9</nowiki> "
+        "<nowiki>ISBN 985-11-0302-0</nowiki>"
+    )
+
+    normalized = normalize_review_line(line, gvb_spec)
+
+    assert "[[" not in normalized
+    assert "nowiki" not in normalized
+    assert "БелЭн" in normalized
+    assert "Т. 1, кн. 1" in normalized
+
+
+def test_extract_pages_arg_prefers_page_markers(gvb_spec):
+    line = (
+        "Марцэлеў С. В., рэдкалегія: Пашкоў Г. П. (галоўны рэдактар) і інш., "
+        "«Гарады і вёскі Беларусі: Энцыклапедыя», г. Мінск, БелЭн., 2004 г., "
+        "ISBN 985-11-0303-9 ISBN 985-11-0302-0, Гомельская вобласць, Т. 1, кн. 1, "
+        "с. 213—214;"
+    )
+    assert extract_pages_arg(line, gvb_spec) == "213—214"
+
+
+def test_extract_pages_arg_supports_star_marker_without_space(repo_root):
+    spec = load_source_spec("gvb14", root=repo_root)
+    line = (
+        "Гарады і вёскі Беларусі: энцыклапедыя. Т. 9 : Гродзенская вобласць, кн. 2 "
+        "/ рэдкал.: У. У. Андрыевіч (гал. рэд.) [і інш.]. — Мінск: БелЭн, 2016. "
+        "— 848 с.: іл. ISBN 978-985-11-0908-7, стар.346"
+    )
+    assert extract_pages_arg(line, spec) == "346"
+
+
+def test_extract_pages_arg_rejects_book_extent(gvb_spec):
+    line = (
+        "Гарады і вёскі Беларусі: Энцыклапедыя. Т.1, кн.1. Гомельская вобласць "
+        "/ С. В. Марцэлеў; Рэдкалегія: Г. П. Пашкоў (галоўны рэдактар) і інш. "
+        "— Мн.: БелЭн, 2004. 632 с.: іл. Тыраж 4000 экз. "
+        "ISBN 985-11-0303-9 ISBN 985-11-0302-0"
+    )
+    assert extract_pages_arg(line, gvb_spec) is None
+
+
+def test_extract_pages_arg_from_template_param(gvb_spec):
+    line = (
+        "{{кніга|частка = Ручаёўка|загаловак = Гарады і вёскі Беларусі: Энцыклапедыя. "
+        "Т. 1, кн. 1. Гомельская вобласць|старонкі = 67—68|старонак = 520 с.: іл.|"
+        "isbn = 985-11-0303-9}}"
+    )
+    assert extract_pages_arg(line, gvb_spec) == "67—68"
+
+
+def test_extract_pages_arg_from_template_param_for_gvb2(repo_root):
+    gvb2_spec = load_source_spec("gvb2", root=repo_root)
+    line = (
+        "{{кніга|частка = Ручаёўка|загаловак = Гарады і вёскі Беларусі: Энцыклапедыя. "
+        "Т. 2, кн. 2. Гомельская вобласць|старонкі = 67—68|старонак = 520 с.: іл.|"
+        "isbn = 985-11-0330-6}}"
+    )
+    assert extract_pages_arg(line, gvb2_spec) == "67—68"
+
+
+def test_extract_entry_arg_from_list_prefix(repo_root):
+    spec = load_source_spec("gvb4", root=repo_root)
+    line = (
+        "* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ў 15 тамах. "
+        "Т. 4, кн. 2. Брэсцкая вобласць / Рэдкалегія: Г. П. Пашкоў "
+        "(галоўны рэдактар) і інш. — Мінск.: БелЭн, 2007. — 608 с.: іл. "
+        "— С. 118. ISBN 978-985-11-0388-7."
+    )
+    assert extract_entry_arg(line, spec) == "Асмолавічы"
+
+
+def test_extract_entry_arg_from_template_param(repo_root):
+    spec = load_source_spec("gvb2", root=repo_root)
+    line = (
+        "{{кніга|частка = Ручаёўка|загаловак = Гарады і вёскі Беларусі: Энцыклапедыя. "
+        "Т. 2, кн. 2. Гомельская вобласць|старонкі = 67—68|isbn = 985-11-0330-6}}"
+    )
+    assert extract_entry_arg(line, spec) == "Ручаёўка"
+
+
+def test_extract_entry_arg_from_multiline_template_param(repo_root):
+    spec = load_source_spec("gvb18", root=repo_root)
+    line = (
+        "{{Кніга\n"
+        "| аўтар =\n"
+        "| частка = Грыгаравічы\n"
+        "| спасылка частка =\n"
+        "| загаловак = Гарады і вёскі Беларусі: энцыклапедыя. Т. 10. Віцебская вобласць. кн. 3\n"
+        "| адказны = У. У. Ваніна (гал. рэд.) [і інш.]\n"
+        "| месца = Мн.\n"
+        "| выдавецтва = Беларуская Энцыклапедыя імя Петруся Броўкі\n"
+        "| год = 2019\n"
+        "| старонкі = 156\n"
+        "| старонак = 592\n"
+        "| isbn = 978-985-11-1156-1\n"
+        "}}"
+    )
+    assert extract_entry_arg(line, spec) == "Грыгаравічы"
+
+
+def test_extract_entry_arg_ignores_url_slashes_in_template_without_entry(repo_root):
+    spec = load_source_spec("gvb5", root=repo_root)
+    line = (
+        "* {{Кніга|ref=Гарады і вёскі Беларусі : Энцыклапедыя. Магілёўская вобласць."
+        "|спасылка=https://archive.org/details/bel-enc-harvio/HVB.Mahilouskaja.1/page/n367/mode/2up?view=theater "
+        "|загаловак=Гарады і вёскі Беларусі : Энцыклапедыя. Магілёўская вобласць. "
+        "|адказны=Пад навуковай рэдакцыяй А.І. Лакоткі |год=2008 |мова=be |месца=Мінск "
+        "|выдавецтва=Беларуская Энцыклапедыя імя Петруся Броўкі |том=5 "
+        "|старонкі=367–368 |старонак=728 |isbn=978-985-11-0409-9}}"
+    )
+
+    assert extract_entry_arg(line, spec) is None
+    assert extract_pages_arg(line, spec) == "367—368"
+
+
+def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
+    text = (
+        'Text<ref name="one" /> more <ref name="two"/>'
+        '<ref name="target">{{кніга|загаловак=Гарады і вёскі Беларусі|isbn=985-11-0330-6}}</ref>'
+    )
+
+    segments = split_ref_aware_segments(text)
+
+    assert segments == [
+        (
+            "text",
+            'Text<ref name="one" /> more <ref name="two"/>',
+            None,
+            None,
+        ),
+        (
+            "ref",
+            "{{кніга|загаловак=Гарады і вёскі Беларусі|isbn=985-11-0330-6}}",
+            '<ref name="target">',
+            "</ref>",
+        ),
+    ]
+
+
+def test_fixture_variants_normalize_without_markup(gvb_spec, repo_root):
+    fixture_path = repo_root / "tests" / "fixtures" / "gvb_exact_variants.json"
+    variants = json.loads(fixture_path.read_text(encoding="utf-8"))
+    normalized = [normalize_biblio_wikitext(item, gvb_spec) for item in variants]
+    assert any("БелЭн" in item for item in normalized)
+    assert any("ISBN 985-11-0303-9" in item for item in normalized)

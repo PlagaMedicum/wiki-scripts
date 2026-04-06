@@ -1,0 +1,15 @@
+.env
+.codex
+.pywikibot/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+htmlcov/
+*.egg-info/
+apicache/
+throttle.ctrl
+*.pyc
+.coverage

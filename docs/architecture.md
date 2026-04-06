@@ -42,6 +42,7 @@ tests/
 ## Source Lifecycle
 
 1. The operator selects one source ID, multiple source IDs, or `--all`.
+   A no-argument startup wizard is also available and can gather the same choices interactively.
 2. The CLI loads `sources/<source_id>/source.toml`.
 3. `add-source` can create a fresh `sources/<source_id>/` scaffold with the tracked definition files plus empty local runtime JSON files. Search terms are entered explicitly, and the candidate prompts then suggest defaults derived from those entered terms rather than copied from an existing source.
 4. `validate` checks that existing source folders follow the repository conventions for persistent files and reports missing or misnamed files.
@@ -132,8 +133,10 @@ Candidate detection for review/debug flows is intentionally separate from query 
 - The operator CLI is English.
 - The wiki-facing edits remain Belarusian where required.
 - Dry-run is the default.
+- Running the CLI with no arguments opens an interactive startup wizard for source selection and run-mode setup.
 - Rich is used for:
   - startup panels
+  - source and flag checklist screens
   - progress tracking
   - colored unified diffs
   - variant review panels

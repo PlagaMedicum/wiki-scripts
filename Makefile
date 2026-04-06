@@ -3,7 +3,7 @@ MODULE ?= bewiki_biblio
 SOURCE ?=
 ARGS ?=
 
-.PHONY: help list validate add-source run test compile lint format check
+.PHONY: help list validate add-source run run-interactive test compile lint format check
 
 help:
 	@printf '%s\n' \
@@ -11,6 +11,7 @@ help:
 		'  make list [ARGS="--no-color"]' \
 		'  make validate [ARGS="--no-color"]' \
 		'  make add-source' \
+		'  make run-interactive [ARGS="--no-color"]' \
 		'  make run SOURCE="<source_id> [more_source_ids] | --all" [ARGS="--limit 10 --no-color"]' \
 		'  make run SOURCE="--all" ARGS="--apply --yes --skip-review-required --limit 500"' \
 		'  make lint' \
@@ -27,6 +28,9 @@ validate:
 
 add-source:
 	$(PYTHON) -m $(MODULE) add-source $(ARGS)
+
+run-interactive:
+	$(PYTHON) -m $(MODULE) $(ARGS)
 
 run:
 	@if [ -z "$(SOURCE)" ]; then \

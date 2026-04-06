@@ -47,6 +47,7 @@ Use the root Makefile shortcuts if you prefer:
 ```bash
 make list
 make validate
+make run-interactive
 make run SOURCE=gvb1 ARGS="--limit 10 --no-color"
 make run SOURCE="gvb1 gvb2 gvb3" ARGS="--learn-variants --limit 50"
 make run SOURCE="--all" ARGS="--learn-variants --limit 50"
@@ -59,6 +60,12 @@ Create a new source scaffold interactively:
 
 ```bash
 python3 -m bewiki_biblio add-source
+```
+
+Launch the interactive startup wizard with no command-line arguments:
+
+```bash
+python3 -m bewiki_biblio
 ```
 
 Validate source folder layouts and required filenames:
@@ -135,6 +142,12 @@ python3 -m bewiki_biblio run gvb1 --no-color
 
 ## Run Controls
 
+- Running `python3 -m bewiki_biblio` with no arguments opens an interactive startup wizard.
+- The startup wizard lets you:
+  - select one, many, or all sources with a checkbox list
+  - choose dry-run, interactive apply, or background apply mode
+  - choose runner flags before the run starts
+  - review the equivalent command preview before confirming
 - Dry-run is the default.
 - `--apply` enables saving.
 - `--apply` without `--yes` keeps the per-page review loop.

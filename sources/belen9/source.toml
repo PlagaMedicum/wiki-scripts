@@ -89,6 +89,8 @@ enabled = true
 
 [[regex_rules]]
 name = "entry_only_with_pages"
+review_required = true
+review_note = "Entry inferred from bibliography prefix before //; confirm against the page title."
 pattern = '^(?P<prefix>{{LIST_PREFIX}})(?P<entry>[^/\n]+?){{OPT_WS}}//{{OPT_WS}}{{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*?\b(?:С|с)\.{{OPT_WS}}(?P<pages>{{PAGES}}).*$'
 replacement = "{prefix}{template}"
 flags = "IGNORECASE|UNICODE|MULTILINE"
@@ -96,6 +98,8 @@ enabled = true
 
 [[regex_rules]]
 name = "entry_only"
+review_required = true
+review_note = "Entry inferred from bibliography prefix before //; confirm against the page title."
 pattern = '^(?P<prefix>{{LIST_PREFIX}})(?P<entry>[^/\n]+?){{OPT_WS}}//{{OPT_WS}}{{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*$'
 replacement = "{prefix}{template}"
 flags = "IGNORECASE|UNICODE|MULTILINE"

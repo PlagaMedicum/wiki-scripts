@@ -94,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save all matched pages without per-page confirmation.",
     )
     run_parser.add_argument(
+        "--skip-review-required",
+        action="store_true",
+        help="Skip matches that still require manual verification instead of prompting for them.",
+    )
+    run_parser.add_argument(
         "--summary",
         help="Override the default Belarusian edit summary for this run.",
     )
@@ -147,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         minor_threshold=args.minor_threshold,
         apply=args.apply,
         assume_yes=args.yes,
+        skip_review_required=args.skip_review_required,
         summary=args.summary,
         context=args.context,
         learn_variants=args.learn_variants,

@@ -148,6 +148,7 @@ class RunOptions:
     minor_threshold: int
     apply: bool
     assume_yes: bool
+    skip_review_required: bool
     summary: str | None
     context: int
     learn_variants: bool
@@ -169,6 +170,7 @@ class ReplacementResult:
     entry_arguments: list[str] = field(default_factory=list)
     extra_argument_values: dict[str, list[str]] = field(default_factory=dict)
     review_reasons: list[str] = field(default_factory=list)
+    matched_review_lines: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -15,8 +15,8 @@ from bewiki_biblio.engine import (
 from bewiki_biblio.models import RunOptions, RunStats
 from bewiki_biblio.query import build_search_query
 from bewiki_biblio.specs import load_source_spec, project_root
-from bewiki_biblio.state import load_source_state
-from bewiki_biblio.text import entry_matches_page_title
+from bewiki_biblio.state import load_source_state, variant_hash
+from bewiki_biblio.text import entry_matches_page_title, make_review_key
 from bewiki_biblio.ui import AppUI
 
 
@@ -61,7 +61,11 @@ def _needs_interactive_input(
     has_review_required_rules: bool,
 ) -> bool:
     return options.learn_variants or (
-        options.apply and (not accept_all or has_review_required_rules)
+        options.apply
+        and (
+            not accept_all
+            or (has_review_required_rules and not options.skip_review_required)
+        )
     )
 
 
@@ -99,6 +103,8 @@ def _get_site_bundle(spec, actual_root: Path, site_cache: dict[tuple[str, str], 
 
 
 def _append_title_review_reasons(result, title: str) -> None:
+    if not result.review_reasons:
+        return
     seen = set(result.review_reasons)
     for entry in result.entry_arguments:
         if entry_matches_page_title(entry, title):
@@ -107,6 +113,21 @@ def _append_title_review_reasons(result, title: str) -> None:
         if reason not in seen:
             result.review_reasons.append(reason)
             seen.add(reason)
+
+
+def _manual_review_candidates(result, spec, state) -> list[str]:
+    lines: list[str] = []
+    seen_keys: set[str] = set()
+    for line in result.matched_review_lines:
+        if not line.strip():
+            continue
+        key = make_review_key(line, spec)
+        hashed = variant_hash(key)
+        if key in state.review_keys or hashed in state.ignored_hashes or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        lines.append(line)
+    return lines
 
 
 def _run_single_source(
@@ -124,9 +145,7 @@ def _run_single_source(
     query = options.query or build_search_query(spec)
     current_summary = session.summary_override or options.summary or spec.render_default_summary()
     stats = RunStats()
-    can_require_manual_review = any(rule.review_required for rule in spec.regex_rules) or (
-        "{entry}" in spec.template_without_pages or "{entry}" in spec.template_with_pages
-    )
+    can_require_manual_review = any(rule.review_required for rule in spec.regex_rules)
     interactive_run = _needs_interactive_input(
         options,
         accept_all=session.accept_all,
@@ -145,6 +164,7 @@ def _run_single_source(
         apply=options.apply,
         assume_yes=session.accept_all,
         has_review_required_rules=can_require_manual_review,
+        skip_review_required=options.skip_review_required,
         learn_variants=options.learn_variants,
         show_candidates=options.show_candidates,
     )
@@ -222,11 +242,38 @@ def _run_single_source(
         for rule in result.used_line_rules:
             ui.print_used_rule(rule)
 
+        if result.review_reasons and options.learn_variants and not options.apply:
+            review_lines = _manual_review_candidates(result, spec, state)
+            if review_lines:
+                choice = ui.prompt_review_match_action()
+                if choice == "r":
+                    added = 0
+                    for line in review_lines:
+                        if state.add_review_variant(line):
+                            added += 1
+                    if added:
+                        stats.learned += added
+                        ui.info(f"[review] Added {added} line(s) to review_variants.json")
+                elif choice == "i":
+                    added = 0
+                    for line in review_lines:
+                        if state.add_ignored_hash(variant_hash(make_review_key(line, spec))):
+                            added += 1
+                    if added:
+                        stats.ignored += added
+                        ui.info(f"[ignore] Added {added} line(s) to ignored_variants.json")
+            else:
+                ui.info(f"[review-known] {title}: manual-review lines are already learned or ignored")
+
         if not options.apply:
             ui.info("[dry-run] No changes saved")
             continue
 
         requires_review = bool(result.review_reasons)
+        if requires_review and options.skip_review_required:
+            ui.warn("[review-skip] " + " ".join(result.review_reasons))
+            stats.skipped += 1
+            continue
         if not session.accept_all or requires_review:
             if requires_review:
                 ui.warn("[review-required] " + " ".join(result.review_reasons))

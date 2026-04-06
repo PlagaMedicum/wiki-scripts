@@ -24,7 +24,16 @@ def replace_line_exact_rules(
     text: str,
     spec: SourceSpec,
     rules: list[dict],
-) -> tuple[str, int, list[dict], list[str], list[str], list[str], dict[str, list[str]]]:
+) -> tuple[
+    str,
+    int,
+    list[dict],
+    list[str],
+    list[str],
+    list[str],
+    dict[str, list[str]],
+    list[str],
+]:
     exact_map: dict[str, dict] = {}
 
     for rule in rules:
@@ -37,7 +46,7 @@ def replace_line_exact_rules(
             exact_map[match_text] = rule
 
     if not exact_map:
-        return text, 0, [], [], [], [], {}
+        return text, 0, [], [], [], [], {}, []
 
     parts: list[str] = []
     position = 0
@@ -47,8 +56,7 @@ def replace_line_exact_rules(
     page_arguments: list[str] = []
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
-    review_reasons: list[str] = []
-    review_reasons: list[str] = []
+    matched_review_lines: list[str] = []
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
@@ -84,7 +92,6 @@ def replace_line_exact_rules(
             entry_arguments.append(extracted_entry)
         for key, value in extracted_arguments.items():
             extra_argument_values.setdefault(key, []).append(value)
-
     parts.append(text[position:])
     return (
         "".join(parts),
@@ -94,6 +101,7 @@ def replace_line_exact_rules(
         page_arguments,
         entry_arguments,
         extra_argument_values,
+        matched_review_lines,
     )
 
 
@@ -109,6 +117,7 @@ def apply_regex_rules(
     list[str],
     dict[str, list[str]],
     list[str],
+    list[str],
 ]:
     current = text
     replacements = 0
@@ -118,6 +127,7 @@ def apply_regex_rules(
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
     review_reasons: list[str] = []
+    matched_review_lines: list[str] = []
 
     for rule in spec.regex_rules:
         if not rule.enabled:
@@ -156,6 +166,7 @@ def apply_regex_rules(
                 review_reasons.append(
                     rule.review_note or f"Rule {rule.name} requires manual review."
                 )
+                matched_review_lines.append(match_text)
 
             mapping = {
                 **groups,
@@ -179,6 +190,7 @@ def apply_regex_rules(
         entry_arguments,
         extra_argument_values,
         review_reasons,
+        matched_review_lines,
     )
 
 
@@ -194,6 +206,7 @@ def apply_normalized_unit_regex_rules(
     list[str],
     dict[str, list[str]],
     list[str],
+    list[str],
 ]:
     parts: list[str] = []
     position = 0
@@ -204,6 +217,7 @@ def apply_normalized_unit_regex_rules(
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
     review_reasons: list[str] = []
+    matched_review_lines: list[str] = []
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
@@ -266,6 +280,7 @@ def apply_normalized_unit_regex_rules(
                 review_reasons.append(
                     rule.review_note or f"Rule {rule.name} requires manual review."
                 )
+                matched_review_lines.append(unit.body)
             matched = True
             break
 
@@ -283,6 +298,7 @@ def apply_normalized_unit_regex_rules(
         entry_arguments,
         extra_argument_values,
         review_reasons,
+        matched_review_lines,
     )
 
 
@@ -293,6 +309,20 @@ def _replace_segment(
 ) -> ReplacementResult:
     (
         current,
+        line_count,
+        used_line_rules,
+        line_templates,
+        line_pages,
+        line_entries,
+        line_extra_argument_values,
+        line_review_lines,
+    ) = replace_line_exact_rules(
+        text,
+        spec,
+        active_rules,
+    )
+    (
+        current,
         regex_count,
         used_rule_names,
         rendered_templates,
@@ -300,8 +330,9 @@ def _replace_segment(
         entry_arguments,
         extra_argument_values,
         regex_review_reasons,
+        regex_review_lines,
     ) = apply_regex_rules(
-        text,
+        current,
         spec,
     )
     (
@@ -313,22 +344,10 @@ def _replace_segment(
         normalized_entries,
         normalized_extra_argument_values,
         normalized_review_reasons,
+        normalized_review_lines,
     ) = apply_normalized_unit_regex_rules(
         current,
         spec,
-    )
-    (
-        current,
-        line_count,
-        used_line_rules,
-        line_templates,
-        line_pages,
-        line_entries,
-        line_extra_argument_values,
-    ) = replace_line_exact_rules(
-        current,
-        spec,
-        active_rules,
     )
     merged_extra_argument_values = {
         key: values[:]
@@ -348,6 +367,7 @@ def _replace_segment(
         entry_arguments=entry_arguments + normalized_entries + line_entries,
         extra_argument_values=merged_extra_argument_values,
         review_reasons=regex_review_reasons + normalized_review_reasons,
+        matched_review_lines=line_review_lines + regex_review_lines + normalized_review_lines,
     )
 
 
@@ -365,6 +385,7 @@ def replace_text(
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
     review_reasons: list[str] = []
+    matched_review_lines: list[str] = []
 
     for kind, segment, open_tag, close_tag in split_ref_aware_segments(text):
         result = _replace_segment(segment, spec, active_rules)
@@ -382,6 +403,7 @@ def replace_text(
         for key, values in result.extra_argument_values.items():
             extra_argument_values.setdefault(key, []).extend(values)
         review_reasons.extend(result.review_reasons)
+        matched_review_lines.extend(result.matched_review_lines)
 
     return ReplacementResult(
         text="".join(parts),
@@ -393,6 +415,7 @@ def replace_text(
         entry_arguments=entry_arguments,
         extra_argument_values=extra_argument_values,
         review_reasons=review_reasons,
+        matched_review_lines=matched_review_lines,
     )
 
 

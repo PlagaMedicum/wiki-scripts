@@ -25,21 +25,22 @@ class AppUI:
             soft_wrap=False,
         )
         self._shown_variant_controls = False
+        self._shown_review_match_controls = False
         self._shown_page_controls = False
 
     def print(self, renderable) -> None:
         self.console.print(renderable)
 
     def info(self, message: str) -> None:
-        self.console.print(message)
+        self.console.print(message, markup=False)
 
     def warn(self, message: str) -> None:
         style = "" if self.no_color else "yellow"
-        self.console.print(message, style=style)
+        self.console.print(message, style=style, markup=False)
 
     def error(self, message: str) -> None:
         style = "" if self.no_color else "bold red"
-        self.console.print(message, style=style)
+        self.console.print(message, style=style, markup=False)
 
     def build_source_table(self, specs: list[SourceSpec]) -> Table:
         table = Table(title="Available bibliography sources")
@@ -101,6 +102,7 @@ class AppUI:
         apply: bool,
         assume_yes: bool,
         has_review_required_rules: bool,
+        skip_review_required: bool,
         learn_variants: bool,
         show_candidates: bool,
     ) -> None:
@@ -112,6 +114,13 @@ class AppUI:
                     ("Variant keys", "`r` add to review_variants.json, `i` add to ignored_variants.json, `s` skip for this run."),
                 ]
             )
+            if has_review_required_rules:
+                rows.append(
+                    (
+                        "Manual-review matches",
+                        "Dry-run learning also lets you review heuristic matches and add their exact lines to review_variants.json.",
+                    )
+                )
         if apply and not assume_yes:
             rows.extend(
                 [
@@ -124,6 +133,13 @@ class AppUI:
                 (
                     "Manual review",
                     "Heuristic matches or entry/title mismatches still stop for confirmation even after `a` or `--yes`.",
+                )
+            )
+        if apply and skip_review_required:
+            rows.append(
+                (
+                    "Skip review-required",
+                    "Matches that still need manual verification are skipped automatically instead of prompting.",
                 )
             )
         if show_candidates:
@@ -331,6 +347,15 @@ class AppUI:
         table.add_row("s", "Skip this candidate and continue.")
         self.print(Panel(table, title="Variant review controls", border_style="yellow"))
 
+    def print_review_match_controls(self) -> None:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style="" if self.no_color else "bold cyan")
+        table.add_column()
+        table.add_row("r", "Add the matched review-required line(s) to review_variants.json for future exact replacement.")
+        table.add_row("i", "Ignore this review-required match in future learn runs.")
+        table.add_row("s", "Skip this page for now.")
+        self.print(Panel(table, title="Manual review controls", border_style="yellow"))
+
     def _supports_single_key_input(self) -> bool:
         return sys.stdin.isatty()
 
@@ -404,6 +429,16 @@ class AppUI:
             self._shown_variant_controls = True
         return self.prompt_choice(
             "Choose variant action [r=review, i=ignore, s=skip]",
+            choices=["r", "i", "s"],
+            default="s",
+        )
+
+    def prompt_review_match_action(self) -> str:
+        if not self._shown_review_match_controls:
+            self.print_review_match_controls()
+            self._shown_review_match_controls = True
+        return self.prompt_choice(
+            "Choose review action [r=learn exact, i=ignore, s=skip]",
             choices=["r", "i", "s"],
             default="s",
         )

@@ -507,6 +507,27 @@ def test_replace_line_exact_rule_replaces_full_multiline_template_block(repo_roo
     assert result.entry_arguments == ["Юзяфоўка"]
 
 
+def test_replace_belen10_bibliography_line_with_author_and_responsible(repo_root):
+    spec = load_source_spec("belen10", root=repo_root)
+    text = (
+        "* Шаблюк В. У. Маркава / В. У. Шаблюк // Беларуская энцыклапедыя: У 18 т. "
+        "Т. 10: Малайзія — Мугаджары / Рэдкал.: Г. П. Пашкоў і інш. — Мн. : БелЭн, 2000. "
+        "— Т. 10. — С. 114. — 544 с. — 10 000 экз. — ISBN 985-11-0035-8. "
+        "— ISBN 985-11-0169-9 (т. 10)."
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.|114|В. У. Шаблюк}}"
+    assert result.entry_arguments == ["Маркава"]
+    assert result.page_arguments == ["114"]
+    assert result.extra_argument_values == {
+        "author": ["Шаблюк В. У."],
+        "responsible": ["В. У. Шаблюк"],
+    }
+
+
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):
     source_dir = tmp_path / "sources" / "tmpdemo"
     source_dir.mkdir(parents=True)

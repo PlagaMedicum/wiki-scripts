@@ -6,6 +6,7 @@ from bewiki_biblio.specs import load_source_spec
 from bewiki_biblio.text import (
     extract_entry_arg,
     extract_pages_arg,
+    extract_template_arguments,
     normalize_biblio_wikitext,
     normalize_review_line,
     split_ref_aware_segments,
@@ -143,6 +144,22 @@ def test_extract_entry_arg_ignores_url_slashes_in_template_without_entry(repo_ro
 
     assert extract_entry_arg(line, spec) is None
     assert extract_pages_arg(line, spec) == "367—368"
+
+
+def test_extract_template_arguments_for_belen10(repo_root):
+    spec = load_source_spec("belen10", root=repo_root)
+    line = (
+        "{{кніга|частка = Маркава|аўтар = Шаблюк В. У.|частка адказны = В. У. Шаблюк|"
+        "загаловак = Беларуская энцыклапедыя: У 18 т. Т. 10: Малайзія — Мугаджары|"
+        "старонкі = 114|isbn = 985-11-0169-9}}"
+    )
+
+    assert extract_entry_arg(line, spec) == "Маркава"
+    assert extract_pages_arg(line, spec) == "114"
+    assert extract_template_arguments(line, spec) == {
+        "author": "Шаблюк В. У.",
+        "responsible": "В. У. Шаблюк",
+    }
 
 
 def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():

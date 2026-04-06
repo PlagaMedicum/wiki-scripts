@@ -29,6 +29,25 @@ def test_load_gvb1_spec(repo_root):
     assert not spec.regex_rules
 
 
+def test_load_belen10_spec(repo_root):
+    spec = load_source_spec("belen10", root=repo_root)
+
+    assert spec.source_id == "belen10"
+    assert spec.template_name == "Крыніцы/БелЭн"
+    assert spec.render_template(
+        entry="Маркава",
+        author="Шаблюк В. У.",
+        responsible="В. У. Шаблюк",
+    ) == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.||В. У. Шаблюк}}"
+    assert spec.render_template(
+        "114",
+        "Маркава",
+        author="Шаблюк В. У.",
+        responsible="В. У. Шаблюк",
+    ) == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.|114|В. У. Шаблюк}}"
+    assert {extractor.name for extractor in spec.argument_extractors} == {"author", "responsible"}
+
+
 def test_build_query_uses_all_search_terms(gvb_spec):
     assert build_search_query(gvb_spec) == (
         'insource:"Гомельская вобласць" '
@@ -39,6 +58,8 @@ def test_build_query_uses_all_search_terms(gvb_spec):
 
 def test_discover_source_specs(repo_root):
     ids = [spec.source_id for spec in discover_source_specs(root=repo_root)]
+    assert "belen1" in ids
+    assert "belen18-2" in ids
     assert "gvb1" in ids
     assert "gvb20" in ids
     assert "gvb" not in ids

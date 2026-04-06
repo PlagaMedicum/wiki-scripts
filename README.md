@@ -129,13 +129,16 @@ python3 -m bewiki_biblio run gvb1 --no-color
 - `--all` runs every configured source in discovery order.
 - `--minor-threshold` controls when saved edits are marked minor, based on changed UTF-8 bytes.
 - when you run multiple sources, they are processed in the order you entered them
-- in a multi-source `--apply` run, pressing `a` saves all remaining matched pages across the rest of the entered sources
+- in a multi-source `--apply` run, pressing `a` saves all remaining matched pages across the rest of the entered sources, but only for matches that do not require manual review
 - During interactive apply runs:
   - `y` saves the current page
   - `n` skips the current page
-  - `a` saves the current and all remaining matches
+  - `a` saves the current and all remaining safe matches
   - `e` edits the run summary for the remaining pages
   - `q` stops the run
+- Heuristic regex rules can mark a match as review-required in `source.toml`.
+- Entry-based replacements also compare the extracted entry with the page title.
+- If the entry and page title do not match exactly after conservative whitespace/dash normalization, the page is paused for manual review even after `a` or `--yes`.
 
 ## Adding a New Source
 
@@ -192,7 +195,7 @@ Validation exits nonzero when the source layout is incomplete or misnamed.
   - `must_contain_any` is an additional broadening/narrowing layer independent from search generation
 - `[argument_extractors.<name>]`:
   - declares extra template arguments beyond `entry` and `pages`
-  - each extractor currently maps a placeholder name to one or more template parameter aliases
+  - each extractor can read values from template parameter aliases and/or regex `patterns`
   - `normalizer` can be `entry`, `pages`, `whitespace`, or `raw`
 - `[macros]`:
   - regex rules may reference `{{MACRO_NAME}}`
@@ -200,6 +203,7 @@ Validation exits nonzero when the source layout is incomplete or misnamed.
   - built-in names are reserved and cannot be overridden
 
 Regex rules are compiled once at source-load time after recursive macro expansion. They can also capture extra named groups such as `author` or `responsible`; if those names appear in the replacement template, the shared renderer will fill them automatically.
+Rules can additionally set `review_required = true` and an optional `review_note` to force interactive confirmation for heuristic matches.
 
 ## Development
 

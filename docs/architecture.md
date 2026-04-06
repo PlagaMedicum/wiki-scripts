@@ -51,6 +51,7 @@ tests/
 8. The Rich UI shows colored diffs, replacement metadata, progress, and interactive prompts.
 9. When `--learn-variants` is enabled, unknown candidates can be added to review or ignore state.
 10. Promoted line-exact rules are persisted back into the local `rules.json` runtime file after successful saves.
+11. Heuristic matches can still pause for confirmation if a rule is marked review-required or if an extracted entry does not match the page title closely enough.
 
 ## Config And State Separation
 
@@ -99,7 +100,7 @@ The normalization behavior is configurable per source through `[normalization]` 
 
 Page extraction is source-driven. Each source can provide one or more patterns with a named `pages` group, plus reject patterns for false-positive tails such as illustration extents. Page patterns are compiled once when the source is loaded.
 
-Additional template arguments are also source-driven. A source can declare `[argument_extractors.<name>]` subtables for placeholders such as `author`, `responsible`, or future source-specific fields. This keeps the renderer and exact-rule promotion path expandable without introducing source-specific Python code.
+Additional template arguments are also source-driven. A source can declare `[argument_extractors.<name>]` subtables for placeholders such as `author`, `responsible`, or future source-specific fields. Extractors can read from template parameters and/or regex patterns, which keeps the renderer and exact-rule promotion path expandable without introducing source-specific Python code.
 
 ## Replacement Flow
 
@@ -117,6 +118,8 @@ Regex rules are macro-aware:
 - built-in macros cover structural fragments only
 - bibliography-specific fragments must live in the source file
 - macro expansion is recursive, with undefined-macro and cycle detection at load time
+
+Regex rules can also declare `review_required = true` with an optional `review_note`. This is intended for broad but heuristic matches such as "entry before `//`" patterns. Those matches still render automatically in dry-runs, but interactive apply mode will stop for confirmation even after bulk-accept. The runner also compares extracted `entry` arguments with the page title using conservative normalization; mismatches are treated as manual-review cases as well.
 
 Candidate detection for review/debug flows is intentionally separate from query generation. Search terms help find candidate pages, while `[candidate]` terms decide whether a specific source line looks like the target bibliography.
 

@@ -617,6 +617,23 @@ def test_replace_belen18_1_template_citation_with_plain_tom_param(repo_root):
     assert result.page_arguments == ["344"]
 
 
+def test_replace_belen18_1_template_citation_with_dotted_volume_title(repo_root):
+    spec = load_source_spec("belen18-1", root=repo_root)
+    text = (
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т. 18. Кн. 1.: Дадатак: "
+        "Шчытнікі — ЯЯ|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=2004|том=18|старонкі=148|старонак=472|"
+        "isbn=985-11-0295-4 (Т. 18. Кн. 1.)|тыраж=10&nbsp;000}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "{{Крыніцы/БелЭн|18-1|||148}}"
+    assert result.entry_arguments == []
+    assert result.page_arguments == ["148"]
+
+
 def test_line_exact_rule_takes_precedence_over_review_required_belen_regex(repo_root):
     spec = load_source_spec("belen1", root=repo_root)
     body = (

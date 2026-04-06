@@ -70,7 +70,7 @@ normalizer = "whitespace"
 [macros]
 TITLE = "(?:Беларуская{{WS}}энцыклапедыя|БелЭн)"
 SERIES = '{{TITLE}}:{{OPT_WS}}У{{WS}}18{{WS}}т\.'
-VOLUME = 'Т\.{{OPT_WS}}18(?:\.|{{WS}})?Кн\.{{OPT_WS}}1:{{WS}}Дадатак:{{WS}}Шчытнікі{{WS}}{{DASH}}{{WS}}Яя'
+VOLUME = 'Т\.{{OPT_WS}}18\.?{{OPT_WS}}Кн\.{{OPT_WS}}1\.?{{OPT_WS}}:{{WS}}Дадатак:{{WS}}Шчытнікі{{WS}}{{DASH}}{{WS}}Яя'
 SOURCE_ISBN = '985-11-0295-4'
 TOM_PARAM = '18(?:{{OPT_WS}}(?:\.|{{WS}}){{OPT_WS}}Кн\.{{OPT_WS}}1)?'
 EDITOR = 'Рэдкал\.:{{OPT_WS}}Г\.{{OPT_WS}}П\.{{OPT_WS}}Пашкоў{{WS}}і{{WS}}інш\.?'

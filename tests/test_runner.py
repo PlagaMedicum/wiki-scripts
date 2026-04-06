@@ -52,7 +52,9 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             context=3,
             learn_variants=True,
             show_candidates=False,
-        )
+        ),
+        accept_all=False,
+        has_review_required_rules=False,
     )
     assert _needs_interactive_input(
         RunOptions(
@@ -66,7 +68,9 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             context=3,
             learn_variants=False,
             show_candidates=False,
-        )
+        ),
+        accept_all=False,
+        has_review_required_rules=False,
     )
     assert not _needs_interactive_input(
         RunOptions(
@@ -80,7 +84,25 @@ def test_needs_interactive_input_only_when_run_can_prompt():
             context=3,
             learn_variants=False,
             show_candidates=True,
-        )
+        ),
+        accept_all=False,
+        has_review_required_rules=False,
+    )
+    assert _needs_interactive_input(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        accept_all=True,
+        has_review_required_rules=True,
     )
 
 
@@ -229,7 +251,7 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
     monkeypatch.setattr("bewiki_biblio.runner.replace_text", fake_replace_text)
     monkeypatch.setattr("bewiki_biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
 
-    def fake_prompt_page_action(current_summary):
+    def fake_prompt_page_action(current_summary, *, review_required=False):
         prompts.append(current_summary)
         return "a"
 
@@ -258,8 +280,105 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
         ("First page", "Замена {{Крыніцы/Тэст}}", True),
         ("Second page", "Замена {{Крыніцы/Тэст}}", True),
     ]
-    assert "[1/2]" in stream.getvalue()
-    assert "[2/2]" in stream.getvalue()
+
+
+def test_accept_all_still_prompts_review_required_matches(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+    prompts = []
+    saved = []
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self.text = f"content for {title}"
+
+        def save(self, **kwargs):
+            saved.append(self.title_value)
+
+    class FakePywikibot:
+        Page = FakePage
+
+    spec = replace(
+        _spec(tmp_path),
+        template_without_pages="{{Крыніцы/Тэст|{entry}}}",
+        template_with_pages="{{Крыніцы/Тэст|{entry}|{pages}}}",
+    )
+
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_spec", lambda *args, **kwargs: spec)
+    monkeypatch.setattr("bewiki_biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr("bewiki_biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr("bewiki_biblio.runner._load_titles", lambda *args, **kwargs: (2, ["One", "Two"]))
+    monkeypatch.setattr("bewiki_biblio.runner.build_search_query", lambda spec: "query")
+
+    replacements = iter(
+        [
+            ReplacementResult(
+                text="{{Крыніцы/Тэст|Mismatch One}}",
+                replacements=1,
+                used_line_rules=[],
+                used_rule_names=["entry_only"],
+                rendered_templates=["{{Крыніцы/Тэст|Mismatch One}}"],
+                page_arguments=[],
+                entry_arguments=["Mismatch One"],
+                review_reasons=["Heuristic entry match."],
+            ),
+            ReplacementResult(
+                text="{{Крыніцы/Тэст|Mismatch Two}}",
+                replacements=1,
+                used_line_rules=[],
+                used_rule_names=["entry_only"],
+                rendered_templates=["{{Крыніцы/Тэст|Mismatch Two}}"],
+                page_arguments=[],
+                entry_arguments=["Mismatch Two"],
+                review_reasons=["Heuristic entry match."],
+            ),
+        ]
+    )
+    monkeypatch.setattr("bewiki_biblio.runner.replace_text", lambda *args, **kwargs: next(replacements))
+    monkeypatch.setattr("bewiki_biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+
+    def fake_prompt_page_action(current_summary, *, review_required=False):
+        prompts.append(review_required)
+        return "a"
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+    monkeypatch.setattr(ui, "prompt_page_action", fake_prompt_page_action)
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=2,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert prompts == [True, True]
+    assert saved == ["One", "Two"]
+    assert "Processing page 1/2: One" in stream.getvalue()
+    assert "Processing page 2/2: Two" in stream.getvalue()
 
 
 def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypatch, tmp_path):
@@ -307,7 +426,14 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
         ),
     )
     monkeypatch.setattr("bewiki_biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
-    monkeypatch.setattr(ui := AppUI(no_color=True, console=Console(file=io.StringIO(), force_terminal=False, no_color=True, highlight=False)), "prompt_page_action", lambda current_summary: next(actions))
+    monkeypatch.setattr(
+        ui := AppUI(
+            no_color=True,
+            console=Console(file=io.StringIO(), force_terminal=False, no_color=True, highlight=False),
+        ),
+        "prompt_page_action",
+        lambda current_summary, *, review_required=False: next(actions),
+    )
     monkeypatch.setattr(ui, "prompt_summary", lambda current_summary: "Edited summary")
 
     exit_code = run_sources(

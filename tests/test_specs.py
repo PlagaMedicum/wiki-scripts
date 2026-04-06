@@ -49,6 +49,20 @@ def test_load_belen10_spec(repo_root):
     assert {extractor.name for extractor in spec.argument_extractors} == {"author", "responsible"}
 
 
+def test_belen1_entry_only_rules_require_review(repo_root):
+    spec = load_source_spec("belen1", root=repo_root)
+    flagged = {
+        rule.name: rule.review_required
+        for rule in spec.regex_rules
+        if rule.name in {"entry_only", "entry_only_with_pages"}
+    }
+
+    assert flagged == {
+        "entry_only": True,
+        "entry_only_with_pages": True,
+    }
+
+
 def test_build_query_uses_all_search_terms(gvb_spec):
     assert build_search_query(gvb_spec) == (
         'insource:"Гомельская вобласць" '

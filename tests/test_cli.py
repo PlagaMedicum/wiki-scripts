@@ -194,6 +194,7 @@ def test_run_guidance_mentions_interactive_controls():
     ui.print_run_guidance(
         apply=True,
         assume_yes=False,
+        has_review_required_rules=True,
         learn_variants=True,
         show_candidates=True,
     )
@@ -202,6 +203,7 @@ def test_run_guidance_mentions_interactive_controls():
     assert "Interactive guidance" in output
     assert "review_variants.json" in output
     assert "`y` save" in output
+    assert "still stop for confirmation" in output
     assert "candidate lines" in output
     assert "one key directly" in output
 
@@ -307,7 +309,7 @@ def test_prompt_page_action_shows_help_once(monkeypatch):
 
     output = stream.getvalue()
     assert output.count("Save controls") == 1
-    assert "Save this page and all remaining matched pages." in output
+    assert "Save this page and all remaining non-review-required pages." in output
     assert "Current edit summary: Summary 1" in output
     assert "Current edit summary: Summary 2" in output
     assert labels == [

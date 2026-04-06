@@ -124,10 +124,14 @@ def apply_regex_rules(
             continue
 
         def replace(match: re.Match[str]) -> str:
+            match_text = match.group(0)
             groups = {key: (value or "") for key, value in match.groupdict().items()}
-            pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else None
-            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else None
-            template_arguments: dict[str, str] = {}
+            extracted_pages = extract_pages_arg(match_text, spec)
+            extracted_entry = extract_entry_arg(match_text, spec)
+            extracted_arguments = extract_template_arguments(match_text, spec)
+            pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else extracted_pages
+            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else extracted_entry
+            template_arguments: dict[str, str] = dict(extracted_arguments)
             for key, value in groups.items():
                 if key in {"pages", "entry", "prefix"} or not value:
                     continue
@@ -216,10 +220,14 @@ def apply_normalized_unit_regex_rules(
             if not match:
                 continue
 
+            unit_text = unit.body
             groups = {key: (value or "") for key, value in match.groupdict().items()}
-            pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else None
-            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else None
-            template_arguments: dict[str, str] = {}
+            extracted_pages = extract_pages_arg(unit_text, spec)
+            extracted_entry = extract_entry_arg(unit_text, spec)
+            extracted_arguments = extract_template_arguments(unit_text, spec)
+            pages = normalize_pages_arg(groups["pages"]) if groups.get("pages") else extracted_pages
+            entry = normalize_entry_arg(groups["entry"]) if groups.get("entry") else extracted_entry
+            template_arguments: dict[str, str] = dict(extracted_arguments)
             for key, value in groups.items():
                 if key in {"pages", "entry", "prefix"} or not value:
                     continue

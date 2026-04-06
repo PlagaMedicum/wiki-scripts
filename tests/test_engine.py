@@ -528,6 +528,27 @@ def test_replace_belen10_bibliography_line_with_author_and_responsible(repo_root
     }
 
 
+def test_replace_belen10_template_citation_with_explicit_params(repo_root):
+    spec = load_source_spec("belen10", root=repo_root)
+    text = (
+        "{{кніга|частка=Маркава|аўтар=Шаблюк В. У.|частка адказны=В. У. Шаблюк|"
+        "загаловак=Беларуская энцыклапедыя: У 18 т. Т. 10: Малайзія — Мугаджары|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2000|"
+        "том=10|старонкі=114|старонак=544|isbn=985-11-0169-9}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.|114|В. У. Шаблюк}}"
+    assert result.entry_arguments == ["Маркава"]
+    assert result.page_arguments == ["114"]
+    assert result.extra_argument_values == {
+        "author": ["Шаблюк В. У."],
+        "responsible": ["В. У. Шаблюк"],
+    }
+
+
 def test_replace_belen1_wikilinked_entry_only_line(repo_root):
     spec = load_source_spec("belen1", root=repo_root)
     text = (
@@ -544,6 +565,22 @@ def test_replace_belen1_wikilinked_entry_only_line(repo_root):
     assert result.text == "{{Крыніцы/БелЭн|1|Агол Іосіф (Ізраіль) Іосіфавіч}}"
     assert result.entry_arguments == ["Агол Іосіф (Ізраіль) Іосіфавіч"]
     assert result.extra_argument_values == {}
+
+
+def test_replace_belen11_template_citation_with_pages_only(repo_root):
+    spec = load_source_spec("belen11", root=repo_root)
+    text = (
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.11: Мугір — Паліклініка|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2000|"
+        "том=11|старонкі=374|старонак=560|isbn=985-11-0188-5 (Т.&nbsp;11)|тыраж=10&nbsp;000}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "{{Крыніцы/БелЭн|11|||374}}"
+    assert result.entry_arguments == []
+    assert result.page_arguments == ["374"]
 
 
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):

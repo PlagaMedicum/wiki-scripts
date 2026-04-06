@@ -1,0 +1,64 @@
+[source]
+id = "gvb19"
+name = "Т. 10: Віцебская вобласць, кн. 4"
+site_lang = "be"
+family = "wikipedia"
+
+[search]
+insource_terms = [
+  "Віцебская вобласць",
+]
+isbns = [
+  "978-985-11-1252-0",
+]
+keywords = []
+
+[candidate]
+must_contain_all = [
+  "Віцебская вобласць",
+]
+must_contain_any = [
+  "Т. 10: Віцебская вобласць, кн. 4",
+  "978-985-11-1252-0",
+]
+
+[replacement]
+template_name = "Крыніцы/ГВБ"
+without_pages = "{{Крыніцы/ГВБ|10-4|{entry}}}"
+with_pages = "{{Крыніцы/ГВБ|10-4|{entry}|{pages}}}"
+
+[summary]
+default_format = "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}"
+
+[pages]
+patterns = [
+  "\\b(?:с|стар)\\.{{OPT_WS}}(?P<pages>{{PAGES}})",
+  "\\|{{OPT_WS}}(?:старонкі|pages?|pp?){{OPT_WS}}={{OPT_WS}}(?P<pages>{{PAGES}})(?={{OPT_WS}}(?:\\||\\}\\}))",
+]
+reject_patterns = [
+  "^\\s*:\\s*іл",
+]
+
+[normalization]
+strip_nowiki = true
+resolve_wikilinks = true
+strip_formatting = true
+normalize_nbsp = true
+normalize_dashes = true
+collapse_whitespace = true
+
+[[normalization.alias_replacements]]
+pattern = '\b(?:БелЭн\.?|Беларуская\s+энцыклапедыя(?:\s+імя\s+Петруся\s+Броўкі)?|Беларус\.\s*Энцыкл\.\s*(?:імя\s*П\.\s*Броўкі)?)\b'
+replacement = "БелЭн"
+flags = "IGNORECASE|UNICODE"
+
+[macros]
+# Add bibliography-specific fragments here, e.g. TITLE = "..."
+
+# Example broad regex rule skeleton:
+# [[regex_rules]]
+# name = "example_rule"
+# pattern = "(?m)^(?P<prefix>{{LIST_PREFIX}})...$"
+# replacement = "{prefix}{template}"
+# flags = "VERBOSE|UNICODE|MULTILINE"
+# enabled = true

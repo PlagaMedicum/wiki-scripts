@@ -1,0 +1,64 @@
+[source]
+id = "gvb14"
+name = "Т. 9: Гродзенская вобласць, кн. 2"
+site_lang = "be"
+family = "wikipedia"
+
+[search]
+insource_terms = [
+  "Гродзенская вобласць",
+]
+isbns = [
+  "978-985-11-0908-7",
+]
+keywords = []
+
+[candidate]
+must_contain_all = [
+  "Гродзенская вобласць",
+]
+must_contain_any = [
+  "Т. 9: Гродзенская вобласць, кн. 2",
+  "978-985-11-0908-7",
+]
+
+[replacement]
+template_name = "Крыніцы/ГВБ"
+without_pages = "{{Крыніцы/ГВБ|9-2|{entry}}}"
+with_pages = "{{Крыніцы/ГВБ|9-2|{entry}|{pages}}}"
+
+[summary]
+default_format = "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}"
+
+[pages]
+patterns = [
+  "\\b(?:с|стар)\\.{{OPT_WS}}(?P<pages>{{PAGES}})",
+  "\\|{{OPT_WS}}(?:старонкі|pages?|pp?){{OPT_WS}}={{OPT_WS}}(?P<pages>{{PAGES}})(?={{OPT_WS}}(?:\\||\\}\\}))",
+]
+reject_patterns = [
+  "^\\s*:\\s*іл",
+]
+
+[normalization]
+strip_nowiki = true
+resolve_wikilinks = true
+strip_formatting = true
+normalize_nbsp = true
+normalize_dashes = true
+collapse_whitespace = true
+
+[[normalization.alias_replacements]]
+pattern = '\b(?:БелЭн\.?|Беларуская\s+энцыклапедыя(?:\s+імя\s+Петруся\s+Броўкі)?|Беларус\.\s*Энцыкл\.\s*(?:імя\s*П\.\s*Броўкі)?)\b'
+replacement = "БелЭн"
+flags = "IGNORECASE|UNICODE"
+
+[macros]
+# Add bibliography-specific fragments here, e.g. TITLE = "..."
+
+# Example broad regex rule skeleton:
+# [[regex_rules]]
+# name = "example_rule"
+# pattern = "(?m)^(?P<prefix>{{LIST_PREFIX}})...$"
+# replacement = "{prefix}{template}"
+# flags = "VERBOSE|UNICODE|MULTILINE"
+# enabled = true

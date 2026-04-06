@@ -1,0 +1,110 @@
+[source]
+id = "belen17"
+name = "Т. 17: Хвінявічы — Шчытні"
+site_lang = "be"
+family = "wikipedia"
+
+[search]
+insource_terms = [
+  "Беларуская энцыклапедыя",
+  "Т. 17: Хвінявічы — Шчытні",
+]
+isbns = [
+  "985-11-0279-2",
+]
+keywords = []
+
+[candidate]
+must_contain_all = [
+  "Беларуская энцыклапедыя",
+  "Т. 17: Хвінявічы — Шчытні",
+]
+must_contain_any = []
+
+[replacement]
+template_name = "Крыніцы/БелЭн"
+without_pages = "{{Крыніцы/БелЭн|17|{entry}|{author}||{responsible}}}"
+with_pages = "{{Крыніцы/БелЭн|17|{entry}|{author}|{pages}|{responsible}}}"
+
+[summary]
+default_format = "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}"
+
+[pages]
+patterns = [
+  '\b(?:с|стар)\.{{OPT_WS}}(?P<pages>{{PAGES}})',
+  '\|{{OPT_WS}}(?:старонкі|pages?|pp?){{OPT_WS}}={{OPT_WS}}(?P<pages>{{PAGES}})(?={{OPT_WS}}(?:\||\}\}))',
+]
+reject_patterns = [
+  '^\s*:\s*іл',
+]
+
+[normalization]
+strip_nowiki = true
+resolve_wikilinks = true
+strip_formatting = true
+normalize_nbsp = true
+normalize_dashes = true
+collapse_whitespace = true
+
+[[normalization.alias_replacements]]
+pattern = '\b(?:БелЭн\.?|Беларуская\s+энцыклапедыя)\b'
+replacement = "БелЭн"
+flags = "IGNORECASE|UNICODE"
+
+[argument_extractors.author]
+template_params = ["аўтар", "author", "частка аўтар"]
+normalizer = "whitespace"
+
+[argument_extractors.responsible]
+template_params = ["частка адказны", "адказны частка", "chapter responsible", "part responsible"]
+normalizer = "whitespace"
+
+[macros]
+TITLE = "Беларуская{{WS}}энцыклапедыя"
+SERIES = '{{TITLE}}:{{OPT_WS}}У{{WS}}18{{WS}}т\.'
+VOLUME = 'Т\.{{OPT_WS}}17:{{WS}}Хвінявічы{{WS}}{{DASH}}{{WS}}Шчытні'
+EDITOR = 'Рэдкал\.:{{OPT_WS}}Г\.{{OPT_WS}}П\.{{OPT_WS}}Пашкоў{{WS}}і{{WS}}інш\.?'
+ARTICLE_AUTHOR = '[А-ЯЁІЎA-Z][^/\n]*?(?:{{WS}}[А-ЯЁІЎA-Z]\.){1,3}'
+ARTICLE_RESPONSIBLE = '(?:[А-ЯЁІЎA-Z]\.{{OPT_WS}}){1,3}[А-ЯЁІЎA-Z][^/\n]+?'
+
+[[regex_rules]]
+name = "article_author_entry_responsible_with_pages"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})(?P<author>{{ARTICLE_AUTHOR}}){{WS}}(?P<entry>[^/\n]+?){{OPT_WS}}/{{OPT_WS}}(?P<responsible>{{ARTICLE_RESPONSIBLE}}){{OPT_WS}}//{{OPT_WS}}{{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*?\b(?:С|с)\.{{OPT_WS}}(?P<pages>{{PAGES}}).*$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE|MULTILINE"
+enabled = true
+
+[[regex_rules]]
+name = "article_author_entry_responsible"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})(?P<author>{{ARTICLE_AUTHOR}}){{WS}}(?P<entry>[^/\n]+?){{OPT_WS}}/{{OPT_WS}}(?P<responsible>{{ARTICLE_RESPONSIBLE}}){{OPT_WS}}//{{OPT_WS}}{{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE|MULTILINE"
+enabled = true
+
+[[regex_rules]]
+name = "entry_only_with_pages"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})(?P<entry>[^/\n]+?){{OPT_WS}}//{{OPT_WS}}{{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*?\b(?:С|с)\.{{OPT_WS}}(?P<pages>{{PAGES}}).*$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE|MULTILINE"
+enabled = true
+
+[[regex_rules]]
+name = "entry_only"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})(?P<entry>[^/\n]+?){{OPT_WS}}//{{OPT_WS}}{{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE|MULTILINE"
+enabled = true
+
+[[regex_rules]]
+name = "full_line_bibliography_with_pages"
+pattern = '^(?P<prefix>{{LIST_PREFIX}}){{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*?\b(?:С|с)\.{{OPT_WS}}(?P<pages>{{PAGES}}).*$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE|MULTILINE"
+enabled = true
+
+[[regex_rules]]
+name = "full_line_bibliography"
+pattern = '^(?P<prefix>{{LIST_PREFIX}}){{SERIES}}{{WS}}{{VOLUME}}{{OPT_WS}}/{{OPT_WS}}{{EDITOR}}.*$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE|MULTILINE"
+enabled = true

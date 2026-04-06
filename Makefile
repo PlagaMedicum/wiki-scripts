@@ -12,6 +12,7 @@ help:
 		'  make validate [ARGS="--no-color"]' \
 		'  make add-source' \
 		'  make run SOURCE="<source_id> [more_source_ids] | --all" [ARGS="--limit 10 --no-color"]' \
+		'  make run SOURCE="--all" ARGS="--apply --yes --skip-review-required --limit 500"' \
 		'  make lint' \
 		'  make format' \
 		'  make check' \

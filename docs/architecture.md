@@ -49,9 +49,10 @@ tests/
 6. Pywikibot logs into be.wiki using `.env` credentials and a runtime-generated `.pywikibot/` config directory.
 7. The runner searches matching pages, loads page text, and passes it through the shared replacement engine.
 8. The Rich UI shows colored diffs, replacement metadata, progress, and interactive prompts.
-9. When `--learn-variants` is enabled, unknown candidates can be added to review or ignore state.
+9. When `--learn-variants` is enabled, unknown candidates and manual-review heuristic matches can be added to review or ignore state.
 10. Promoted line-exact rules are persisted back into the local `rules.json` runtime file after successful saves.
 11. Heuristic matches can still pause for confirmation if a rule is marked review-required or if an extracted entry does not match the page title closely enough.
+12. `--skip-review-required` lets unattended apply runs save only safe matches and leave review-required pages untouched for a later pass.
 
 ## Config And State Separation
 
@@ -104,10 +105,11 @@ Additional template arguments are also source-driven. A source can declare `[arg
 
 ## Replacement Flow
 
-The engine applies two layers in order:
+The engine applies three layers in order:
 
-1. declarative regex rules from `source.toml`
-2. line-exact rules derived from `rules.json` plus promoted `review_variants.json`
+1. line-exact rules derived from `rules.json` plus promoted `review_variants.json`
+2. declarative regex rules from `source.toml`
+3. normalized-unit regex rules against full candidate blocks when raw-text regex matching misses a formatting variant
 
 Regex-rule replacements can use named match groups and the shared `{template}` token. The shared engine renders the correct template form depending on whether a `pages` group was captured.
 If a regex rule captures extra named groups like `author` or `responsible`, those values are passed into the shared template renderer as well.
@@ -120,6 +122,8 @@ Regex rules are macro-aware:
 - macro expansion is recursive, with undefined-macro and cycle detection at load time
 
 Regex rules can also declare `review_required = true` with an optional `review_note`. This is intended for broad but heuristic matches such as "entry before `//`" patterns. Those matches still render automatically in dry-runs, but interactive apply mode will stop for confirmation even after bulk-accept. The runner also compares extracted `entry` arguments with the page title using conservative normalization; mismatches are treated as manual-review cases as well.
+
+When an operator confirms that a review-required match is correct during a dry-run `--learn-variants` pass, the matched normalized line can be stored in `review_variants.json`. On later runs, that learned exact line is applied before heuristic regex rules, so the operator can gradually turn reviewed heuristic matches into unattended exact replacements.
 
 Candidate detection for review/debug flows is intentionally separate from query generation. Search terms help find candidate pages, while `[candidate]` terms decide whether a specific source line looks like the target bibliography.
 
@@ -135,6 +139,7 @@ Candidate detection for review/debug flows is intentionally separate from query 
   - variant review panels
   - final summary tables
 - `--no-color` keeps the same flow without terminal styling.
+- `--skip-review-required` is the unattended mode for background apply runs. It suppresses prompts for manual-review pages and counts them as skipped instead.
 
 ## Development Tooling
 

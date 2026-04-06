@@ -97,10 +97,22 @@ Apply changes with interactive approval:
 python3 -m bewiki_biblio run gvb1 --apply --learn-variants
 ```
 
+Review both unknown candidates and heuristic manual-review matches without saving:
+
+```bash
+python3 -m bewiki_biblio run belen1 --learn-variants --limit 50
+```
+
 Apply all matches without per-page confirmation:
 
 ```bash
 python3 -m bewiki_biblio run gvb1 --apply --yes
+```
+
+Apply only already-verified matches in the background and skip pages that still need manual review:
+
+```bash
+python3 -m bewiki_biblio run --all --apply --yes --skip-review-required --limit 500
 ```
 
 Override the default edit summary:
@@ -128,8 +140,10 @@ python3 -m bewiki_biblio run gvb1 --no-color
 - `--apply` without `--yes` keeps the per-page review loop.
 - `--all` runs every configured source in discovery order.
 - `--minor-threshold` controls when saved edits are marked minor, based on changed UTF-8 bytes.
+- `--skip-review-required` skips manual-review matches during apply instead of prompting for them.
 - when you run multiple sources, they are processed in the order you entered them
 - in a multi-source `--apply` run, pressing `a` saves all remaining matched pages across the rest of the entered sources, but only for matches that do not require manual review
+- in a dry-run `--learn-variants` run, both unknown candidates and review-required heuristic matches can be sent to `review_variants.json` for later exact replacement
 - During interactive apply runs:
   - `y` saves the current page
   - `n` skips the current page
@@ -139,6 +153,7 @@ python3 -m bewiki_biblio run gvb1 --no-color
 - Heuristic regex rules can mark a match as review-required in `source.toml`.
 - Entry-based replacements also compare the extracted entry with the page title.
 - If the entry and page title do not match exactly after conservative whitespace/dash normalization, the page is paused for manual review even after `a` or `--yes`.
+- If you learn a review-required match into `review_variants.json`, that exact line is applied before heuristic regex rules on the next run.
 
 ## Adding a New Source
 

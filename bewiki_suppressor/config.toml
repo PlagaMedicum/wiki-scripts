@@ -1,0 +1,61 @@
+[wiki]
+api_url = "https://be.wikipedia.org/w/api.php"
+stream_url = "https://stream.wikimedia.org/v2/stream/recentchange"
+wiki_code = "bewiki"
+server_name = "be.wikipedia.org"
+user_agent = "bewiki-revdel-daemon/1.0 (contact on-wiki)"
+
+[auth]
+username_env = "BEWIKI_BOT_USERNAME"
+password_env = "BEWIKI_BOT_PASSWORD"
+
+[suppression_list]
+title = "Удзельнік:Wizardist/SuppressionList"
+cache_file = "./state/suppression_list_cache.json"
+metadata_recheck_seconds = 600
+
+[matching]
+drop_canary = true
+exact_title_match = true
+
+[revdel]
+hide = ["user", "comment"]
+suppress = false
+reason = "Emergency public RevDel on sensitive-list page; hide username and comment pending oversight resolution"
+
+[queue]
+capacity = 100
+
+[state]
+dir = "./state"
+last_event_id_file = "./state/last_event_id.txt"
+processed_revids_file = "./state/processed_revids.json"
+nightly_sweep_progress_file = "./state/nightly_sweep_progress.json"
+runtime_status_file = "./state/runtime_status.json"
+pid_file = "./state/daemon.pid"
+
+[retry]
+stream_backoff_initial_ms = 1000
+stream_backoff_max_ms = 30000
+api_max_retries = 3
+since_recovery_seconds = 60
+
+[nightly_sweep]
+enabled = true
+timezone = "Europe/Minsk"
+start_time = "02:00"
+page_concurrency = 2
+batch_sleep_ms = 250
+
+[current_day_recheck]
+enabled = true
+min_delay_seconds = 3600
+max_delay_seconds = 21600
+
+[logging]
+level = "info"
+format = "json"
+
+[metrics]
+enabled = true
+bind = "127.0.0.1:9808"

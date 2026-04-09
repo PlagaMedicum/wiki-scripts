@@ -13,9 +13,9 @@ apicache/
 throttle.ctrl
 *.pyc
 .coverage
-bewiki_suppressor/.env
-bewiki_suppressor/state/
-bewiki_suppressor/target/
-bewiki_biblio/sources/*/rules.json
-bewiki_biblio/sources/*/review_variants.json
-bewiki_biblio/sources/*/ignored_variants.json
+suppressor/.env
+suppressor/state/
+suppressor/target/
+biblio/sources/*/rules.json
+biblio/sources/*/review_variants.json
+biblio/sources/*/ignored_variants.json

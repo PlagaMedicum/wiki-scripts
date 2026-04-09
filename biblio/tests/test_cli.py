@@ -7,10 +7,15 @@ from rich.console import Console
 
 from biblio.cli import main
 from biblio.models import ReplacementResult, RunStats
+from biblio.specs import discover_source_specs
 from biblio.ui import AppUI, ChecklistOption
 
 
-def test_list_command_no_color(capsys):
+def test_list_command_no_color(capsys, monkeypatch, repo_root):
+    monkeypatch.setattr(
+        "biblio.runner.discover_source_specs",
+        lambda: discover_source_specs(root=repo_root),
+    )
     exit_code = main(["list", "--no-color"])
     output = capsys.readouterr().out
 

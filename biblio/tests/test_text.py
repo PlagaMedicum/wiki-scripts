@@ -291,8 +291,8 @@ def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
     ]
 
 
-def test_fixture_variants_normalize_without_markup(gvb_spec, repo_root):
-    fixture_path = repo_root / "tests" / "fixtures" / "gvb_exact_variants.json"
+def test_fixture_variants_normalize_without_markup(gvb_spec, project_root):
+    fixture_path = project_root / "tests" / "fixtures" / "gvb_exact_variants.json"
     variants = json.loads(fixture_path.read_text(encoding="utf-8"))
     normalized = [normalize_biblio_wikitext(item, gvb_spec) for item in variants]
     assert any("БелЭн" in item for item in normalized)

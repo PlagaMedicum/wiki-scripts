@@ -16,6 +16,4 @@ throttle.ctrl
 suppressor/.env
 suppressor/state/
 suppressor/target/
-biblio/sources/*/rules.json
-biblio/sources/*/review_variants.json
-biblio/sources/*/ignored_variants.json
+biblio/sources/

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from biblio.bootstrap import create_site
+from biblio.bootstrap import BotRightRequiredError, create_site
 from biblio.engine import (
     debug_candidate_lines,
     extract_unknown_variant_infos,
@@ -211,14 +211,17 @@ def _run_single_source(
         ignored_variants=len(state.ignored_hashes),
     )
 
-    title_iter = titles if interactive_run else ui.track_titles(
-        titles,
-        description="Processing pages",
+    title_iter = (
+        titles
+        if interactive_run
+        else ui.track_titles(
+            titles,
+            description="Processing pages",
+        )
     )
 
     for index, title in enumerate(title_iter, start=1):
-        if interactive_run:
-            ui.print_processing_page(index=index, total=len(titles), title=title)
+        ui.print_processing_page(index=index, total=len(titles), title=title)
         page = client.page(title)
         stats.processed += 1
         analysis = analyze_page(
@@ -273,19 +276,24 @@ def run_sources(
         load_titles_func=resolved_deps.load_titles,
     )
     overall = RunStats()
-
     for index, source_id in enumerate(options.source_ids, start=1):
         spec = resolved_deps.load_source_spec(source_id, root=actual_root)
-        stats = _run_single_source(
-            spec,
-            options,
-            ui,
-            policy=policy,
-            site_clients=site_clients,
-            source_index=index,
-            source_total=len(options.source_ids),
-            deps=resolved_deps,
-        )
+        try:
+            stats = _run_single_source(
+                spec,
+                options,
+                ui,
+                policy=policy,
+                site_clients=site_clients,
+                source_index=index,
+                source_total=len(options.source_ids),
+                deps=resolved_deps,
+            )
+        except BotRightRequiredError as exc:
+            ui.error(f"{source_id}: {exc}")
+            overall.errors += 1
+            ui.print_final_summary(overall)
+            return 1
         overall.processed += stats.processed
         overall.matched += stats.matched
         overall.saved += stats.saved

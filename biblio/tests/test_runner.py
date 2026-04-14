@@ -3,8 +3,7 @@ from __future__ import annotations
 import io
 from dataclasses import replace
 
-from rich.console import Console
-
+from biblio.bootstrap import BotRightRequiredError
 from biblio.models import (
     CandidateSpec,
     NormalizationOptions,
@@ -12,8 +11,15 @@ from biblio.models import (
     RunOptions,
     SourceSpec,
 )
-from biblio.runner import _changed_bytes, _is_minor_edit, _needs_interactive_input, run_source, run_sources
+from biblio.runner import (
+    _changed_bytes,
+    _is_minor_edit,
+    _needs_interactive_input,
+    run_source,
+    run_sources,
+)
 from biblio.ui import AppUI
+from rich.console import Console
 
 
 def _spec(tmp_path) -> SourceSpec:
@@ -270,7 +276,9 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
 
     monkeypatch.setattr("biblio.runner.load_source_spec", fake_load_source_spec)
     monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
-    monkeypatch.setattr("biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
     monkeypatch.setattr("biblio.runner._load_titles", fake_load_titles)
     monkeypatch.setattr("biblio.runner.build_search_query", fake_build_search_query)
     monkeypatch.setattr("biblio.runner.replace_text", fake_replace_text)
@@ -308,6 +316,98 @@ def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_p
     ]
 
 
+def test_run_sources_reports_missing_bot_right_cleanly(monkeypatch, tmp_path):
+    spec = _spec(tmp_path)
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    def raise_bot_right_required(*args, **kwargs):
+        raise BotRightRequiredError(
+            "Authenticated account 'User Bot' lacks the local wiki `bot` right in this API "
+            "session; biblio saves request bot=True for every edit. For BotPasswords, grant "
+            "High-volume (bot) access."
+        )
+
+    monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: spec)
+    monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr("biblio.runner.create_site", raise_bot_right_required)
+
+    exit_code = run_sources(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            skip_review_required=True,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 1
+    output = stream.getvalue()
+    assert "demo: Authenticated account 'User Bot' lacks the local wiki `bot` right" in output
+    assert "High-volume (bot) access" in output
+
+
+def test_run_sources_stops_after_first_bot_right_failure(monkeypatch, tmp_path):
+    spec = _spec(tmp_path)
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+    seen = []
+
+    def fake_load_source_spec(source_id, root=None):
+        seen.append(source_id)
+        return replace(spec, source_id=source_id, name=source_id)
+
+    def raise_bot_right_required(*args, **kwargs):
+        raise BotRightRequiredError(
+            "Authenticated account 'User Bot' lacks the local wiki `bot` right in this API "
+            "session; biblio saves request bot=True for every edit. For BotPasswords, grant "
+            "High-volume (bot) access."
+        )
+
+    monkeypatch.setattr("biblio.runner.load_source_spec", fake_load_source_spec)
+    monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr("biblio.runner.create_site", raise_bot_right_required)
+
+    exit_code = run_sources(
+        RunOptions(
+            source_ids=("first", "second"),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            skip_review_required=True,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 1
+    assert seen == ["first"]
+    output = stream.getvalue()
+    assert "first: Authenticated account 'User Bot' lacks the local wiki `bot` right" in output
+    assert "second:" not in output
+
+
 def test_multi_source_run_reuses_site_bundle_for_same_wiki(monkeypatch, tmp_path):
     class FakeState:
         base_rules = []
@@ -341,7 +441,9 @@ def test_multi_source_run_reuses_site_bundle_for_same_wiki(monkeypatch, tmp_path
     monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
     monkeypatch.setattr("biblio.runner.create_site", fake_create_site)
     monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (1, ["Page"]))
-    monkeypatch.setattr("biblio.runner.build_search_query", lambda spec: f"query for {spec.source_id}")
+    monkeypatch.setattr(
+        "biblio.runner.build_search_query", lambda spec: f"query for {spec.source_id}"
+    )
     monkeypatch.setattr(
         "biblio.runner.replace_text",
         lambda *args, **kwargs: ReplacementResult(
@@ -414,7 +516,9 @@ def test_accept_all_still_prompts_review_required_matches(monkeypatch, tmp_path)
 
     monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: spec)
     monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
-    monkeypatch.setattr("biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
     monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (2, ["One", "Two"]))
     monkeypatch.setattr("biblio.runner.build_search_query", lambda spec: "query")
 
@@ -511,7 +615,9 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
 
     monkeypatch.setattr("biblio.runner.load_source_spec", fake_load_source_spec)
     monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
-    monkeypatch.setattr("biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
     monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (1, ["Page"]))
     monkeypatch.setattr(
         "biblio.runner.replace_text",
@@ -529,7 +635,9 @@ def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypa
     monkeypatch.setattr(
         ui := AppUI(
             no_color=True,
-            console=Console(file=io.StringIO(), force_terminal=False, no_color=True, highlight=False),
+            console=Console(
+                file=io.StringIO(), force_terminal=False, no_color=True, highlight=False
+            ),
         ),
         "prompt_page_action",
         lambda current_summary, *, review_required=False: next(actions),
@@ -678,7 +786,9 @@ def test_skip_review_required_avoids_prompt_and_save(monkeypatch, tmp_path):
 
     monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
     monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
-    monkeypatch.setattr("biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
     monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (1, ["One"]))
     monkeypatch.setattr(
         "biblio.runner.replace_text",
@@ -762,14 +872,22 @@ def test_learned_exact_rule_no_longer_requires_title_review(monkeypatch, tmp_pat
 
     monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
     monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
-    monkeypatch.setattr("biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite()))
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
     monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (1, ["Page Title"]))
     monkeypatch.setattr(
         "biblio.runner.replace_text",
         lambda *args, **kwargs: ReplacementResult(
             text="{{Крыніцы/Тэст|Mismatch One}}",
             replacements=1,
-            used_line_rules=[{"kind": "line_exact", "match": "demo", "replacement": "{{Крыніцы/Тэст|Mismatch One}}"}],
+            used_line_rules=[
+                {
+                    "kind": "line_exact",
+                    "match": "demo",
+                    "replacement": "{{Крыніцы/Тэст|Mismatch One}}",
+                }
+            ],
             used_rule_names=["line_exact"],
             rendered_templates=["{{Крыніцы/Тэст|Mismatch One}}"],
             page_arguments=[],

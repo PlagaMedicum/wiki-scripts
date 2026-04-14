@@ -11,6 +11,10 @@ from dotenv import load_dotenv
 from biblio.models import SourceSpec
 
 
+class BotRightRequiredError(RuntimeError):
+    """Raised when the authenticated MediaWiki session cannot mark edits as bot edits."""
+
+
 def normalize_bot_username(username: str) -> str:
     username = re.sub(r"[_ ]+", " ", username).strip()
     return username[:1].upper() + username[1:]
@@ -81,9 +85,40 @@ def import_fresh_pywikibot():
     return importlib.import_module("pywikibot")
 
 
+def site_has_bot_right(site) -> bool:
+    has_right = getattr(site, "has_right", None)
+    if callable(has_right):
+        try:
+            return bool(has_right("bot"))
+        except Exception:
+            pass
+
+    userinfo = getattr(site, "userinfo", None)
+    if callable(userinfo):
+        try:
+            userinfo = userinfo()
+        except Exception:
+            return False
+    if isinstance(userinfo, dict):
+        rights = userinfo.get("rights", ())
+        return any(right == "bot" for right in rights)
+    return False
+
+
+def require_bot_right(site, username: str) -> None:
+    if site_has_bot_right(site):
+        return
+    raise BotRightRequiredError(
+        "Authenticated account "
+        f"{username!r} lacks the local wiki `bot` right in this API session; biblio saves "
+        "request bot=True for every edit. For BotPasswords, grant High-volume (bot) access."
+    )
+
+
 def create_site(spec: SourceSpec, pywikibot_dir: Path):
     username = bootstrap_pywikibot_from_env(spec, pywikibot_dir)
     pywikibot = import_fresh_pywikibot()
     site = pywikibot.Site(spec.site_lang, spec.family, user=username)
     site.login()
+    require_bot_right(site, username)
     return pywikibot, site

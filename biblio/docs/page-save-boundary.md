@@ -18,7 +18,7 @@ the boundary:
 
 - build a page-edit request from policy and analysis
 - apply the edit through one explicit wiki I/O helper
-- keep the summary/minor/bot flags in one transport shape
+- keep the summary/minor/bot flags in one transport shape, with `bot=True` enforced for every save
 - leave review and accept-all state in `session.py`
 
 ## Why This Matters

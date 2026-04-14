@@ -48,6 +48,7 @@ biblio/
     architecture-review.md
   Makefile
   pyproject.toml
+  uv.lock
   .env
   biblio/
     bootstrap.py
@@ -112,7 +113,7 @@ biblio/
    runtime wiki client transport, persists line-exact promotions, and updates save/error counters.
 12. The session policy layer decides whether matched pages can be auto-saved, whether to prompt,
    whether to carry summary overrides forward, and whether the run should stop.
-13. The Rich UI shows colored diffs, replacement metadata, progress, and interactive prompts.
+13. The Rich UI shows startup screens, colored diffs, replacement metadata, and interactive prompts.
 14. When `--learn-variants` is enabled, unknown candidates and manual-review heuristic matches can
    be added to review or ignore state.
 15. Promoted line-exact rules are persisted back into the local `rules.json` runtime file after
@@ -156,6 +157,26 @@ Machine-managed, local to the operator, and gitignored:
 
 Runtime JSON is loaded through explicit typed helpers, written atomically, and rejected with a
 clear error when malformed instead of silently resetting to empty state.
+
+## Dependency Management
+
+Packaging and dependency tracking are split by responsibility:
+
+- `pyproject.toml` is the reviewed source of truth for direct runtime dependencies and dev groups
+- `setuptools` remains the build backend for the distributable package
+- `uv.lock` is the committed, machine-generated lockfile for reproducible installs and CI
+- `pip-audit` lives in the dev dependency group and is used to scan the locked environment for
+  known vulnerabilities
+
+The runtime dependency surface is intentionally small:
+
+- `pywikibot`: Wikimedia-maintained automation framework and API/session wrapper
+- `python-dotenv`: local `.env` loading only
+- `rich`: terminal rendering and interactive CLI presentation
+
+New runtime libraries should be added only when they solve a concrete problem better than the
+standard library or the existing stack, and they should come with a lockfile update plus an audit
+pass.
 
 ## Normalization And Page Extraction
 
@@ -232,7 +253,6 @@ looks like the target bibliography.
 - Rich is used for:
   - startup panels
   - source and flag checklist screens
-  - progress tracking
   - colored unified diffs
   - variant review panels
   - final summary tables
@@ -242,14 +262,22 @@ looks like the target bibliography.
 
 ## Development Tooling
 
+- `uv sync --dev` materializes the locked local environment from `uv.lock`.
+- `uv lock` is the only command that should intentionally rewrite dependency resolution.
+- Makefile targets run through `uv run --locked` so day-to-day commands do not mutate dependency
+  state.
+- The Makefile also routes `uv` and `pip-audit` caches into project-local ignored directories, so
+  packaging workflows stay self-contained.
 - Ruff is the standard Python linter and formatter for this project.
 - `make run` is the canonical human entry point and opens the interactive wizard when no source is
   supplied.
 - `make list`, `make validate`, and `make add-source` cover the source-management workflow.
 - `make test` runs the test suite.
 - `make lint` runs `ruff check .` and `ruff format --check .`.
+- `make audit` runs `pip-audit` against the locked environment.
 - `make format` applies safe Ruff fixes and formatting to the Python tree.
-- `make check` runs tests and linting before a commit.
+- `make check` syncs the environment, then runs tests, linting, and dependency auditing before a
+  commit.
 - The repo-wide `.gitignore` excludes Ruff cache, packaging artifacts, coverage output, local
   virtual environments, and per-source runtime JSON state.
 

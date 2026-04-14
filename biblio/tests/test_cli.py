@@ -3,12 +3,11 @@ from __future__ import annotations
 import io
 
 import pytest
-from rich.console import Console
-
 from biblio.cli import main
 from biblio.models import ReplacementResult, RunStats
 from biblio.specs import discover_source_specs
 from biblio.ui import AppUI, ChecklistOption
+from rich.console import Console
 
 
 def test_list_command_no_color(capsys, monkeypatch, repo_root):
@@ -110,7 +109,9 @@ def test_run_command_accepts_all_sources_flag(monkeypatch):
         captured["options"] = options
         return 0
 
-    monkeypatch.setattr("biblio.cli.discover_source_specs", lambda: [FakeSpec("gvb1"), FakeSpec("gvb2")])
+    monkeypatch.setattr(
+        "biblio.cli.discover_source_specs", lambda: [FakeSpec("gvb1"), FakeSpec("gvb2")]
+    )
     monkeypatch.setattr("biblio.cli.run_sources", fake_run_sources)
 
     exit_code = main(["run", "--all", "--no-color"])
@@ -194,6 +195,40 @@ def test_rich_diff_panel_snapshot(gvb_spec):
     assert "Тэставая старонка" in output
     assert "{{Крыніцы/ГВБ|1-1||213}}" in output
     assert "@@" in output
+
+
+def test_rich_diff_panel_emits_ansi_diff_colors():
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=True,
+        color_system="truecolor",
+        width=100,
+        no_color=False,
+        highlight=False,
+    )
+    ui = AppUI(no_color=False, console=console)
+    result = ReplacementResult(
+        text="new\n{{Крыніцы/ГВБ|1-1||213}}",
+        replacements=1,
+        used_line_rules=[],
+        rendered_templates=["{{Крыніцы/ГВБ|1-1||213}}"],
+        page_arguments=["213"],
+    )
+
+    ui.print_diff_panel(
+        title="Тэставая старонка",
+        result=result,
+        old_text="old",
+        context=1,
+    )
+
+    output = stream.getvalue()
+    assert "\x1b[" in output
+    assert "\x1b[31m-old" in output
+    assert "\x1b[32m+new" in output
+    assert "\x1b[1;36m@@ -1 +1,2 @@" in output
+    assert "\x1b[1;33m213\x1b[0m" in output
 
 
 def test_final_summary_snapshot():
@@ -286,11 +321,14 @@ def test_prompt_choice_uses_single_key_input(monkeypatch):
     monkeypatch.setattr(ui, "_supports_single_key_input", lambda: True)
     monkeypatch.setattr(ui, "_read_single_key", lambda: "r")
 
-    assert ui.prompt_choice(
-        "Choose variant action [r=review, i=ignore, s=skip]",
-        choices=["r", "i", "s"],
-        default="s",
-    ) == "r"
+    assert (
+        ui.prompt_choice(
+            "Choose variant action [r=review, i=ignore, s=skip]",
+            choices=["r", "i", "s"],
+            default="s",
+        )
+        == "r"
+    )
 
     output = stream.getvalue()
     assert "Choose variant action [r=review, i=ignore, s=skip]" in output
@@ -327,6 +365,65 @@ def test_prompt_checklist_supports_select_all_single_key(monkeypatch):
     assert "select all" in output
 
 
+def test_build_checklist_panel_shows_literal_checkbox_markers():
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=100,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+
+    ui.print(
+        ui.build_checklist_panel(
+            "Select sources",
+            [
+                ChecklistOption("gvb1", "gvb1", "First source"),
+                ChecklistOption("gvb2", "gvb2", "Second source"),
+            ],
+            selected={"gvb2"},
+            cursor=1,
+        )
+    )
+
+    output = stream.getvalue()
+    assert "[ ]" in output
+    assert "[x]" in output
+    assert "Window" in output
+
+
+def test_build_checklist_panel_adapts_to_terminal_height():
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=100,
+        height=12,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    options = [ChecklistOption(f"src{i}", f"src{i}", f"Source {i}") for i in range(10)]
+
+    ui.print(
+        ui.build_checklist_panel(
+            "Select sources",
+            options,
+            selected=set(),
+            cursor=8,
+        )
+    )
+
+    output = stream.getvalue()
+    assert "src0" not in output
+    assert "src4" in output
+    assert "src8" in output
+    assert "src9" in output
+    assert "5-10 of 10" in output
+
+
 def test_prompt_choice_falls_back_to_prompt_ask(monkeypatch):
     captured = {}
     ui = AppUI(no_color=True, console=Console(file=io.StringIO(), no_color=True))
@@ -340,11 +437,14 @@ def test_prompt_choice_falls_back_to_prompt_ask(monkeypatch):
 
     monkeypatch.setattr("biblio.ui.Prompt.ask", fake_ask)
 
-    assert ui.prompt_choice(
-        "Choose variant action [r=review, i=ignore, s=skip]",
-        choices=["r", "i", "s"],
-        default="s",
-    ) == "s"
+    assert (
+        ui.prompt_choice(
+            "Choose variant action [r=review, i=ignore, s=skip]",
+            choices=["r", "i", "s"],
+            default="s",
+        )
+        == "s"
+    )
     assert captured["label"] == "Choose variant action [r=review, i=ignore, s=skip]"
     assert captured["kwargs"]["choices"] == ["r", "i", "s"]
     assert captured["kwargs"]["default"] == "s"

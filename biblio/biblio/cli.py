@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from biblio.models import RunOptions
 from biblio.manage import add_source, validate_sources
+from biblio.models import RunOptions
 from biblio.runner import list_sources, run_sources
 from biblio.specs import discover_source_specs
 from biblio.startup import run_startup_wizard

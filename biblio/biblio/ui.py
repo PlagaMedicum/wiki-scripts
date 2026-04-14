@@ -6,11 +6,11 @@ import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.progress import track
-from rich.prompt import Confirm
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
@@ -36,19 +36,43 @@ class AppUI:
         self._shown_review_match_controls = False
         self._shown_page_controls = False
 
+    @contextmanager
+    def _suspend_screen_ui(self):
+        yield
+
+    def _print_message(self, message: str, *, style: str = "") -> None:
+        self.console.print(message, style=style, markup=False)
+
+    def _supports_screen_ui(self) -> bool:
+        return self._supports_single_key_input() and self.console.is_terminal
+
+    @contextmanager
+    def _live_screen(self, renderable):
+        if not self.console.is_terminal:
+            yield None
+            return
+        with Live(
+            renderable,
+            console=self.console,
+            auto_refresh=False,
+            screen=True,
+            transient=True,
+        ) as live:
+            yield live
+
     def print(self, renderable) -> None:
         self.console.print(renderable)
 
     def info(self, message: str) -> None:
-        self.console.print(message, markup=False)
+        self._print_message(message)
 
     def warn(self, message: str) -> None:
         style = "" if self.no_color else "yellow"
-        self.console.print(message, style=style, markup=False)
+        self._print_message(message, style=style)
 
     def error(self, message: str) -> None:
         style = "" if self.no_color else "bold red"
-        self.console.print(message, style=style, markup=False)
+        self._print_message(message, style=style)
 
     def build_source_table(self, specs: list[SourceSpec]) -> Table:
         table = Table(title="Available bibliography sources")
@@ -69,7 +93,10 @@ class AppUI:
         table.add_row("Mode", "Startup wizard")
         table.add_row("Sources", str(source_count))
         table.add_row("Flow", "Select sources, choose the run mode, pick flags, and start the run.")
-        table.add_row("Input", "Use single-key prompts where available. Press `q` in checklist screens to cancel.")
+        table.add_row(
+            "Input",
+            "Use single-key prompts where available. Press `q` in checklist screens to cancel.",
+        )
         self.print(Panel(table, title="Interactive startup", border_style="blue"))
 
     def build_startup_panel(
@@ -128,8 +155,14 @@ class AppUI:
         if learn_variants:
             rows.extend(
                 [
-                    ("Unknown candidates", "You will be prompted when a search hit contains a matching-looking bibliography line with no active replacement rule yet."),
-                    ("Variant keys", "`r` add to review_variants.json, `i` add to ignored_variants.json, `s` skip for this run."),
+                    (
+                        "Unknown candidates",
+                        "You will be prompted when a search hit contains a matching-looking bibliography line with no active replacement rule yet.",
+                    ),
+                    (
+                        "Variant keys",
+                        "`r` add to review_variants.json, `i` add to ignored_variants.json, `s` skip for this run.",
+                    ),
                 ]
             )
             if has_review_required_rules:
@@ -143,7 +176,10 @@ class AppUI:
             rows.extend(
                 [
                     ("Matched pages", "You will be prompted before saving each matched page."),
-                    ("Save keys", "`y` save, `n` skip, `a` save all remaining safe matches, `e` edit summary, `q` quit the run."),
+                    (
+                        "Save keys",
+                        "`y` save, `n` skip, `a` save all remaining safe matches, `e` edit summary, `q` quit the run.",
+                    ),
                 ]
             )
         if apply and has_review_required_rules:
@@ -162,11 +198,17 @@ class AppUI:
             )
         if show_candidates:
             rows.append(
-                ("Debug output", "Pages without replacements will also print the candidate lines that still match the source filters.")
+                (
+                    "Debug output",
+                    "Pages without replacements will also print the candidate lines that still match the source filters.",
+                )
             )
         if rows:
             rows.append(
-                ("Input", "Interactive prompts accept one key directly. Press `r`, `i`, `s`, `y`, `n`, `a`, `e`, or `q` without Enter.")
+                (
+                    "Input",
+                    "Interactive prompts accept one key directly. Press `r`, `i`, `s`, `y`, `n`, `a`, `e`, or `q` without Enter.",
+                )
             )
 
         if not rows:
@@ -331,9 +373,7 @@ class AppUI:
         )
 
     def print_used_rule(self, rule: dict) -> None:
-        self.info(
-            f"[rule] {rule.get('kind')} -> {rule.get('replacement')}"
-        )
+        self.info(f"[rule] {rule.get('kind')} -> {rule.get('replacement')}")
 
     def print_unknown_variant(self, title: str, info: VariantInfo, spec: SourceSpec) -> None:
         table = Table.grid(padding=(0, 1))
@@ -369,7 +409,10 @@ class AppUI:
         table = Table.grid(padding=(0, 1))
         table.add_column(style="" if self.no_color else "bold cyan")
         table.add_column()
-        table.add_row("r", "Add the matched review-required line(s) to review_variants.json for future exact replacement.")
+        table.add_row(
+            "r",
+            "Add the matched review-required line(s) to review_variants.json for future exact replacement.",
+        )
         table.add_row("i", "Ignore this review-required match in future learn runs.")
         table.add_row("s", "Skip this page for now.")
         self.print(Panel(table, title="Manual review controls", border_style="yellow"))
@@ -410,36 +453,102 @@ class AppUI:
         *,
         choices: list[str],
         default: str | None = None,
+        screen_renderable=None,
     ) -> str:
-        normalized_choices = {choice.casefold(): choice for choice in choices}
-        if not self._supports_single_key_input():
-            return Prompt.ask(
-                label,
-                choices=choices,
-                default=default,
-                console=self.console,
-            )
+        with self._suspend_screen_ui():
+            normalized_choices = {choice.casefold(): choice for choice in choices}
+            if not self._supports_single_key_input():
+                if screen_renderable is not None:
+                    self.print(screen_renderable)
+                return Prompt.ask(
+                    label,
+                    choices=choices,
+                    default=default,
+                    console=self.console,
+                )
 
-        while True:
-            self.console.print(
-                Text(label, style="" if self.no_color else "bold cyan"),
-                end=" ",
-            )
-            raw = self._read_single_key()
-            if raw == "\x03":
-                raise KeyboardInterrupt
-            if raw in ("\r", "\n"):
-                if default is None:
-                    self.warn(f"Press one of: {', '.join(choices)}")
-                    continue
-                choice = default
-            else:
-                choice = normalized_choices.get(raw.casefold())
-                if choice is None:
-                    self.warn(f"Press one of: {', '.join(choices)}")
-                    continue
-            self.console.print(choice)
-            return choice
+            if screen_renderable is not None and self._supports_screen_ui():
+                notice: str | None = None
+                with self._live_screen(
+                    self.build_choice_screen(
+                        body=screen_renderable,
+                        prompt=label,
+                        notice=notice,
+                    )
+                ) as live:
+                    while True:
+                        if live is not None:
+                            live.update(
+                                self.build_choice_screen(
+                                    body=screen_renderable,
+                                    prompt=label,
+                                    notice=notice,
+                                ),
+                                refresh=True,
+                            )
+                        raw = self._read_single_key()
+                        if raw == "\x03":
+                            raise KeyboardInterrupt
+                        if raw in ("\r", "\n"):
+                            if default is None:
+                                notice = f"Press one of: {', '.join(choices)}"
+                                continue
+                            return default
+                        choice = normalized_choices.get(raw.casefold())
+                        if choice is None:
+                            notice = f"Press one of: {', '.join(choices)}"
+                            continue
+                        return choice
+
+            if screen_renderable is not None:
+                self.print(screen_renderable)
+            while True:
+                self.console.print(
+                    Text(label, style="" if self.no_color else "bold cyan"),
+                    end=" ",
+                )
+                raw = self._read_single_key()
+                if raw == "\x03":
+                    raise KeyboardInterrupt
+                if raw in ("\r", "\n"):
+                    if default is None:
+                        self.warn(f"Press one of: {', '.join(choices)}")
+                        continue
+                    choice = default
+                else:
+                    choice = normalized_choices.get(raw.casefold())
+                    if choice is None:
+                        self.warn(f"Press one of: {', '.join(choices)}")
+                        continue
+                self.console.print(choice)
+                return choice
+
+    def build_choice_screen(self, *, body, prompt: str, notice: str | None = None):
+        footer = Table.grid(expand=True, padding=(0, 1))
+        footer.add_column(style="" if self.no_color else "bold cyan")
+        footer.add_column()
+        footer.add_row("Prompt", prompt)
+        if notice:
+            footer.add_row("Notice", notice)
+        return Group(
+            body,
+            Panel(footer, title="Input", border_style="cyan"),
+        )
+
+    def _checklist_window(
+        self,
+        *,
+        option_count: int,
+        cursor: int,
+        notice: str | None,
+    ) -> tuple[int, int]:
+        footer_rows = 5 if notice else 4
+        panel_chrome = 2
+        visible_rows = max(6, self.console.size.height - footer_rows - panel_chrome)
+        visible_rows = min(visible_rows, option_count)
+        start = max(0, min(cursor - (visible_rows // 2), option_count - visible_rows))
+        end = start + visible_rows
+        return start, end
 
     def build_checklist_panel(
         self,
@@ -450,18 +559,44 @@ class AppUI:
         cursor: int,
         notice: str | None = None,
     ) -> Panel:
-        table = Table.grid(padding=(0, 1))
+        start, end = self._checklist_window(
+            option_count=len(options),
+            cursor=cursor,
+            notice=notice,
+        )
+        table = Table.grid(expand=True, padding=(0, 1))
         table.add_column(width=1)
-        table.add_column(width=3, style="" if self.no_color else "bold cyan")
+        table.add_column(width=4)
         table.add_column(no_wrap=True)
         table.add_column()
 
-        for index, option in enumerate(options):
-            marker = ">" if index == cursor else " "
-            checkbox = "[x]" if option.value in selected else "[ ]"
-            table.add_row(marker, checkbox, option.label, option.detail)
+        for index in range(start, end):
+            option = options[index]
+            focused = index == cursor
+            checked = option.value in selected
 
-        footer = Table.grid(padding=(0, 1))
+            marker = Text(">" if focused else " ")
+            checkbox = Text(
+                "[x]" if checked else "[ ]",
+                style="" if self.no_color else ("bold green" if checked else "dim"),
+            )
+            label = Text(option.label)
+            detail = Text(option.detail)
+
+            if checked:
+                label.stylize("" if self.no_color else "bold green")
+            if focused:
+                focus_style = "" if self.no_color else "black on bright_cyan"
+                marker.stylize(focus_style)
+                checkbox.stylize(focus_style)
+                label.stylize(focus_style)
+                detail.stylize(focus_style)
+            elif not checked:
+                detail.stylize("" if self.no_color else "dim")
+
+            table.add_row(marker, checkbox, label, detail)
+
+        footer = Table.grid(expand=True, padding=(0, 1))
         footer.add_column(style="" if self.no_color else "bold cyan")
         footer.add_column()
         footer.add_row(
@@ -469,10 +604,16 @@ class AppUI:
             "space toggle, j/k move, a select all, x clear, Enter continue, q cancel",
         )
         footer.add_row("Selected", f"{len(selected)}/{len(options)}")
+        footer.add_row("Window", f"{start + 1}-{end} of {len(options)}")
+        if start > 0 or end < len(options):
+            footer.add_row(
+                "Scroll",
+                ("up/down available" if self.no_color else "j/k scroll through the full list"),
+            )
         if notice:
             footer.add_row("Notice", notice)
 
-        layout = Table.grid()
+        layout = Table.grid(expand=True)
         layout.add_row(table)
         layout.add_row(footer)
         return Panel(layout, title=title, border_style="cyan")
@@ -485,53 +626,47 @@ class AppUI:
         default_selected: tuple[str, ...] = (),
         allow_empty: bool = False,
     ) -> tuple[str, ...] | None:
-        if not options:
-            return ()
+        with self._suspend_screen_ui():
+            if not options:
+                return ()
 
-        selected = {
-            option.value
-            for option in options
-            if option.value in set(default_selected)
-        }
-        ordered_values = [option.value for option in options]
+            selected = {option.value for option in options if option.value in set(default_selected)}
+            ordered_values = [option.value for option in options]
 
-        if not self._supports_single_key_input():
-            self.print(
-                self.build_checklist_panel(
-                    title,
-                    options,
-                    selected=selected,
-                    cursor=0,
+            if not self._supports_single_key_input():
+                self.print(
+                    self.build_checklist_panel(
+                        title,
+                        options,
+                        selected=selected,
+                        cursor=0,
+                    )
                 )
-            )
-            valid = {option.value for option in options}
-            while True:
-                raw = Prompt.ask(
-                    f"{title} (comma-separated values, `all`, or `q` to cancel)",
-                    console=self.console,
-                ).strip()
-                lowered = raw.casefold()
-                if lowered == "q":
-                    return None
-                if lowered == "all":
-                    return tuple(ordered_values)
-                chosen = [item.strip() for item in raw.split(",") if item.strip()]
-                unknown = [item for item in chosen if item not in valid]
-                if unknown:
-                    self.warn(f"Unknown values: {', '.join(unknown)}")
-                    continue
-                if not chosen and not allow_empty:
-                    self.warn("Select at least one item or type q to cancel.")
-                    continue
-                chosen_set = set(chosen)
-                return tuple(value for value in ordered_values if value in chosen_set)
+                valid = {option.value for option in options}
+                while True:
+                    raw = Prompt.ask(
+                        f"{title} (comma-separated values, `all`, or `q` to cancel)",
+                        console=self.console,
+                    ).strip()
+                    lowered = raw.casefold()
+                    if lowered == "q":
+                        return None
+                    if lowered == "all":
+                        return tuple(ordered_values)
+                    chosen = [item.strip() for item in raw.split(",") if item.strip()]
+                    unknown = [item for item in chosen if item not in valid]
+                    if unknown:
+                        self.warn(f"Unknown values: {', '.join(unknown)}")
+                        continue
+                    if not chosen and not allow_empty:
+                        self.warn("Select at least one item or type q to cancel.")
+                        continue
+                    chosen_set = set(chosen)
+                    return tuple(value for value in ordered_values if value in chosen_set)
 
-        cursor = 0
-        notice: str | None = None
-        while True:
-            if self.console.is_terminal:
-                self.console.clear(home=True)
-            self.print(
+            cursor = 0
+            notice: str | None = None
+            with self._live_screen(
                 self.build_checklist_panel(
                     title,
                     options,
@@ -539,46 +674,54 @@ class AppUI:
                     cursor=cursor,
                     notice=notice,
                 )
-            )
+            ) as live:
+                while True:
+                    panel = self.build_checklist_panel(
+                        title,
+                        options,
+                        selected=selected,
+                        cursor=cursor,
+                        notice=notice,
+                    )
+                    if live is not None:
+                        live.update(panel, refresh=True)
+                    else:
+                        self.print(panel)
 
-            raw = self._read_single_key()
-            if raw == "\x03":
-                raise KeyboardInterrupt
-            key = raw.casefold()
-            notice = None
+                    raw = self._read_single_key()
+                    if raw == "\x03":
+                        raise KeyboardInterrupt
+                    key = raw.casefold()
+                    notice = None
 
-            if key == "j":
-                cursor = (cursor + 1) % len(options)
-                continue
-            if key == "k":
-                cursor = (cursor - 1) % len(options)
-                continue
-            if raw == " ":
-                value = options[cursor].value
-                if value in selected:
-                    selected.remove(value)
-                else:
-                    selected.add(value)
-                continue
-            if key == "a":
-                selected = set(ordered_values)
-                continue
-            if key == "x":
-                selected.clear()
-                continue
-            if key == "q":
-                if self.console.is_terminal:
-                    self.console.clear(home=True)
-                return None
-            if raw in ("\r", "\n"):
-                if selected or allow_empty:
-                    if self.console.is_terminal:
-                        self.console.clear(home=True)
-                    return tuple(value for value in ordered_values if value in selected)
-                notice = "Select at least one item or press q to cancel."
-                continue
+                    if key == "j":
+                        cursor = (cursor + 1) % len(options)
+                        continue
+                    if key == "k":
+                        cursor = (cursor - 1) % len(options)
+                        continue
+                    if raw == " ":
+                        value = options[cursor].value
+                        if value in selected:
+                            selected.remove(value)
+                        else:
+                            selected.add(value)
+                        continue
+                    if key == "a":
+                        selected = set(ordered_values)
+                        continue
+                    if key == "x":
+                        selected.clear()
+                        continue
+                    if key == "q":
+                        return None
+                    if raw in ("\r", "\n"):
+                        if selected or allow_empty:
+                            return tuple(value for value in ordered_values if value in selected)
+                        notice = "Select at least one item or press q to cancel."
+                        continue
 
-            notice = "Use space, j, k, a, x, Enter, or q."
+                    notice = "Use space, j, k, a, x, Enter, or q."
 
     def prompt_source_selection(self, specs: list[SourceSpec]) -> tuple[str, ...] | None:
         options = [
@@ -601,46 +744,53 @@ class AppUI:
         table.add_column()
         table.add_row("d", "Dry-run: inspect matches without saving.")
         table.add_row("i", "Interactive apply: save with per-page confirmation.")
-        table.add_row("b", "Background apply: save safe matches automatically and skip review-required ones.")
+        table.add_row(
+            "b", "Background apply: save safe matches automatically and skip review-required ones."
+        )
         table.add_row("q", "Cancel the startup wizard.")
-        self.print(Panel(table, title="Run mode", border_style="magenta"))
+        panel = Panel(table, title="Run mode", border_style="magenta")
         choice = self.prompt_choice(
             "Choose run mode [d=dry-run, i=interactive apply, b=background apply, q=quit]",
             choices=["d", "i", "b", "q"],
             default="d",
+            screen_renderable=panel,
         )
         if choice == "q":
             return None
         return choice
 
     def prompt_variant_action(self) -> str:
-        if not self._shown_variant_controls:
-            self.print_variant_controls()
-            self._shown_variant_controls = True
-        return self.prompt_choice(
-            "Choose variant action [r=review, i=ignore, s=skip]",
-            choices=["r", "i", "s"],
-            default="s",
-        )
+        with self._suspend_screen_ui():
+            if not self._shown_variant_controls:
+                self.print_variant_controls()
+                self._shown_variant_controls = True
+            return self.prompt_choice(
+                "Choose variant action [r=review, i=ignore, s=skip]",
+                choices=["r", "i", "s"],
+                default="s",
+            )
 
     def prompt_review_match_action(self) -> str:
-        if not self._shown_review_match_controls:
-            self.print_review_match_controls()
-            self._shown_review_match_controls = True
-        return self.prompt_choice(
-            "Choose review action [r=learn exact, i=ignore, s=skip]",
-            choices=["r", "i", "s"],
-            default="s",
-        )
+        with self._suspend_screen_ui():
+            if not self._shown_review_match_controls:
+                self.print_review_match_controls()
+                self._shown_review_match_controls = True
+            return self.prompt_choice(
+                "Choose review action [r=learn exact, i=ignore, s=skip]",
+                choices=["r", "i", "s"],
+                default="s",
+            )
 
     def prompt_text(self, label: str, *, default: str | None = None) -> str:
-        if default is None:
-            return Prompt.ask(label, console=self.console)
-        return Prompt.ask(label, default=default, console=self.console)
+        with self._suspend_screen_ui():
+            if default is None:
+                return Prompt.ask(label, console=self.console)
+            return Prompt.ask(label, default=default, console=self.console)
 
     def prompt_optional_text(self, label: str, *, default: str = "") -> str | None:
-        value = Prompt.ask(label, default=default, console=self.console).strip()
-        return value or None
+        with self._suspend_screen_ui():
+            value = Prompt.ask(label, default=default, console=self.console).strip()
+            return value or None
 
     def prompt_int(
         self,
@@ -649,17 +799,18 @@ class AppUI:
         default: int,
         minimum: int = 0,
     ) -> int:
-        while True:
-            raw = Prompt.ask(label, default=str(default), console=self.console).strip()
-            try:
-                value = int(raw)
-            except ValueError:
-                self.warn("Enter a whole number.")
-                continue
-            if value < minimum:
-                self.warn(f"Enter a value >= {minimum}.")
-                continue
-            return value
+        with self._suspend_screen_ui():
+            while True:
+                raw = Prompt.ask(label, default=str(default), console=self.console).strip()
+                try:
+                    value = int(raw)
+                except ValueError:
+                    self.warn("Enter a whole number.")
+                    continue
+                if value < minimum:
+                    self.warn(f"Enter a value >= {minimum}.")
+                    continue
+                return value
 
     def prompt_csv(
         self,
@@ -667,15 +818,17 @@ class AppUI:
         *,
         default: tuple[str, ...] | None = None,
     ) -> tuple[str, ...]:
-        if default:
-            raw = Prompt.ask(label, default=", ".join(default), console=self.console)
-        else:
-            raw = Prompt.ask(label, console=self.console)
-        items = [item.strip() for item in raw.split(",") if item.strip()]
-        return tuple(items)
+        with self._suspend_screen_ui():
+            if default:
+                raw = Prompt.ask(label, default=", ".join(default), console=self.console)
+            else:
+                raw = Prompt.ask(label, console=self.console)
+            items = [item.strip() for item in raw.split(",") if item.strip()]
+            return tuple(items)
 
     def confirm(self, label: str, *, default: bool = True) -> bool:
-        return Confirm.ask(label, default=default, console=self.console)
+        with self._suspend_screen_ui():
+            return Confirm.ask(label, default=default, console=self.console)
 
     def print_page_controls(self) -> None:
         table = Table.grid(padding=(0, 1))
@@ -689,30 +842,30 @@ class AppUI:
         self.print(Panel(table, title="Save controls", border_style="green"))
 
     def prompt_page_action(self, current_summary: str, *, review_required: bool = False) -> str:
-        if not self._shown_page_controls:
-            self.print_page_controls()
-            self._shown_page_controls = True
-        self.info(f"Current edit summary: {current_summary}")
-        if review_required:
-            self.warn("Manual review is required for this change. Bulk apply is paused.")
-        return self.prompt_choice(
-            "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
-            choices=["y", "n", "a", "e", "q"],
-            default="n",
-        )
+        with self._suspend_screen_ui():
+            if not self._shown_page_controls:
+                self.print_page_controls()
+                self._shown_page_controls = True
+            self.info(f"Current edit summary: {current_summary}")
+            if review_required:
+                self.warn("Manual review is required for this change. Bulk apply is paused.")
+            return self.prompt_choice(
+                "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
+                choices=["y", "n", "a", "e", "q"],
+                default="n",
+            )
 
     def prompt_summary(self, current_summary: str) -> str:
-        return Prompt.ask(
-            "New edit summary",
-            default=current_summary,
-            console=self.console,
-        )
+        with self._suspend_screen_ui():
+            return Prompt.ask(
+                "New edit summary",
+                default=current_summary,
+                console=self.console,
+            )
 
     def print_candidate_lines(self, title: str, lines: list[str]) -> None:
         if not lines:
-            self.warn(
-                f"[debug] {title}: the source no longer contains any candidate lines."
-            )
+            self.warn(f"[debug] {title}: the source no longer contains any candidate lines.")
             return
 
         table = Table(title=f"Candidate lines still matching search in {title}")

@@ -9,21 +9,23 @@ repository.
 
 ## Quick Local Setup
 
-1. Install the project into a Python 3.14 environment:
+1. Sync the locked project environment with `uv`:
 
    ```bash
-   python3 -m pip install -e ./biblio
+   cd biblio
+   uv sync --dev
    ```
 
 2. Create `biblio/.env` with your bot-password credentials from `Special:BotPasswords` on
    the target wiki.
-3. Run `biblio --help` to check the installed command.
+3. Run `uv run --locked biblio --help` to check the installed command.
 4. Run `make run` to open the startup wizard.
 
 Special:BotPasswords setup:
 
 - create a bot password for the account you will use
 - choose a clear label, such as `biblio-local`
+- grant `High-volume (bot)` access so MediaWiki will accept bot-marked saves for that session
 - put the base account name, without `@label`, in `WIKI_BOT_USERNAME`
 - put only the chosen label in `WIKI_BOT_PASSWORD_SUFFIX`
 - put the generated bot password secret in `WIKI_BOT_PASSWORD`
@@ -51,12 +53,15 @@ Start here for a normal run:
 The canonical human entry point is `make run`. The installed command and the internal module path
 are both `biblio`.
 
+All saved page edits are submitted with MediaWiki's bot flag, and startup now hard-fails if the
+authenticated session does not actually hold the `bot` right.
+
 To run a specific source without using the wizard, pass the CLI arguments through the Makefile or
 call the CLI directly:
 
 ```bash
 make run ARGS="run gvb1 --limit 10"
-biblio run gvb1 --limit 10
+uv run --locked biblio run gvb1 --limit 10
 ```
 
 ## Maintainer Workflow
@@ -102,6 +107,7 @@ changes, not a rewrite.
 ## Requirements
 
 - Python 3.14+
+- `uv` 0.11.6+
 - `pywikibot`
 - `python-dotenv`
 - `rich`
@@ -110,26 +116,39 @@ changes, not a rewrite.
   - `WIKI_BOT_PASSWORD_SUFFIX`
   - `WIKI_BOT_PASSWORD`
 
+## Dependency Tracking
+
+`biblio` now treats `uv.lock` as the authoritative dependency snapshot.
+
+- Runtime dependencies are intentionally minimal: `pywikibot`, `python-dotenv`, and `rich`.
+- Dev-only tools live in the `dev` dependency group and are not shipped as runtime requirements.
+- `make run`, `make test`, `make lint`, and `make audit` all execute with `uv run --locked`, so
+  they refuse to drift away from the committed lockfile.
+- The Makefile keeps `uv` and audit caches inside the project tree, so the workflow does not rely
+  on mutable global cache directories.
+
 ## Install
 
 Run these commands from `biblio/`:
 
 ```bash
-python3 -m pip install -e .
-python3 -m pip install -e '.[dev]'
+uv sync --dev
 ```
 
-The first command installs the CLI. The second adds test and lint dependencies.
+That installs the package plus the locked development toolchain into the local `uv` environment.
+
+If you need a plain editable install without `uv`, `pip install -e .` still works for the package
+itself, but the tracked maintainer workflow is `uv`.
 
 ## Direct CLI Equivalents
 
 ```bash
-biblio
-biblio list
-biblio validate
-biblio add-source
-biblio run gvb1 --limit 10
-python3 -m biblio
+uv run --locked biblio
+uv run --locked biblio list
+uv run --locked biblio validate
+uv run --locked biblio add-source
+uv run --locked biblio run gvb1 --limit 10
+uv run --locked python -m biblio
 ```
 
 ## Read Order
@@ -158,10 +177,13 @@ The JSON runtime files are local and gitignored:
 Use the local Makefile for the normal project loop:
 
 ```bash
+make sync
+make lock
 make test
 make lint
+make audit
 make format
 make check
 ```
 
-`make check` runs tests and linting.
+`make check` syncs the locked environment, then runs tests, linting, and a dependency audit.

@@ -35,14 +35,9 @@ mod tests {
 
     #[test]
     fn parses_hide_revid_command() {
-        let cli = Cli::try_parse_from([
-            "suppressor",
-            "--config",
-            "config.toml",
-            "hide-revid",
-            "42",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["suppressor", "--config", "config.toml", "hide-revid", "42"])
+                .unwrap();
         assert_eq!(cli.config, PathBuf::from("config.toml"));
         match cli.command {
             Command::HideRevid { id } => assert_eq!(id, 42),
@@ -52,8 +47,8 @@ mod tests {
 
     #[test]
     fn parses_config_after_subcommand() {
-        let cli = Cli::try_parse_from(["suppressor", "dry-run", "--config", "config.toml"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["suppressor", "dry-run", "--config", "config.toml"]).unwrap();
         assert_eq!(cli.config, PathBuf::from("config.toml"));
         match cli.command {
             Command::DryRun => {}

@@ -114,8 +114,7 @@ mod tests {
             pid_file: PathBuf::from("/tmp/state/pid"),
         };
 
-        let command =
-            build_child_command(Path::new("/tmp/suppressor"), &paths, &["run"]).unwrap();
+        let command = build_child_command(Path::new("/tmp/suppressor"), &paths, &["run"]).unwrap();
         let std = command.as_std();
         let args = std
             .get_args()

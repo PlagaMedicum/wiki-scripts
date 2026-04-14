@@ -63,6 +63,7 @@ impl AuthenticatedCommandContext {
 pub async fn run_check_auth(config_path: PathBuf) -> Result<()> {
     let command = AuthenticatedCommandContext::load(&config_path, "check-auth").await?;
     println!("authenticated_as={}", command.auth.username);
+    println!("bot_marked_actions={}", command.auth.has_bot_right());
     println!("rights={}", {
         let mut rights = command.auth.rights.iter().cloned().collect::<Vec<_>>();
         rights.sort();

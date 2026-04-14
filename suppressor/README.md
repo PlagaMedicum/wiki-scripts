@@ -75,8 +75,9 @@ BEWIKI_BOT_PASSWORD=REDACTED
 - In the TUI, `Tab` or `Left`/`Right` switches between the action list and the live output pane.
 - When `Live Output` is focused, `Up`/`Down`, `PageUp`/`PageDown`, `Home`, and `End` scroll the captured logs.
 - The status pane shows live reconciliation progress from `state/runtime_status.json`, including the active mode, queued reruns, current title, and completed/total page count.
+- `check-auth` and live startup now hard-fail unless the session has `bot`, `deleterevision`, and `deletelogentry`.
 - `revisiondelete` actions cannot be marked as minor edits by this daemon.
-- If the service account receives the bot flag, those bot-marked log entries should be hidden in the usual RecentChanges view; without the bot flag, they remain visible there.
+- `revisiondelete` has no separate bot request switch, so bot-marked log entries depend on the account rights; the daemon enforces the `bot` right before it will run.
 
 ## Adapting To Another Local Wiki
 

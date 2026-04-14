@@ -377,10 +377,7 @@ mod tests {
     fn resolves_relative_paths_from_config_dir() {
         let config_path = PathBuf::from("/tmp/suppressor/config.toml");
         let resolved = AppConfig::resolve_path(&config_path, "./state/file.json");
-        assert_eq!(
-            resolved,
-            PathBuf::from("/tmp/suppressor/./state/file.json")
-        );
+        assert_eq!(resolved, PathBuf::from("/tmp/suppressor/./state/file.json"));
     }
 
     #[test]
@@ -519,10 +516,7 @@ mod tests {
             paths.config_path,
             PathBuf::from("/tmp/suppressor/config.toml")
         );
-        assert_eq!(
-            paths.state_dir,
-            PathBuf::from("/tmp/suppressor/./state")
-        );
+        assert_eq!(paths.state_dir, PathBuf::from("/tmp/suppressor/./state"));
         assert_eq!(paths.env_file, PathBuf::from("/tmp/suppressor/.env"));
         assert_eq!(
             paths.cache_file,

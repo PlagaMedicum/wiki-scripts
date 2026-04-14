@@ -169,6 +169,7 @@ Authentication sequence:
 
 Startup must hard-fail unless the session has:
 
+- `bot`
 - `deleterevision`
 - `deletelogentry`
 
@@ -181,6 +182,11 @@ Immediate hide request shape:
 - `suppress=no`
 - `reason=<configured reason>`
 - `token=<csrf>`
+
+Bot-marked visibility requirement:
+
+- `action=revisiondelete` does not expose a separate `bot` request parameter
+- bot-marked log visibility therefore depends on the authenticated account having the `bot` right
 
 Default reason:
 

@@ -47,7 +47,7 @@ async fn authenticates_and_reads_rights() {
         .and(query_param("action", "query"))
         .and(query_param("meta", "userinfo"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
-            r#"{"query":{"userinfo":{"name":"Wizardist","rights":["deleterevision","deletelogentry","apihighlimits"]}}}"#,
+            r#"{"query":{"userinfo":{"name":"Wizardist","rights":["bot","deleterevision","deletelogentry","apihighlimits"]}}}"#,
             "application/json",
         ))
         .mount(&server)
@@ -65,7 +65,73 @@ async fn authenticates_and_reads_rights() {
     let auth = authenticate(&client, &env).await.unwrap();
     assert_eq!(auth.username, "Wizardist");
     assert!(auth.has_required_rights());
+    assert!(auth.has_bot_right());
     assert!(auth.has_high_limits());
+}
+
+#[tokio::test]
+async fn authenticate_requires_bot_right() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .and(query_param("action", "query"))
+        .and(query_param("meta", "tokens"))
+        .and(query_param("type", "login"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"query":{"tokens":{"logintoken":"LOGIN_TOKEN"}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/w/api.php"))
+        .and(body_string_contains("action=login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(r#"{"login":{"result":"Success"}}"#, "application/json"),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .and(query_param("action", "query"))
+        .and(query_param("meta", "tokens"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"query":{"tokens":{"csrftoken":"CSRF_TOKEN"}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/w/api.php"))
+        .and(query_param("action", "query"))
+        .and(query_param("meta", "userinfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"query":{"userinfo":{"name":"Wizardist","rights":["deleterevision","deletelogentry"]}}}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let env = EnvConfig {
+        api_url: format!("{}/w/api.php", server.uri()),
+        stream_url: "https://stream.wikimedia.org/v2/stream/recentchange".to_string(),
+        bot_username: "Bot@password".to_string(),
+        bot_password: "secret".to_string(),
+        user_agent: "test-agent".to_string(),
+        env_file: std::path::PathBuf::from(".env"),
+    };
+    let client = MediaWikiClient::new(&env).unwrap();
+    let error = authenticate(&client, &env).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("lacks required rights for bot-marked revisiondelete actions: bot")
+    );
 }
 
 #[tokio::test]

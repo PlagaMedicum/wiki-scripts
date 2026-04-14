@@ -89,6 +89,8 @@ BotPasswords reminder:
 - `BEWIKI_BOT_PASSWORD` should be the generated bot password secret, not the label
 - choose a clear suffix like `revdel-watch` so the active password is easy to identify later
 - unlike Biblio, Suppressor does not split the account name and suffix into separate variables
+- both `check-auth` and the live daemon hard-fail unless the authenticated session exposes the
+  `bot`, `deleterevision`, and `deletelogentry` rights
 
 ## `config.toml` Contract
 
@@ -310,7 +312,9 @@ Recommended live control:
 - monitor `revdel_failure_total`, `event_reconnect_total`, and queue depth
 - treat permission loss or repeated unrecoverable auth failures as a service-stop condition
 - `action=revisiondelete` does not provide a minor-edit switch; these actions cannot be marked minor by the daemon
-- if the operator account has the bot flag, bot-marked changes can be hidden in the usual RecentChanges view; without that flag, the revisiondelete log entries remain visible in RecentChanges
+- `action=revisiondelete` also does not provide a separate bot flag parameter; bot-marked log
+  entries depend on the authenticated account exposing the `bot` right, and the daemon now
+  treats that as a startup requirement
 - the daemon was first developed for be.wiki, so be especially careful when changing the wiki endpoint or rights model for another local wiki
 
 ## Deployment Checklist

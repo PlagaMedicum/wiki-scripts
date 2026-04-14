@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from biblio.models import SourceSpec
 from biblio.utils import parse_regex_flags
-
 
 WIKILINK_PIPED_RE = re.compile(r"\[\[[^|\]]+\|([^\]]+)\]\]")
 WIKILINK_SIMPLE_RE = re.compile(r"\[\[([^\]]+)\]\]")
@@ -34,7 +33,7 @@ def normalize_biblio_wikitext(text: str, spec: SourceSpec) -> str:
     if options.strip_formatting:
         text = ITALIC_BOLD_RE.sub("", text)
     if options.normalize_nbsp:
-        text = text.replace("\u00A0", " ")
+        text = text.replace("\u00a0", " ")
     if options.normalize_dashes:
         text = re.sub(r"\s*[—–]\s*", " — ", text)
 
@@ -69,7 +68,7 @@ def normalize_whitespace(text: str) -> str:
 
 
 def normalize_title_for_match(text: str) -> str:
-    text = text.replace("_", " ").replace("\u00A0", " ")
+    text = text.replace("_", " ").replace("\u00a0", " ")
     text = re.sub(r"\s*[—–-]\s*", " — ", text)
     return normalize_whitespace(text).casefold()
 
@@ -128,12 +127,8 @@ VOLUME_MARKER_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 NAME_TOKEN_RE = r"[A-ZА-ЯЁІЎ][^\s,/.():;]+(?:[-'][^\s,/.():;]+)*"
-SURNAME_INITIALS_RE = (
-    rf"{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*,?(?:\s+[A-ZА-ЯЁІЎ]\.){{1,3}}"
-)
-INITIALS_SURNAME_RE = (
-    rf"(?:[A-ZА-ЯЁІЎ]\.\s*){{1,3}}{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*"
-)
+SURNAME_INITIALS_RE = rf"{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*,?(?:\s+[A-ZА-ЯЁІЎ]\.){{1,3}}"
+INITIALS_SURNAME_RE = rf"(?:[A-ZА-ЯЁІЎ]\.\s*){{1,3}}{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*"
 QUOTED_SURNAME_INITIALS_RE = rf"[\"'«“„]?{SURNAME_INITIALS_RE}[\"'»”]?"
 QUOTED_INITIALS_SURNAME_RE = rf"[\"'«“„]?{INITIALS_SURNAME_RE}[\"'»”]?"
 AUTHOR_ITEM_RE = rf"(?:{QUOTED_SURNAME_INITIALS_RE}|{QUOTED_INITIALS_SURNAME_RE})"
@@ -470,6 +465,7 @@ def normalized_unit_variants(text: str, spec: SourceSpec) -> tuple[str, ...]:
     variants = [normalized]
 
     if normalized.startswith("{{"):
+
         def strip_title_entry(match: re.Match[str]) -> str:
             value = match.group("value")
             split = TITLE_WITH_ENTRY_RE.match(value)
@@ -566,7 +562,12 @@ def extract_pages_arg(text: str, spec: SourceSpec) -> str | None:
                 score += 2
             if match.end() > len(normalized) - 12:
                 score += 2
-            if "isbn" in normalized[max(0, match.start() - 40) : min(len(normalized), match.end() + 40)].casefold():
+            if (
+                "isbn"
+                in normalized[
+                    max(0, match.start() - 40) : min(len(normalized), match.end() + 40)
+                ].casefold()
+            ):
                 score += 1
 
             candidates.append((score, pages))

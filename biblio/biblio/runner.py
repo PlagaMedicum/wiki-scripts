@@ -11,15 +11,24 @@ from biblio.engine import (
     variant_review_key,
 )
 from biblio.models import RunOptions
+from biblio.page_execution import _changed_bytes, _is_minor_edit
 from biblio.query import build_search_query
 from biblio.runtime import RunnerDependencies
 from biblio.session import needs_interactive_input as _needs_interactive_input
 from biblio.specs import discover_source_specs, load_source_spec, project_root
 from biblio.state import load_source_state, variant_hash
 from biblio.text import entry_matches_page_title, make_review_key
-from biblio.page_execution import _changed_bytes, _is_minor_edit
 from biblio.workflow import run_source as _run_source
 from biblio.workflow import run_sources as _run_sources
+
+__all__ = [
+    "_changed_bytes",
+    "_is_minor_edit",
+    "_needs_interactive_input",
+    "list_sources",
+    "run_source",
+    "run_sources",
+]
 
 
 def _load_titles(site, query: str, limit: int) -> tuple[int, list[str]]:

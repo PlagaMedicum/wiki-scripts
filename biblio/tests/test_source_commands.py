@@ -3,7 +3,6 @@ from __future__ import annotations
 import textwrap
 
 import pytest
-
 from biblio.cli import main
 from biblio.manage import guess_candidate_defaults
 
@@ -11,8 +10,9 @@ from biblio.manage import guess_candidate_defaults
 def _write_source_tree(root, source_id, *, include_readme=True, include_rules=True):
     source_dir = root / "sources" / source_id
     source_dir.mkdir(parents=True)
-    source_toml = textwrap.dedent(
-        """
+    source_toml = (
+        textwrap.dedent(
+            """
         [source]
         id = "__SOURCE_ID__"
         name = "Temporary source"
@@ -44,13 +44,18 @@ def _write_source_tree(root, source_id, *, include_readme=True, include_rules=Tr
 
         [macros]
         """
-    ).replace("__SOURCE_ID__", source_id).replace(
-        "__WITHOUT__",
-        "{{Крыніцы/Тэст}}",
-    ).replace(
-        "__WITH__",
-        "{{Крыніцы/Тэст||{pages}}}",
-    ).replace("__SUMMARY__", "Замена {{{template_name}}}")
+        )
+        .replace("__SOURCE_ID__", source_id)
+        .replace(
+            "__WITHOUT__",
+            "{{Крыніцы/Тэст}}",
+        )
+        .replace(
+            "__WITH__",
+            "{{Крыніцы/Тэст||{pages}}}",
+        )
+        .replace("__SUMMARY__", "Замена {{{template_name}}}")
+    )
     source_dir.joinpath("source.toml").write_text(
         source_toml.strip() + "\n",
         encoding="utf-8",
@@ -174,6 +179,7 @@ def test_add_source_creates_definition_and_runtime_files(monkeypatch, tmp_path):
         "biblio.ui.AppUI.prompt_text",
         lambda self, label, default=None: next(responses),
     )
+
     def fake_prompt_csv(self, label, default=None):
         csv_defaults[label] = default
         return tuple(item.strip() for item in next(responses).split(",") if item.strip())

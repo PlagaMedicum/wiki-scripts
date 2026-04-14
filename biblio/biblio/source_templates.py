@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-
 PLACEHOLDER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -28,9 +27,7 @@ def extract_template_placeholders(template: str) -> tuple[str, ...]:
 
             name = template[index + 1 : end]
             if not PLACEHOLDER_NAME_RE.fullmatch(name):
-                raise ValueError(
-                    f"Invalid template placeholder {name!r} in template: {template!r}"
-                )
+                raise ValueError(f"Invalid template placeholder {name!r} in template: {template!r}")
             if name not in seen:
                 seen.add(name)
                 placeholders.append(name)
@@ -71,9 +68,7 @@ def validate_template_placeholders(
 
     unknown = placeholders - allowed_fields
     if unknown:
-        raise ValueError(
-            f"{context} uses unknown placeholders: {', '.join(sorted(unknown))}"
-        )
+        raise ValueError(f"{context} uses unknown placeholders: {', '.join(sorted(unknown))}")
 
 
 def render_template(template: str, values: Mapping[str, str]) -> str:

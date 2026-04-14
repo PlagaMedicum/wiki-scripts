@@ -1,11 +1,15 @@
-PYTHON ?= python3
+UV ?= uv
+UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
+PIP_AUDIT_CACHE_DIR ?= $(CURDIR)/.pip-audit-cache
 ARGS ?=
 
-.PHONY: help list validate add-source run test lint format check
+.PHONY: help sync lock list validate add-source run test lint format audit check
 
 help:
 	@printf '%s\n' \
 		'Available targets:' \
+		'  make sync' \
+		'  make lock' \
 		'  make run [ARGS="..."]' \
 		'  make list' \
 		'  make validate' \
@@ -13,31 +17,44 @@ help:
 		'  make test [ARGS="..."]' \
 		'  make lint' \
 		'  make format' \
+		'  make audit' \
 		'  make check'
 
+sync:
+	$(UV) sync --dev --cache-dir $(UV_CACHE_DIR)
+
+lock:
+	$(UV) lock --cache-dir $(UV_CACHE_DIR)
+
 run:
-	$(PYTHON) -m biblio $(ARGS)
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) biblio $(ARGS)
 
 list:
-	$(PYTHON) -m biblio list $(ARGS)
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) biblio list $(ARGS)
 
 validate:
-	$(PYTHON) -m biblio validate $(ARGS)
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) biblio validate $(ARGS)
 
 add-source:
-	$(PYTHON) -m biblio add-source $(ARGS)
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) biblio add-source $(ARGS)
 
 test:
-	$(PYTHON) -m pytest $(ARGS)
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) pytest $(ARGS)
 
 lint:
-	$(PYTHON) -m ruff check .
-	$(PYTHON) -m ruff format --check .
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff check .
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff format --check .
 
 format:
-	$(PYTHON) -m ruff check --fix .
-	$(PYTHON) -m ruff format .
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff check --fix .
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff format .
+
+audit:
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) \
+		pip-audit --cache-dir $(PIP_AUDIT_CACHE_DIR) --skip-editable
 
 check:
+	$(MAKE) sync
 	$(MAKE) test
 	$(MAKE) lint
+	$(MAKE) audit

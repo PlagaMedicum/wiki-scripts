@@ -66,10 +66,7 @@ def needs_interactive_input(
 ) -> bool:
     return options.learn_variants or (
         options.apply
-        and (
-            not accept_all
-            or (has_review_required_rules and not options.skip_review_required)
-        )
+        and (not accept_all or (has_review_required_rules and not options.skip_review_required))
     )
 
 

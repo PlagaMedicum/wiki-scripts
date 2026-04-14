@@ -74,7 +74,9 @@ def _spec(tmp_path) -> SourceSpec:
     )
 
 
-def _deps(*, replace_results: list[ReplacementResult], infos: list[VariantInfo] | None = None) -> RunnerDependencies:
+def _deps(
+    *, replace_results: list[ReplacementResult], infos: list[VariantInfo] | None = None
+) -> RunnerDependencies:
     remaining = iter(replace_results)
     return RunnerDependencies(
         load_source_spec=lambda *args, **kwargs: None,
@@ -116,7 +118,9 @@ def test_analyze_page_keeps_manual_review_candidates_for_matched_pages(tmp_path)
 
     assert analysis.review_required is True
     assert analysis.manual_review_lines == ("Mismatch // Demo encyclopedia",)
-    assert any("Entry differs from page title" in reason for reason in analysis.result.review_reasons)
+    assert any(
+        "Entry differs from page title" in reason for reason in analysis.result.review_reasons
+    )
 
 
 def test_learn_unknown_variants_reanalyzes_after_review_choice(tmp_path):

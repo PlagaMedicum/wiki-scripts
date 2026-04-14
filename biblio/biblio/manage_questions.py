@@ -54,9 +54,7 @@ def guess_candidate_defaults(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     candidate_all = (keywords[0],) if keywords else ((insource_terms[0],) if insource_terms else ())
     remaining_text_terms = tuple(
-        term
-        for term in _dedupe_terms(insource_terms, keywords)
-        if term not in candidate_all
+        term for term in _dedupe_terms(insource_terms, keywords) if term not in candidate_all
     )
     candidate_any = _dedupe_terms(isbns, remaining_text_terms)
     return candidate_all, candidate_any
@@ -75,8 +73,7 @@ def _prompt_candidate_terms(
         keywords=keywords,
     )
     ui.info(
-        "Candidate defaults are guessed from your search terms. "
-        "Press Enter to accept or edit them."
+        "Candidate defaults are guessed from your search terms. Press Enter to accept or edit them."
     )
     ui.info(f"Guessed must_contain_all: {_csv_default(default_all) or 'none'}")
     ui.info(f"Guessed must_contain_any: {_csv_default(default_any) or 'none'}")

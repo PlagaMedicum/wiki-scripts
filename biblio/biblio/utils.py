@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-
 TOKEN_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 MACRO_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
 

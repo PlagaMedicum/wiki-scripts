@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from biblio.models import SourceSpec
 from biblio.runtime_json import (
     RuntimeJsonError,
-    load_json_list as load_runtime_json_list,
     save_json_list_atomic,
+)
+from biblio.runtime_json import (
+    load_json_list as load_runtime_json_list,
 )
 from biblio.text import (
     extract_entry_arg,
@@ -62,9 +63,7 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
                 f"Expected rules.json at {path} to store string replacement values"
             )
         if not isinstance(enabled, bool):
-            raise RuntimeJsonError(
-                f"Expected rules.json at {path} to store boolean enabled values"
-            )
+            raise RuntimeJsonError(f"Expected rules.json at {path} to store boolean enabled values")
         rules.append(dict(item))
     return rules
 
@@ -191,7 +190,9 @@ class SourceState:
 
     def ensure_rule_saved(self, rule: dict) -> bool:
         key = make_rule_key(rule, self.spec)
-        existing = {make_rule_key(item, self.spec) for item in self.base_rules if item.get("enabled", True)}
+        existing = {
+            make_rule_key(item, self.spec) for item in self.base_rules if item.get("enabled", True)
+        }
         if key in existing:
             return False
 

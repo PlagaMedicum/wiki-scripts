@@ -11,12 +11,11 @@ from biblio.models import (
     CandidateSpec,
     NormalizationOptions,
     RegexRule,
-    SourceValidationIssue,
     SourceSpec,
+    SourceValidationIssue,
 )
 from biblio.source_templates import validate_template_placeholders
 from biblio.utils import expand_macro_template, parse_regex_flags
-
 
 BUILTIN_MACROS = {
     "LIST_PREFIX": r"\s*(?:[*#;:]+\s*)?",
@@ -35,9 +34,7 @@ DEFAULT_PAGE_PATTERNS = (
     r"\|{{OPT_WS}}(?:старонкі|pages?|pp?){{OPT_WS}}={{OPT_WS}}(?P<pages>{{PAGES}})(?={{OPT_WS}}(?:\||\}\}))",
 )
 
-DEFAULT_REJECT_PATTERNS = (
-    r"^\s*:\s*іл",
-)
+DEFAULT_REJECT_PATTERNS = (r"^\s*:\s*іл",)
 
 PERSISTENT_SOURCE_FILENAMES = (
     "source.toml",
@@ -84,9 +81,7 @@ def source_root(root: Path | None = None) -> Path:
 
 def validate_source_id(source_id: str) -> None:
     if not SOURCE_ID_RE.fullmatch(source_id):
-        raise ValueError(
-            "Source IDs must use lowercase ASCII letters, digits, and hyphens."
-        )
+        raise ValueError("Source IDs must use lowercase ASCII letters, digits, and hyphens.")
 
 
 def discover_source_specs(root: Path | None = None) -> list[SourceSpec]:
@@ -161,9 +156,7 @@ def validate_source_layouts(root: Path | None = None) -> list[SourceValidationIs
                     path=child / required,
                     message=f"Missing required file: {required}",
                     suggestion=(
-                        f"Rename {candidate} to {required}"
-                        if candidate
-                        else f"Create {required}"
+                        f"Rename {candidate} to {required}" if candidate else f"Create {required}"
                     ),
                 )
             )
@@ -290,9 +283,7 @@ def _load_argument_extractors(
         template_params = _string_list(config, "template_params")
         pattern_templates = _string_list(config, "patterns")
         if not template_params and not pattern_templates:
-            raise ValueError(
-                f"argument_extractors.{name} must define template_params or patterns"
-            )
+            raise ValueError(f"argument_extractors.{name} must define template_params or patterns")
         normalizer = config.get("normalizer", "entry")
         if normalizer not in {"entry", "pages", "whitespace", "raw"}:
             raise ValueError(

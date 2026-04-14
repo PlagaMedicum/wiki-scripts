@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from biblio.specs import load_source_spec
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PROJECT_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "project"
 

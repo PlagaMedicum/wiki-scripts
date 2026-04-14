@@ -4,17 +4,19 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
 from biblio.runtime_json import RuntimeJsonError
 from biblio.specs import load_source_spec
 from biblio.state import load_source_state, save_json_list
 
 
-def _write_source_tree(root: Path, source_id: str, *, rules: str = "[]", review: str = "[]", ignored: str = "[]") -> None:
+def _write_source_tree(
+    root: Path, source_id: str, *, rules: str = "[]", review: str = "[]", ignored: str = "[]"
+) -> None:
     source_dir = root / "sources" / source_id
     source_dir.mkdir(parents=True)
-    source_toml = textwrap.dedent(
-        """
+    source_toml = (
+        textwrap.dedent(
+            """
         [source]
         id = "__SOURCE_ID__"
         name = "Temporary source"
@@ -46,13 +48,18 @@ def _write_source_tree(root: Path, source_id: str, *, rules: str = "[]", review:
 
         [macros]
         """
-    ).replace("__SOURCE_ID__", source_id).replace(
-        "__WITHOUT__",
-        "{{Крыніцы/Тэст|{entry}}}",
-    ).replace(
-        "__WITH__",
-        "{{Крыніцы/Тэст|{entry}|{pages}}}",
-    ).replace("__SUMMARY__", "Замена {{{template_name}}}")
+        )
+        .replace("__SOURCE_ID__", source_id)
+        .replace(
+            "__WITHOUT__",
+            "{{Крыніцы/Тэст|{entry}}}",
+        )
+        .replace(
+            "__WITH__",
+            "{{Крыніцы/Тэст|{entry}|{pages}}}",
+        )
+        .replace("__SUMMARY__", "Замена {{{template_name}}}")
+    )
     source_dir.joinpath("source.toml").write_text(
         source_toml.strip() + "\n",
         encoding="utf-8",

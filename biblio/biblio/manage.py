@@ -4,10 +4,14 @@ from pathlib import Path
 
 from biblio.manage_questions import (
     collect_scaffold,
+)
+from biblio.manage_questions import (
     guess_candidate_defaults as _guess_candidate_defaults,
 )
 from biblio.manage_reports import (
     render_add_source_summary,
+)
+from biblio.manage_reports import (
     validate_sources as _validate_sources,
 )
 from biblio.manage_write import write_source_files

@@ -11,8 +11,8 @@ from biblio.text import (
     extract_prefix_components,
     extract_template_arguments,
     make_review_key,
-    normalize_biblio_wikitext,
     normalize_argument_value,
+    normalize_biblio_wikitext,
     normalize_pages_arg,
     normalize_review_line,
     normalized_unit_variants,
@@ -20,7 +20,6 @@ from biblio.text import (
     split_ref_aware_segments,
 )
 from biblio.utils import substitute_tokens
-
 
 PREFIX_TEMPLATE_REVIEW_REASON = (
     "Entry or author inferred from bibliography prefix before template citation; confirm manually."
@@ -354,12 +353,18 @@ def apply_normalized_unit_regex_rules(
         if not matched:
             if page_title and is_candidate_line(unit.body, spec):
                 extracted_entry = extract_entry_arg(unit.body, spec, page_title)
-                if extracted_entry and normalize_biblio_wikitext(
-                    extracted_entry,
-                    spec,
-                ).casefold() == normalize_biblio_wikitext(page_title, spec).casefold():
+                if (
+                    extracted_entry
+                    and normalize_biblio_wikitext(
+                        extracted_entry,
+                        spec,
+                    ).casefold()
+                    == normalize_biblio_wikitext(page_title, spec).casefold()
+                ):
                     normalized_body = normalize_biblio_wikitext(unit.body, spec).casefold()
-                    if not spec.isbns or any(isbn.casefold() in normalized_body for isbn in spec.isbns):
+                    if not spec.isbns or any(
+                        isbn.casefold() in normalized_body for isbn in spec.isbns
+                    ):
                         extracted_pages = extract_pages_arg(unit.body, spec)
                         extracted_arguments = extract_template_arguments(
                             unit.body,
@@ -455,10 +460,7 @@ def _replace_segment(
         spec,
         page_title=page_title,
     )
-    merged_extra_argument_values = {
-        key: values[:]
-        for key, values in extra_argument_values.items()
-    }
+    merged_extra_argument_values = {key: values[:] for key, values in extra_argument_values.items()}
     for key, values in normalized_extra_argument_values.items():
         merged_extra_argument_values.setdefault(key, []).extend(values)
     for key, values in line_extra_argument_values.items():
@@ -535,12 +537,10 @@ def replace_text(
 def is_candidate_line(raw_line: str, spec: SourceSpec) -> bool:
     line = normalize_biblio_wikitext(raw_line, spec).casefold()
     must_contain_all = [
-        normalize_biblio_wikitext(term, spec).casefold()
-        for term in spec.candidate.must_contain_all
+        normalize_biblio_wikitext(term, spec).casefold() for term in spec.candidate.must_contain_all
     ]
     must_contain_any = [
-        normalize_biblio_wikitext(term, spec).casefold()
-        for term in spec.candidate.must_contain_any
+        normalize_biblio_wikitext(term, spec).casefold() for term in spec.candidate.must_contain_any
     ]
 
     if any(term not in line for term in must_contain_all):

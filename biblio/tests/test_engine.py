@@ -195,10 +195,7 @@ def test_replace_exact_rule_only_inside_ref_tags(gvb_spec):
     )
 
     assert result.replacements == 1
-    assert (
-        result.text
-        == 'Ручаёўка<ref name="энцык">{{Крыніцы/ГВБ|1-1}}</ref> is a village.'
-    )
+    assert result.text == 'Ручаёўка<ref name="энцык">{{Крыніцы/ГВБ|1-1}}</ref> is a village.'
 
 
 def test_replace_line_exact_rule_uses_entry_and_pages_from_current_line(repo_root):
@@ -317,10 +314,7 @@ def test_replace_regex_rule_only_inside_ref_tags(tmp_path):
     result = replace_text(text, spec, [])
 
     assert result.replacements == 1
-    assert (
-        result.text
-        == 'Ручаёўка<ref name="энцык">{{Крыніцы/ГВБ|1-1}}</ref> is a village.'
-    )
+    assert result.text == 'Ручаёўка<ref name="энцык">{{Крыніцы/ГВБ|1-1}}</ref> is a village.'
     assert "full_line_bibliography" in result.used_rule_names
 
 
@@ -443,7 +437,7 @@ def test_extract_unknown_variants_ignores_self_closing_refs_before_target_ref(tm
     infos = extract_unknown_variant_infos(
         'Intro<ref name="one" /><ref name="two" />'
         '<ref name="ГВБ">{{кніга|загаловак=Гарады і вёскі Беларусі|isbn=985-11-0330-6}}</ref>'
-        ' tail',
+        " tail",
         spec,
     )
 

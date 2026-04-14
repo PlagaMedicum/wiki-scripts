@@ -306,7 +306,9 @@ def test_execute_page_carries_summary_override_forward_across_pages(tmp_path, mo
     )
     actions = iter(["e", "a"])
     ui = FakeUI(page_action="a", summary="Edited summary")
-    monkeypatch.setattr(ui, "prompt_page_action", lambda current_summary, *, review_required=False: next(actions))
+    monkeypatch.setattr(
+        ui, "prompt_page_action", lambda current_summary, *, review_required=False: next(actions)
+    )
     monkeypatch.setattr(ui, "prompt_summary", lambda current_summary: "Edited summary")
 
     first_page = FakePage("abc")
@@ -353,9 +355,5 @@ def test_execute_page_carries_summary_override_forward_across_pages(tmp_path, mo
     )
 
     assert policy.summary_override == "Edited summary"
-    assert first_page.saved_edits == [
-        PageEdit(text="axc", summary="Edited summary", minor=True)
-    ]
-    assert second_page.saved_edits == [
-        PageEdit(text="axc", summary="Edited summary", minor=True)
-    ]
+    assert first_page.saved_edits == [PageEdit(text="axc", summary="Edited summary", minor=True)]
+    assert second_page.saved_edits == [PageEdit(text="axc", summary="Edited summary", minor=True)]

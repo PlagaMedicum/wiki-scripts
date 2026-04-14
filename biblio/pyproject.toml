@@ -8,15 +8,16 @@ version = "0.1.0"
 description = "Reusable bibliography replacement tooling first developed for be.wiki."
 requires-python = ">=3.14"
 dependencies = [
-  "pywikibot",
-  "python-dotenv",
-  "rich",
+  "pywikibot>=11.1,<12",
+  "python-dotenv>=1.2.2,<2",
+  "rich>=14.3.3,<15",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "pytest>=8",
-  "ruff>=0.6",
+  "pip-audit>=2.10,<3",
+  "pytest>=9,<10",
+  "ruff>=0.15,<0.16",
 ]
 
 [project.scripts]

@@ -3,7 +3,6 @@ from __future__ import annotations
 import textwrap
 
 import pytest
-
 from biblio.query import build_search_query
 from biblio.specs import discover_source_specs, load_source_spec
 
@@ -28,7 +27,9 @@ def test_load_gvb1_spec(repo_root):
     assert spec.render_template(entry="Абрамаўка") == "{{Крыніцы/ГВБ|1-1|Абрамаўка}}"
     assert spec.render_template("213—214") == "{{Крыніцы/ГВБ|1-1||213—214}}"
     assert spec.render_template("213—214", "Абрамаўка") == "{{Крыніцы/ГВБ|1-1|Абрамаўка|213—214}}"
-    assert spec.render_default_summary() == "Замена бібліяграфічнай спасылкі шаблонам {{Крыніцы/ГВБ}}"
+    assert (
+        spec.render_default_summary() == "Замена бібліяграфічнай спасылкі шаблонам {{Крыніцы/ГВБ}}"
+    )
     assert spec.candidate.must_contain_all == ("Гомельская вобласць",)
     assert spec.candidate.must_contain_any == (
         "Т. 1, кн. 1. Гомельская вобласць",
@@ -44,17 +45,23 @@ def test_load_belen10_spec(repo_root):
     assert spec.source_id == "belen10"
     assert spec.template_name == "Крыніцы/БелЭн"
     assert spec.render_template(entry="Маркава") == "{{Крыніцы/БелЭн|10|Маркава}}"
-    assert spec.render_template(
-        entry="Маркава",
-        author="Шаблюк В. У.",
-        responsible="В. У. Шаблюк",
-    ) == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.||В. У. Шаблюк}}"
-    assert spec.render_template(
-        "114",
-        "Маркава",
-        author="Шаблюк В. У.",
-        responsible="В. У. Шаблюк",
-    ) == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.|114|В. У. Шаблюк}}"
+    assert (
+        spec.render_template(
+            entry="Маркава",
+            author="Шаблюк В. У.",
+            responsible="В. У. Шаблюк",
+        )
+        == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.||В. У. Шаблюк}}"
+    )
+    assert (
+        spec.render_template(
+            "114",
+            "Маркава",
+            author="Шаблюк В. У.",
+            responsible="В. У. Шаблюк",
+        )
+        == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.|114|В. У. Шаблюк}}"
+    )
     assert {extractor.name for extractor in spec.argument_extractors} == {"author", "responsible"}
 
 
@@ -74,9 +81,7 @@ def test_belen1_entry_only_rules_require_review(repo_root):
 
 def test_build_query_uses_all_search_terms(gvb_spec):
     assert build_search_query(gvb_spec) == (
-        'insource:"Гомельская вобласць" '
-        'insource:"985-11-0303-9" '
-        'insource:"985-11-0302-0"'
+        'insource:"Гомельская вобласць" insource:"985-11-0303-9" insource:"985-11-0302-0"'
     )
 
 
@@ -322,9 +327,10 @@ def test_replacement_placeholder_validation_rejects_unknown_field(tmp_path):
 
 @pytest.mark.parametrize("field", ["enabled", "review_required"])
 def test_regex_rule_boolean_flags_are_strict(tmp_path, field):
-    bad_value = '"yes"' if field == "enabled" else '1'
-    source_toml = textwrap.dedent(
-        """
+    bad_value = '"yes"' if field == "enabled" else "1"
+    source_toml = (
+        textwrap.dedent(
+            """
         [source]
         id = "bad-boolean"
         name = "Bad boolean"
@@ -363,13 +369,20 @@ def test_regex_rule_boolean_flags_are_strict(tmp_path, field):
         flags = "UNICODE"
         __FIELD__ = __BAD_VALUE__
         """
-    ).replace("__WITHOUT__", "{{Крыніцы/Тэст|{entry}}}").replace(
-        "__WITH__",
-        "{{Крыніцы/Тэст|{entry}|{pages}}}",
-    ).replace("__SUMMARY__", "Замена {{{template_name}}}").replace(
-        "__REPLACEMENT__",
-        "{prefix}{template}",
-    ).replace("__FIELD__", field).replace("__BAD_VALUE__", bad_value)
+        )
+        .replace("__WITHOUT__", "{{Крыніцы/Тэст|{entry}}}")
+        .replace(
+            "__WITH__",
+            "{{Крыніцы/Тэст|{entry}|{pages}}}",
+        )
+        .replace("__SUMMARY__", "Замена {{{template_name}}}")
+        .replace(
+            "__REPLACEMENT__",
+            "{prefix}{template}",
+        )
+        .replace("__FIELD__", field)
+        .replace("__BAD_VALUE__", bad_value)
+    )
     _write_source(
         tmp_path,
         "bad-boolean",

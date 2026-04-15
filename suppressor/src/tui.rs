@@ -122,6 +122,7 @@ pub(crate) struct ManagedSession {
 pub(crate) struct ControlApp {
     pub(crate) paths: RuntimePaths,
     current_exe: PathBuf,
+    verbose: bool,
     pub(crate) focus: FocusPane,
     pub(crate) selected: usize,
     log_top: usize,
@@ -136,11 +137,12 @@ pub(crate) struct ControlApp {
 }
 
 impl ControlApp {
-    fn new(paths: RuntimePaths, current_exe: PathBuf) -> Self {
+    fn new(paths: RuntimePaths, current_exe: PathBuf, verbose: bool) -> Self {
         let (log_tx, log_rx) = unbounded_channel();
         let mut app = Self {
             paths,
             current_exe,
+            verbose,
             focus: FocusPane::Actions,
             selected: 0,
             log_top: 0,
@@ -271,7 +273,12 @@ impl ControlApp {
             self.push_log("A managed session is already running. Stop it before starting another.");
             return;
         }
-        match build_child_command(&self.current_exe, &self.paths, &[mode.command_name()]) {
+        match build_child_command(
+            &self.current_exe,
+            &self.paths,
+            self.verbose,
+            &[mode.command_name()],
+        ) {
             Ok(mut command) => {
                 command.kill_on_drop(true);
                 match command.spawn() {
@@ -324,9 +331,10 @@ impl ControlApp {
     fn spawn_background_command(&mut self, label: &'static str, args: Vec<String>) {
         let current_exe = self.current_exe.clone();
         let paths = self.paths.clone();
+        let verbose = self.verbose;
         let tx = self.log_tx.clone();
         tokio::spawn(async move {
-            let mut command = match build_child_command_owned(&current_exe, &paths, args) {
+            let mut command = match build_child_command_owned(&current_exe, &paths, verbose, args) {
                 Ok(command) => command,
                 Err(error) => {
                     let _ = tx.send(format!("Failed to prepare {label}: {error:#}"));
@@ -470,7 +478,7 @@ impl ControlApp {
     }
 }
 
-pub async fn run(config_path: PathBuf) -> Result<()> {
+pub async fn run(config_path: PathBuf, verbose: bool) -> Result<()> {
     let config = AppConfig::load(&config_path)?;
     let paths = RuntimePaths::resolve(&config_path, &config);
     let current_exe = std::env::current_exe().context("Failed to locate current executable")?;
@@ -482,7 +490,7 @@ pub async fn run(config_path: PathBuf) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("Failed to initialize terminal backend")?;
 
-    let mut app = ControlApp::new(paths, current_exe);
+    let mut app = ControlApp::new(paths, current_exe, verbose);
 
     while !app.should_quit {
         app.drain_logs();

@@ -7,15 +7,18 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::RuntimePaths;
+use crate::config::default_log_filter;
 
 pub(crate) fn build_child_command(
     current_exe: &Path,
     paths: &RuntimePaths,
+    verbose: bool,
     args: &[&str],
 ) -> Result<Command> {
     build_child_command_owned(
         current_exe,
         paths,
+        verbose,
         args.iter().map(|arg| (*arg).to_string()).collect(),
     )
 }
@@ -23,15 +26,16 @@ pub(crate) fn build_child_command(
 pub(crate) fn build_child_command_owned(
     current_exe: &Path,
     paths: &RuntimePaths,
+    verbose: bool,
     args: Vec<String>,
 ) -> Result<Command> {
-    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        "warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn".to_string()
-    });
+    let log_filter =
+        std::env::var("RUST_LOG").unwrap_or_else(|_| default_log_filter(verbose).to_string());
     let mut command = Command::new(current_exe);
     command
         .arg("--config")
         .arg(&paths.config_path)
+        .args(verbose.then_some("--verbose"))
         .env("BEWIKI_ENV_FILE", &paths.env_file)
         .env("RUST_LOG", log_filter)
         .env("BEWIKI_LOG_FORMAT", "tui")
@@ -114,7 +118,8 @@ mod tests {
             pid_file: PathBuf::from("/tmp/state/pid"),
         };
 
-        let command = build_child_command(Path::new("/tmp/suppressor"), &paths, &["run"]).unwrap();
+        let command =
+            build_child_command(Path::new("/tmp/suppressor"), &paths, true, &["run"]).unwrap();
         let std = command.as_std();
         let args = std
             .get_args()
@@ -135,6 +140,7 @@ mod tests {
             vec![
                 "--config".to_string(),
                 "/tmp/config.toml".to_string(),
+                "--verbose".to_string(),
                 "run".to_string()
             ]
         );

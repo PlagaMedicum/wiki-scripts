@@ -135,6 +135,10 @@ static LOGGING_INIT: OnceLock<()> = OnceLock::new();
 const DEFAULT_API_URL_ENV: &str = "BEWIKI_API_URL";
 const DEFAULT_STREAM_URL_ENV: &str = "BEWIKI_STREAM_URL";
 const DEFAULT_USER_AGENT_ENV: &str = "BEWIKI_USER_AGENT";
+const DEFAULT_LOG_FILTER: &str =
+    "warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn";
+const DEFAULT_VERBOSE_LOG_FILTER: &str =
+    "warn,suppressor=debug,hyper=warn,hyper_util=warn,h2=warn,reqwest=info";
 
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
@@ -282,10 +286,18 @@ fn resolve_env_value(name: &str, file_values: &[(String, String)]) -> Option<Str
     })
 }
 
-pub fn init_logging(config: &LoggingConfig) {
+pub fn default_log_filter(verbose: bool) -> &'static str {
+    if verbose {
+        DEFAULT_VERBOSE_LOG_FILTER
+    } else {
+        DEFAULT_LOG_FILTER
+    }
+}
+
+pub fn init_logging(config: &LoggingConfig, verbose: bool) {
     LOGGING_INIT.get_or_init(|| {
         let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(config.level.clone()));
+            .unwrap_or_else(|_| EnvFilter::new(default_log_filter(verbose)));
         let format = std::env::var("BEWIKI_LOG_FORMAT").unwrap_or_else(|_| config.format.clone());
         if format.eq_ignore_ascii_case("json") {
             let subscriber = tracing_subscriber::fmt()
@@ -421,6 +433,18 @@ mod tests {
                 assert_eq!(loaded.bot_username, "Bot@password");
                 assert_eq!(loaded.bot_password, "secret");
             },
+        );
+    }
+
+    #[test]
+    fn default_log_filter_uses_debug_for_verbose_mode() {
+        assert_eq!(
+            default_log_filter(false),
+            "warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn"
+        );
+        assert_eq!(
+            default_log_filter(true),
+            "warn,suppressor=debug,hyper=warn,hyper_util=warn,h2=warn,reqwest=info"
         );
     }
 

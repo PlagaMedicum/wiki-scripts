@@ -2,8 +2,10 @@ use std::future::Future;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use metrics::histogram;
 use reqwest::{Client, StatusCode, Url};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::config::{EnvConfig, RetryConfig};
 
@@ -310,6 +312,13 @@ impl MediaWikiClient {
                     }
                     if attempts <= retry.api_max_retries && is_transient(&error) {
                         let delay = 2_u64.saturating_pow(attempts - 1);
+                        warn!(
+                            attempts,
+                            delay_seconds = delay,
+                            ids_count = ids.len(),
+                            "transient revisiondelete failure; retrying after backoff"
+                        );
+                        histogram!("api_retry_backoff_seconds").record(delay as f64);
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         continue;
                     }

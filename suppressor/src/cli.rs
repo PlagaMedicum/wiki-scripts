@@ -11,6 +11,8 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[arg(long, global = true, default_value = "config.toml")]
     pub config: PathBuf,
+    #[arg(long, global = true)]
+    pub verbose: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -35,10 +37,17 @@ mod tests {
 
     #[test]
     fn parses_hide_revid_command() {
-        let cli =
-            Cli::try_parse_from(["suppressor", "--config", "config.toml", "hide-revid", "42"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "suppressor",
+            "--config",
+            "config.toml",
+            "--verbose",
+            "hide-revid",
+            "42",
+        ])
+        .unwrap();
         assert_eq!(cli.config, PathBuf::from("config.toml"));
+        assert!(cli.verbose);
         match cli.command {
             Command::HideRevid { id } => assert_eq!(id, 42),
             other => panic!("unexpected command: {other:?}"),

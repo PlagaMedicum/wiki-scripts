@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{info, warn};
+use metrics::histogram;
+use tracing::{debug, info, warn};
 
 use crate::cache::{CachePersistence, CacheRefreshMode, refresh_cache};
 use crate::reconcile::{ReconcileMode, next_current_day_delay, next_nightly_delay};
@@ -57,7 +58,14 @@ pub fn spawn_nightly_reconciliation_loop(runtime: Arc<AppRuntime>) {
             )
             .await
             {
-                Ok(delay) => tokio::time::sleep(delay).await,
+                Ok(delay) => {
+                    debug!(
+                        delay_seconds = delay.as_secs(),
+                        "waiting for next nightly reconciliation window"
+                    );
+                    histogram!("nightly_scheduler_delay_seconds").record(delay.as_secs_f64());
+                    tokio::time::sleep(delay).await;
+                }
                 Err(error) => {
                     warn!("nightly scheduler failed: {error:#}");
                     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -80,11 +88,16 @@ pub fn spawn_current_day_reconciliation_loop(runtime: Arc<AppRuntime>) {
             "current-day reconciliation loop started"
         );
         loop {
-            tokio::time::sleep(next_current_day_delay(
+            let delay = next_current_day_delay(
                 runtime.config.current_day_recheck.min_delay_seconds,
                 runtime.config.current_day_recheck.max_delay_seconds,
-            ))
-            .await;
+            );
+            debug!(
+                delay_seconds = delay.as_secs(),
+                "waiting for next current-day reconciliation run"
+            );
+            histogram!("current_day_scheduler_delay_seconds").record(delay.as_secs_f64());
+            tokio::time::sleep(delay).await;
             runtime
                 .reconcile
                 .request_run(ReconcileMode::CurrentDay)

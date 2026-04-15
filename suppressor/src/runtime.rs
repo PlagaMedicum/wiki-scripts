@@ -342,12 +342,17 @@ pub struct AppRuntime {
 }
 
 impl AppRuntime {
-    pub async fn bootstrap(config_path: PathBuf, dry_run: bool) -> Result<Arc<Self>> {
+    pub async fn bootstrap(
+        config_path: PathBuf,
+        dry_run: bool,
+        verbose: bool,
+    ) -> Result<Arc<Self>> {
         let config = AppConfig::load(&config_path)?;
         let paths = RuntimePaths::resolve(&config_path, &config);
-        init_logging(&config.logging);
+        init_logging(&config.logging, verbose);
         info!(
             dry_run,
+            verbose,
             config_path = %paths.config_path.display(),
             "starting suppressor bootstrap"
         );

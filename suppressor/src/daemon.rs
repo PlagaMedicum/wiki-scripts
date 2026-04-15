@@ -13,10 +13,11 @@ use crate::signal_control::spawn_signal_control_loop;
 use crate::signals;
 use crate::stream::spawn_stream_loop;
 
-pub async fn run_daemon(config_path: PathBuf, dry_run: bool) -> Result<()> {
-    let runtime = AppRuntime::bootstrap(config_path, dry_run).await?;
+pub async fn run_daemon(config_path: PathBuf, dry_run: bool, verbose: bool) -> Result<()> {
+    let runtime = AppRuntime::bootstrap(config_path, dry_run, verbose).await?;
     info!(
         dry_run,
+        verbose,
         stream_url = %runtime.client.stream_url(),
         state_dir = %runtime.paths.state_dir.display(),
         "daemon runtime started"

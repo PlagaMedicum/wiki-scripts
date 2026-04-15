@@ -10,13 +10,13 @@ use crate::daemon::run_daemon;
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run => run_daemon(cli.config, false).await,
-        Command::Tui => crate::tui::run(cli.config).await,
-        Command::DryRun => run_daemon(cli.config, true).await,
-        Command::CheckAuth => run_check_auth(cli.config).await,
-        Command::HideRevid { id } => run_hide_revid(cli.config, id).await,
+        Command::Run => run_daemon(cli.config, false, cli.verbose).await,
+        Command::Tui => crate::tui::run(cli.config, cli.verbose).await,
+        Command::DryRun => run_daemon(cli.config, true, cli.verbose).await,
+        Command::CheckAuth => run_check_auth(cli.config, cli.verbose).await,
+        Command::HideRevid { id } => run_hide_revid(cli.config, id, cli.verbose).await,
         Command::ReloadCache => run_reload_cache(cli.config),
         Command::NightlySweepNow => run_manual_sweep(cli.config),
-        Command::PrintEffectiveConfig => run_print_effective_config(cli.config),
+        Command::PrintEffectiveConfig => run_print_effective_config(cli.config, cli.verbose),
     }
 }

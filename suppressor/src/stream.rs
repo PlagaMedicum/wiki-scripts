@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures_util::StreamExt;
-use metrics::counter;
+use metrics::{counter, histogram};
 use reqwest_eventsource::{Event, EventSource};
 use tracing::{debug, info, warn};
 
@@ -73,6 +73,11 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                     error = %error,
                     "failed to open event stream"
                 );
+                debug!(
+                    backoff_ms,
+                    use_since_recovery, "waiting before reopening recentchange stream"
+                );
+                histogram!("stream_reconnect_backoff_ms").record(backoff_ms as f64);
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                 backoff_ms = (backoff_ms.saturating_mul(2)).min(max_backoff);
                 continue;
@@ -161,7 +166,6 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                         title = %candidate.title,
                         revid = candidate.revid,
                         old_revid = ?candidate.old_revid,
-                        user = ?candidate.user,
                         event_id = ?candidate.event_id,
                         "matched live watched revision"
                     );
@@ -180,6 +184,11 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                 }
             }
         }
+        debug!(
+            backoff_ms,
+            use_since_recovery, "waiting before reconnecting to recentchange stream"
+        );
+        histogram!("stream_reconnect_backoff_ms").record(backoff_ms as f64);
         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
         backoff_ms = (backoff_ms.saturating_mul(2)).min(max_backoff);
     }

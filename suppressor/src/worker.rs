@@ -28,8 +28,6 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
             info!(
                 title = %action.title,
                 revids = ?action.revids,
-                user = ?action.user,
-                comment = ?action.comment,
                 event_id = ?action.event_id,
                 mode = ?action.mode,
                 "dry-run: would hide user/comment"
@@ -90,7 +88,6 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
                 info!(
                     title = %action.title,
                     revids = ?action.revids,
-                    user = ?action.user,
                     event_id = ?action.event_id,
                     mode = ?action.mode,
                     latency_ms = start.elapsed().as_millis(),
@@ -111,7 +108,6 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
                 error!(
                     title = %action.title,
                     revids = ?action.revids,
-                    user = ?action.user,
                     event_id = ?action.event_id,
                     mode = ?action.mode,
                     latency_ms = start.elapsed().as_millis(),

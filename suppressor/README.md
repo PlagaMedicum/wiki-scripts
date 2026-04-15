@@ -64,6 +64,8 @@ BEWIKI_BOT_PASSWORD=REDACTED
 - `make release`
 - `make lint`
 - `make fmt`
+- `suppressor --verbose run`
+- `suppressor --verbose dry-run`
 
 ## Operator Notes
 
@@ -78,6 +80,9 @@ BEWIKI_BOT_PASSWORD=REDACTED
 - `check-auth` and live startup now hard-fail unless the session has `bot`, `deleterevision`, and `deletelogentry`.
 - `revisiondelete` actions cannot be marked as minor edits by this daemon.
 - `revisiondelete` has no separate bot request switch, so bot-marked log entries depend on the account rights; the daemon enforces the `bot` right before it will run.
+- `--verbose` raises only the local daemon's own log detail; it is intended for operator diagnosis, not for dumping payloads.
+- Safe delay and backoff telemetry is exposed through the existing Prometheus endpoint and debug logs.
+- Journal-facing logs must stay free of secrets, raw suppressed comments, tokens, and other private payloads.
 
 ## Adapting To Another Local Wiki
 

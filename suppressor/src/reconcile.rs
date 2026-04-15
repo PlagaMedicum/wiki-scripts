@@ -6,6 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use futures_util::StreamExt;
+use metrics::histogram;
 use rand::Rng;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -244,6 +245,13 @@ async fn reconcile_title(
                     RevDelMode::Reconciliation,
                 )
                 .await?;
+            debug!(
+                sleep_ms = ctx.batch_sleep_ms,
+                batch_size = batch.len(),
+                mode = ?ctx.mode,
+                "waiting before next reconciliation batch"
+            );
+            histogram!("reconcile_batch_sleep_ms").record(ctx.batch_sleep_ms as f64);
             tokio::time::sleep(std::time::Duration::from_millis(ctx.batch_sleep_ms)).await;
         }
     }

@@ -24,8 +24,8 @@ impl CommandContext {
         Ok(Self { config, paths })
     }
 
-    pub fn init_logging(&self) {
-        init_logging(&self.config.logging);
+    pub fn init_logging(&self, verbose: bool) {
+        init_logging(&self.config.logging, verbose);
     }
 }
 
@@ -38,9 +38,9 @@ struct AuthenticatedCommandContext {
 }
 
 impl AuthenticatedCommandContext {
-    async fn load(config_path: &Path, command_name: &str) -> Result<Self> {
+    async fn load(config_path: &Path, command_name: &str, verbose: bool) -> Result<Self> {
         let command = CommandContext::load(config_path)?;
-        command.init_logging();
+        command.init_logging(verbose);
         info!(
             command = command_name,
             config_path = %command.paths.config_path.display(),
@@ -60,8 +60,8 @@ impl AuthenticatedCommandContext {
     }
 }
 
-pub async fn run_check_auth(config_path: PathBuf) -> Result<()> {
-    let command = AuthenticatedCommandContext::load(&config_path, "check-auth").await?;
+pub async fn run_check_auth(config_path: PathBuf, verbose: bool) -> Result<()> {
+    let command = AuthenticatedCommandContext::load(&config_path, "check-auth", verbose).await?;
     println!("authenticated_as={}", command.auth.username);
     println!("bot_marked_actions={}", command.auth.has_bot_right());
     println!("rights={}", {
@@ -72,8 +72,8 @@ pub async fn run_check_auth(config_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_hide_revid(config_path: PathBuf, revid: u64) -> Result<()> {
-    let command = AuthenticatedCommandContext::load(&config_path, "hide-revid").await?;
+pub async fn run_hide_revid(config_path: PathBuf, revid: u64, verbose: bool) -> Result<()> {
+    let command = AuthenticatedCommandContext::load(&config_path, "hide-revid", verbose).await?;
     info!(revid, "hiding revision from command");
     revision_delete_with_auth_context(&command, &[revid]).await?;
     println!("hidden revid {}", revid);
@@ -90,9 +90,9 @@ pub fn run_manual_sweep(config_path: PathBuf) -> Result<()> {
     signals::send_manual_sweep(&command.paths.pid_file)
 }
 
-pub fn run_print_effective_config(config_path: PathBuf) -> Result<()> {
+pub fn run_print_effective_config(config_path: PathBuf, verbose: bool) -> Result<()> {
     let command = CommandContext::load(&config_path)?;
-    command.init_logging();
+    command.init_logging(verbose);
     info!(
         config_path = %command.paths.config_path.display(),
         "rendering effective config"

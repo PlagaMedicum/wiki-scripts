@@ -41,6 +41,17 @@ them to another local wiki.
 - `suppressor/`: self-contained Rust project with its own docs and state
 - `.gitignore`: repo-wide ignore rules for local runtime state and build artifacts
 
+## Observability Standard
+
+Across projects in this repository:
+
+- normal operator output should stay concise and task-focused
+- verbose or debug diagnostics should be opt-in
+- daemon-style projects should prefer metrics plus safe structured logs over ad hoc terminal journals
+- journal-facing logs must not contain secrets, tokens, raw private payloads, or other sensitive text
+- detailed diagnostics should live in project-local runtime files or explicitly requested verbose modes
+- every operator action and failure boundary should have direct tests rather than relying on incidental coverage
+
 ## Portable Use
 
 If you want to adapt either tool to another local wiki, keep the project structure and change the

@@ -115,7 +115,7 @@ def execute_page(
     if save_plan is None:
         return
 
-    apply_page_save(
+    saved = apply_page_save(
         plan=save_plan,
         client=client,
         page=page,
@@ -123,3 +123,6 @@ def execute_page(
         stats=stats,
         ui=ui,
     )
+    if not saved:
+        policy.stopped = True
+        ui.warn("Stopped after save failure.")

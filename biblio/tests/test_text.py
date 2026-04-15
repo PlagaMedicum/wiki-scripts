@@ -267,6 +267,20 @@ def test_extract_author_entry_from_multi_author_prefix_with_page_title_belen8(re
     }
 
 
+def test_extract_author_entry_from_initials_prefix_with_separator_dot_belen1(repo_root):
+    spec = load_source_spec("belen1", root=repo_root)
+    line = (
+        "* А. М. Булыка. Апостраф // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. "
+        "Т. 1: А — Аршын|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=1996|том=1|старонак=552|isbn=985-11-0036-6|тыраж=10&nbsp;000}}"
+    )
+
+    assert extract_entry_arg(line, spec, "Апостраф") == "Апостраф"
+    assert extract_template_arguments(line, spec, "Апостраф") == {
+        "author": "А. М. Булыка",
+    }
+
+
 def test_split_ref_aware_segments_ignores_self_closing_refs_before_real_ref():
     text = (
         'Text<ref name="one" /> more <ref name="two"/>'

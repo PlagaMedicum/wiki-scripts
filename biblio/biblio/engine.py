@@ -24,6 +24,7 @@ from biblio.utils import substitute_tokens
 PREFIX_TEMPLATE_REVIEW_REASON = (
     "Entry or author inferred from bibliography prefix before template citation; confirm manually."
 )
+UNKNOWN_VARIANT_CONTEXT_LINES = 2
 
 
 def _add_prefix_template_review(
@@ -573,6 +574,10 @@ def extract_unknown_variant_infos(
                 continue
 
             seen.add(key)
+            before_lines = tuple(
+                segment[: unit.start].splitlines()[-UNKNOWN_VARIANT_CONTEXT_LINES:]
+            )
+            after_lines = tuple(segment[unit.end :].splitlines()[:UNKNOWN_VARIANT_CONTEXT_LINES])
             infos.append(
                 VariantInfo(
                     full_line=unit.raw_text.strip(),
@@ -585,6 +590,8 @@ def extract_unknown_variant_infos(
                         spec,
                         page_title,
                     ),
+                    context_before=before_lines,
+                    context_after=after_lines,
                 )
             )
 

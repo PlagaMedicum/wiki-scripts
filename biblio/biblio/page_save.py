@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Protocol
 
 from biblio.models import RunOptions, RunStats, SourceSpec
+from biblio.observability import format_elapsed, get_logger
 from biblio.page_analysis import PageAnalysis
 from biblio.runtime import PageEdit, WikiClient
 from biblio.session import RunPolicy, prompt_page_decision
@@ -110,10 +112,22 @@ def apply_page_save(
     state,
     stats: RunStats,
     ui: PageSaveUI,
-) -> None:
+) -> bool:
+    logger = get_logger()
+    ui.info(f"[save] {plan.title}: saving...")
+    started = perf_counter()
     try:
         client.save_page(page, plan.edit)
+        elapsed = perf_counter() - started
         stats.saved += 1
+        logger.info(
+            "saved page title=%s seconds=%.3f minor=%s",
+            plan.title,
+            elapsed,
+            plan.edit.minor,
+        )
+        if elapsed >= 5:
+            ui.warn(f"[delay] {plan.title}: save finished in {format_elapsed(elapsed)}")
 
         promoted = False
         for rule in plan.used_line_rules:
@@ -121,6 +135,15 @@ def apply_page_save(
                 promoted = True
         if promoted:
             ui.info("[rules] Promoted new review rules into rules.json")
+        return True
     except Exception as exc:
+        elapsed = perf_counter() - started
         stats.errors += 1
+        logger.error(
+            "save failed title=%s seconds=%.3f error=%s",
+            plan.title,
+            elapsed,
+            exc,
+        )
         ui.error(f"[error] {plan.title}: {exc}")
+        return False

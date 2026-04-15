@@ -244,6 +244,24 @@ def test_extract_unknown_variant_template_with_url_keeps_pages_and_empty_entry(r
     assert spec.render_template(infos[0].pages, infos[0].entry) == "{{Крыніцы/ГВБ|5-1||367—368}}"
 
 
+def test_extract_unknown_variant_info_keeps_surrounding_context(repo_root):
+    spec = load_source_spec("gvb4", root=repo_root)
+    text = (
+        "== Літаратура ==\n"
+        "* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ў 15 тамах. "
+        "Т. 4, кн. 2. Брэсцкая вобласць / Рэдкалегія: Г. П. Пашкоў "
+        "(галоўны рэдактар) і інш. — Мінск.: БелЭн, 2007. — 608 с.: іл. "
+        "— С. 118. ISBN 978-985-11-0388-7.\n"
+        "{{зноскі}}"
+    )
+
+    infos = extract_unknown_variant_infos(text, spec)
+
+    assert len(infos) == 1
+    assert infos[0].context_before == ("== Літаратура ==",)
+    assert infos[0].context_after == ("{{зноскі}}",)
+
+
 def test_replace_line_exact_rule_keeps_pages_and_empty_entry_for_template_without_part(repo_root):
     spec = load_source_spec("gvb5", root=repo_root)
     body = (
@@ -744,6 +762,28 @@ def test_replace_belen8_candidate_with_page_title_matched_entry(repo_root):
         "responsible": ["А. А. Трусаў, У. В. Угрыновіч"],
     }
     assert result.review_reasons == []
+
+
+def test_replace_belen1_template_prefix_uses_page_title_to_split_author(repo_root):
+    spec = load_source_spec("belen1", root=repo_root)
+    text = (
+        "* А. М. Булыка. Апостраф // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. "
+        "Т. 1: А — Аршын|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=1996|том=1|старонак=552|isbn=985-11-0036-6|тыраж=10&nbsp;000}}"
+    )
+
+    result = replace_text(text, spec, [], page_title="Апостраф")
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/БелЭн|1|Апостраф|А. М. Булыка}}"
+    assert result.entry_arguments == ["Апостраф"]
+    assert result.extra_argument_values == {
+        "author": ["А. М. Булыка"],
+    }
+    assert (
+        'Entry differs from page title: "А. М. Булыка. Апостраф" vs "Апостраф".'
+        not in result.review_reasons
+    )
 
 
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):

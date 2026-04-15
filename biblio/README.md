@@ -62,7 +62,16 @@ call the CLI directly:
 ```bash
 make run ARGS="run gvb1 --limit 10"
 uv run --locked biblio run gvb1 --limit 10
+uv run --locked biblio run gvb1 --limit 10 --verbose
 ```
+
+Observability:
+
+- normal CLI output stays operator-focused and does not write raw page text or diffs into runtime logs
+- detailed runtime logs are written to `biblio/logs/biblio.log`
+- `--verbose` keeps the normal CLI flow but also echoes safe runtime metadata and timing hints locally
+- slow page loads and saves now print `[delay] ...` warnings with elapsed time
+- save attempts now print `[save] <title>: saving...` before the blocking API call so the run does not look frozen
 
 ## Maintainer Workflow
 
@@ -83,6 +92,7 @@ For code and data:
 
 - `biblio/`: shared Python package
 - `sources/<source_id>/`: per-source config plus optional local runtime state
+- `logs/`: local rotating runtime log file for safe operator diagnostics
 - `docs/`: maintainer documentation and architectural review
 - `tests/`: unit and CLI coverage
 - `.env`, `.pywikibot/`, `apicache/`, `throttle.ctrl`: local operator config and runtime state

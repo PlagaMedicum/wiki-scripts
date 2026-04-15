@@ -17,5 +17,6 @@ suppressor/.env
 suppressor/state/
 suppressor/target/
 biblio/sources/
+biblio/logs/
 biblio/.uv-cache/
 biblio/.pip-audit-cache/

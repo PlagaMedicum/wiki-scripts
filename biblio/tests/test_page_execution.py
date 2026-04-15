@@ -94,9 +94,15 @@ class FakeClient:
 
 
 class FakeUI:
-    def __init__(self, page_action: str = "a", summary: str = "Edited summary") -> None:
+    def __init__(
+        self,
+        page_action: str = "a",
+        summary: str = "Edited summary",
+        review_action: str = "r",
+    ) -> None:
         self.page_action = page_action
         self.summary = summary
+        self.review_action = review_action
         self.diff_calls: list[tuple[str, str]] = []
         self.used_rules: list[dict] = []
         self.candidate_lines: list[tuple[str, list[str]]] = []
@@ -114,7 +120,7 @@ class FakeUI:
         self.candidate_lines.append((title, lines))
 
     def prompt_review_match_action(self) -> str:
-        return "r"
+        return self.review_action
 
     def prompt_page_action(self, current_summary: str, *, review_required: bool = False) -> str:
         return self.page_action
@@ -222,7 +228,10 @@ def test_execute_page_saves_and_promotes_rules(tmp_path):
         "asynchronous": False,
     }
     assert state.saved_rules == [{"kind": "line_exact", "replacement": "axc"}]
-    assert ui.info_messages == ["[rules] Promoted new review rules into rules.json"]
+    assert ui.info_messages == [
+        "[save] Demo page: saving...",
+        "[rules] Promoted new review rules into rules.json",
+    ]
 
 
 def test_execute_page_respects_skip_review_required(tmp_path):
@@ -357,3 +366,250 @@ def test_execute_page_carries_summary_override_forward_across_pages(tmp_path, mo
     assert policy.summary_override == "Edited summary"
     assert first_page.saved_edits == [PageEdit(text="axc", summary="Edited summary", minor=True)]
     assert second_page.saved_edits == [PageEdit(text="axc", summary="Edited summary", minor=True)]
+
+
+def test_execute_page_stops_run_after_save_failure(tmp_path):
+    spec = _spec(tmp_path)
+    state = FakeState(active_rules=[])
+    page = FakePage("abc")
+    ui = FakeUI(page_action="a")
+    policy = RunPolicy(
+        options=RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=True,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        accept_all=True,
+    )
+    stats = RunStats()
+    analysis = PageAnalysis(
+        title="Demo page",
+        old_text="abc",
+        result=ReplacementResult(
+            text="axc",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=[],
+            rendered_templates=[],
+            page_arguments=[],
+            entry_arguments=[],
+        ),
+        review_required=False,
+        manual_review_lines=(),
+    )
+
+    class FailingClient:
+        def save_page(self, page: FakePage, edit: PageEdit) -> None:
+            raise RuntimeError("connection reset")
+
+    execute_page(
+        analysis=analysis,
+        spec=spec,
+        options=policy.options,
+        policy=policy,
+        ui=ui,
+        state=state,
+        client=FailingClient(),
+        page=page,
+        stats=stats,
+        deps=_deps(),
+    )
+
+    assert policy.stopped is True
+    assert stats.errors == 1
+    assert ui.info_messages == ["[save] Demo page: saving..."]
+    assert ui.error_messages == ["[error] Demo page: connection reset"]
+    assert ui.warn_messages == ["Stopped after save failure."]
+
+
+def test_execute_page_learns_review_match_when_requested(tmp_path):
+    spec = _spec(tmp_path)
+    state = FakeState(active_rules=[])
+    page = FakePage("abc")
+    ui = FakeUI(review_action="r")
+    policy = RunPolicy(
+        options=RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=False,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=True,
+            show_candidates=False,
+        ),
+        accept_all=False,
+    )
+    stats = RunStats()
+    analysis = PageAnalysis(
+        title="Demo page",
+        old_text="abc",
+        result=ReplacementResult(
+            text="axc",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["entry_only"],
+            rendered_templates=[],
+            page_arguments=[],
+            entry_arguments=["Demo entry"],
+            review_reasons=["Heuristic entry match."],
+            matched_review_lines=["Demo entry // Demo encyclopedia"],
+        ),
+        review_required=True,
+        manual_review_lines=("Demo entry // Demo encyclopedia",),
+    )
+
+    execute_page(
+        analysis=analysis,
+        spec=spec,
+        options=policy.options,
+        policy=policy,
+        ui=ui,
+        state=state,
+        client=FakeClient(),
+        page=page,
+        stats=stats,
+        deps=_deps(),
+    )
+
+    assert state.review_variants == ["Demo entry // Demo encyclopedia"]
+    assert stats.learned == 1
+    assert stats.ignored == 0
+    assert ui.info_messages == [
+        "[review] Added 1 line(s) to review_variants.json",
+        "[dry-run] No changes saved",
+    ]
+
+
+def test_execute_page_ignores_review_match_when_requested(tmp_path):
+    spec = _spec(tmp_path)
+    state = FakeState(active_rules=[])
+    page = FakePage("abc")
+    ui = FakeUI(review_action="i")
+    policy = RunPolicy(
+        options=RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=False,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=True,
+            show_candidates=False,
+        ),
+        accept_all=False,
+    )
+    stats = RunStats()
+    analysis = PageAnalysis(
+        title="Demo page",
+        old_text="abc",
+        result=ReplacementResult(
+            text="axc",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["entry_only"],
+            rendered_templates=[],
+            page_arguments=[],
+            entry_arguments=["Demo entry"],
+            review_reasons=["Heuristic entry match."],
+            matched_review_lines=["Demo entry // Demo encyclopedia"],
+        ),
+        review_required=True,
+        manual_review_lines=("Demo entry // Demo encyclopedia",),
+    )
+
+    execute_page(
+        analysis=analysis,
+        spec=spec,
+        options=policy.options,
+        policy=policy,
+        ui=ui,
+        state=state,
+        client=FakeClient(),
+        page=page,
+        stats=stats,
+        deps=_deps(),
+    )
+
+    assert state.review_variants == []
+    assert state.ignored_hashes == {"Demo entry // Demo encyclopedia"}
+    assert stats.learned == 0
+    assert stats.ignored == 1
+    assert ui.info_messages == [
+        "[ignore] Added 1 line(s) to ignored_variants.json",
+        "[dry-run] No changes saved",
+    ]
+
+
+def test_execute_page_skips_review_match_without_mutating_state(tmp_path):
+    spec = _spec(tmp_path)
+    state = FakeState(active_rules=[])
+    page = FakePage("abc")
+    ui = FakeUI(review_action="s")
+    policy = RunPolicy(
+        options=RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=False,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=True,
+            show_candidates=False,
+        ),
+        accept_all=False,
+    )
+    stats = RunStats()
+    analysis = PageAnalysis(
+        title="Demo page",
+        old_text="abc",
+        result=ReplacementResult(
+            text="axc",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["entry_only"],
+            rendered_templates=[],
+            page_arguments=[],
+            entry_arguments=["Demo entry"],
+            review_reasons=["Heuristic entry match."],
+            matched_review_lines=["Demo entry // Demo encyclopedia"],
+        ),
+        review_required=True,
+        manual_review_lines=("Demo entry // Demo encyclopedia",),
+    )
+
+    execute_page(
+        analysis=analysis,
+        spec=spec,
+        options=policy.options,
+        policy=policy,
+        ui=ui,
+        state=state,
+        client=FakeClient(),
+        page=page,
+        stats=stats,
+        deps=_deps(),
+    )
+
+    assert state.review_variants == []
+    assert state.ignored_hashes == set()
+    assert stats.learned == 0
+    assert stats.ignored == 0
+    assert ui.info_messages == ["[dry-run] No changes saved"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Protocol
 
 from biblio.bootstrap import BotRightRequiredError, create_site
@@ -12,6 +13,7 @@ from biblio.engine import (
     variant_review_key,
 )
 from biblio.models import RunOptions, RunStats, SourceSpec
+from biblio.observability import format_elapsed, get_logger
 from biblio.page_analysis import analyze_page, learn_unknown_variants
 from biblio.page_execution import execute_page
 from biblio.query import build_search_query
@@ -158,6 +160,20 @@ def run_source(
     return run_sources(options, ui, root=root, deps=deps)
 
 
+def _stop_after_error(
+    *,
+    ui: RunUI,
+    policy: RunPolicy,
+    stats: RunStats,
+    error_message: str,
+    warning_message: str,
+) -> None:
+    stats.errors += 1
+    ui.error(error_message)
+    ui.warn(warning_message)
+    policy.stopped = True
+
+
 def _run_single_source(
     spec: SourceSpec,
     options: RunOptions,
@@ -169,6 +185,7 @@ def _run_single_source(
     source_total: int,
     deps: RunnerDependencies,
 ) -> RunStats:
+    logger = get_logger()
     state = deps.load_source_state(spec)
     query = options.query or deps.build_search_query(spec)
     current_summary = policy.current_summary(spec)
@@ -199,8 +216,18 @@ def _run_single_source(
 
     client = site_clients.get(spec)
 
-    with ui.status("Collecting candidate pages from be.wiki..."):
-        total_hits, titles = client.load_titles(query, options.limit)
+    try:
+        with ui.status("Collecting candidate pages from be.wiki..."):
+            total_hits, titles = client.load_titles(query, options.limit)
+    except Exception as exc:
+        _stop_after_error(
+            ui=ui,
+            policy=policy,
+            stats=stats,
+            error_message=f"[error] {spec.source_id}: {exc}",
+            warning_message="Stopped after title collection failure.",
+        )
+        return stats
 
     ui.print_state_counts(
         total_hits=total_hits,
@@ -224,13 +251,35 @@ def _run_single_source(
         ui.print_processing_page(index=index, total=len(titles), title=title)
         page = client.page(title)
         stats.processed += 1
-        analysis = analyze_page(
+        load_started = perf_counter()
+        logger.info("loading page title=%s source_id=%s", title, spec.source_id)
+        try:
+            analysis = analyze_page(
+                title,
+                page.text,
+                spec=spec,
+                state=state,
+                deps=deps,
+            )
+        except Exception as exc:
+            _stop_after_error(
+                ui=ui,
+                policy=policy,
+                stats=stats,
+                error_message=f"[error] {title}: {exc}",
+                warning_message="Stopped after page load failure.",
+            )
+            break
+        load_elapsed = perf_counter() - load_started
+        logger.info(
+            "loaded page title=%s source_id=%s seconds=%.3f replacements=%s",
             title,
-            page.text,
-            spec=spec,
-            state=state,
-            deps=deps,
+            spec.source_id,
+            load_elapsed,
+            analysis.result.replacements,
         )
+        if load_elapsed >= 5:
+            ui.warn(f"[delay] {title}: page load took {format_elapsed(load_elapsed)}")
 
         if analysis.result.replacements == 0 and options.learn_variants:
             analysis = learn_unknown_variants(

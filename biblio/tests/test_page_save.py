@@ -168,6 +168,48 @@ def test_plan_page_save_respects_skip_review_required(tmp_path):
     assert ui.warn_messages == ["[review-skip] Heuristic entry match."]
 
 
+def test_plan_page_save_skips_page_when_requested(tmp_path):
+    spec = _spec(tmp_path)
+    ui = FakeUI(actions=["n"])
+    policy = RunPolicy(options=_options(), accept_all=False)
+    stats = RunStats()
+
+    plan = plan_page_save(
+        analysis=_analysis(),
+        spec=spec,
+        options=policy.options,
+        policy=policy,
+        ui=ui,
+        stats=stats,
+    )
+
+    assert plan is None
+    assert stats.skipped == 1
+    assert policy.stopped is False
+    assert ui.info_messages == ["[skip] Demo page: not saved"]
+
+
+def test_plan_page_save_stops_run_when_requested(tmp_path):
+    spec = _spec(tmp_path)
+    ui = FakeUI(actions=["q"])
+    policy = RunPolicy(options=_options(), accept_all=False)
+    stats = RunStats()
+
+    plan = plan_page_save(
+        analysis=_analysis(),
+        spec=spec,
+        options=policy.options,
+        policy=policy,
+        ui=ui,
+        stats=stats,
+    )
+
+    assert plan is None
+    assert stats.skipped == 0
+    assert policy.stopped is True
+    assert ui.warn_messages == ["Stopped by user."]
+
+
 def test_apply_page_save_uses_client_transport_and_promotes_rules():
     state = FakeState(saved_rules=[])
     ui = FakeUI()
@@ -180,7 +222,7 @@ def test_apply_page_save_uses_client_transport_and_promotes_rules():
         used_line_rules=({"kind": "line_exact", "replacement": "axc"},),
     )
 
-    apply_page_save(
+    saved = apply_page_save(
         plan=plan,
         client=client,
         page=page,
@@ -189,7 +231,43 @@ def test_apply_page_save_uses_client_transport_and_promotes_rules():
         ui=ui,
     )
 
+    assert saved is True
     assert client.calls == [(page, PageEdit(text="axc", summary="Edited summary", minor=True))]
     assert state.saved_rules == [{"kind": "line_exact", "replacement": "axc"}]
     assert stats.saved == 1
-    assert ui.info_messages == ["[rules] Promoted new review rules into rules.json"]
+    assert ui.info_messages == [
+        "[save] Demo page: saving...",
+        "[rules] Promoted new review rules into rules.json",
+    ]
+
+
+def test_apply_page_save_reports_error_and_returns_false():
+    state = FakeState(saved_rules=[])
+    ui = FakeUI()
+    stats = RunStats()
+    page = FakePage()
+    plan = PageSavePlan(
+        title="Demo page",
+        edit=PageEdit(text="axc", summary="Edited summary", minor=True),
+        used_line_rules=({"kind": "line_exact", "replacement": "axc"},),
+    )
+
+    class FailingClient:
+        def save_page(self, page, edit: PageEdit) -> None:
+            raise RuntimeError("connection reset")
+
+    saved = apply_page_save(
+        plan=plan,
+        client=FailingClient(),
+        page=page,
+        state=state,
+        stats=stats,
+        ui=ui,
+    )
+
+    assert saved is False
+    assert state.saved_rules == []
+    assert stats.saved == 0
+    assert stats.errors == 1
+    assert ui.info_messages == ["[save] Demo page: saving..."]
+    assert ui.error_messages == ["[error] Demo page: connection reset"]

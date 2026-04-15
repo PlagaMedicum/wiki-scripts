@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 
 from biblio import bootstrap
 from biblio.bootstrap import BotRightRequiredError, normalize_bot_username
@@ -85,6 +87,11 @@ def test_create_site_bootstraps_before_import(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bootstrap, "bootstrap_pywikibot_from_env", fake_bootstrap)
     monkeypatch.setattr(bootstrap, "import_fresh_pywikibot", fake_import)
+    monkeypatch.setattr(
+        bootstrap,
+        "patch_pywikibot_request_connection_error_handling",
+        lambda: calls.append(("patch",)),
+    )
 
     pywikibot_module, site = bootstrap.create_site(spec, tmp_path / ".pywikibot")
 
@@ -93,6 +100,7 @@ def test_create_site_bootstraps_before_import(monkeypatch, tmp_path):
     assert calls == [
         ("bootstrap", tmp_path / ".pywikibot"),
         ("import", str(tmp_path / ".pywikibot")),
+        ("patch",),
         ("site", "be", "wikipedia", "User Bot"),
         ("login",),
         ("has_right", "bot"),
@@ -121,6 +129,11 @@ def test_create_site_requires_bot_right(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bootstrap, "bootstrap_pywikibot_from_env", fake_bootstrap)
     monkeypatch.setattr(bootstrap, "import_fresh_pywikibot", lambda: FakePywikibot)
+    monkeypatch.setattr(
+        bootstrap,
+        "patch_pywikibot_request_connection_error_handling",
+        lambda: None,
+    )
 
     spec = SourceSpec(
         source_dir=tmp_path / "sources" / "demo",
@@ -150,3 +163,19 @@ def test_create_site_requires_bot_right(monkeypatch, tmp_path):
         assert "High-volume (bot) access" in str(error)
     else:
         raise AssertionError("Expected create_site to require the bot right")
+
+
+def test_patch_pywikibot_request_connection_error_handling(monkeypatch):
+    fake_api_requests = types.ModuleType("pywikibot.data.api._requests")
+    fake_requests_exceptions = types.ModuleType("requests.exceptions")
+
+    class FakeRequestsConnectionError(Exception):
+        pass
+
+    fake_requests_exceptions.ConnectionError = FakeRequestsConnectionError
+    monkeypatch.setitem(sys.modules, "pywikibot.data.api._requests", fake_api_requests)
+    monkeypatch.setitem(sys.modules, "requests.exceptions", fake_requests_exceptions)
+
+    bootstrap.patch_pywikibot_request_connection_error_handling()
+
+    assert fake_api_requests.ConnectionError is FakeRequestsConnectionError

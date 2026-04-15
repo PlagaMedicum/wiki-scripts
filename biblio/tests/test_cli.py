@@ -5,7 +5,7 @@ import io
 import pytest
 from biblio.cli import main
 from biblio.models import ReplacementResult, RunStats
-from biblio.specs import discover_source_specs
+from biblio.specs import discover_source_specs, load_source_spec
 from biblio.ui import AppUI, ChecklistOption
 from rich.console import Console
 
@@ -150,6 +150,38 @@ def test_run_command_accepts_skip_review_required(monkeypatch):
     assert captured["options"].skip_review_required is True
 
 
+def test_run_command_accepts_verbose_and_configures_logging(monkeypatch):
+    captured = {}
+
+    def fake_run_sources(options, ui):
+        captured["options"] = options
+        return 0
+
+    def fake_configure_logging(*, verbose):
+        captured["verbose"] = verbose
+        return "logs/biblio.log"
+
+    monkeypatch.setattr("biblio.cli.run_sources", fake_run_sources)
+    monkeypatch.setattr("biblio.cli.configure_logging", fake_configure_logging)
+
+    exit_code = main(["run", "gvb1", "--verbose", "--no-color"])
+
+    assert exit_code == 0
+    assert captured["options"].source_ids == ("gvb1",)
+    assert captured["verbose"] is True
+
+
+def test_main_returns_130_on_keyboard_interrupt(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "biblio.cli._interactive_startup", lambda ui: (_ for _ in ()).throw(KeyboardInterrupt)
+    )
+
+    exit_code = main([])
+
+    assert exit_code == 130
+    assert "Stopped by user." in capsys.readouterr().out
+
+
 def test_run_command_rejects_all_with_explicit_sources(capsys):
     with pytest.raises(SystemExit) as excinfo:
         main(["run", "--all", "gvb1", "--no-color"])
@@ -229,6 +261,83 @@ def test_rich_diff_panel_emits_ansi_diff_colors():
     assert "\x1b[32m+new" in output
     assert "\x1b[1;36m@@ -1 +1,2 @@" in output
     assert "\x1b[1;33m213\x1b[0m" in output
+
+
+def test_unknown_variant_preview_shows_context_and_example_diff(repo_root):
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=120,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    spec = load_source_spec("gvb4", root=repo_root)
+
+    from biblio.models import VariantInfo
+
+    ui.print_unknown_variant(
+        "Тэставая старонка",
+        VariantInfo(
+            full_line="* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            review_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            normalized_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            pages="118",
+            entry="Асмолавічы",
+            context_before=("== Літаратура ==",),
+            context_after=("{{зноскі}}",),
+        ),
+        spec,
+    )
+
+    output = stream.getvalue()
+    assert "Unknown candidate variant" in output
+    assert "Context around matched line" in output
+    assert "Example diff" in output
+    assert "== Літаратура ==" in output
+    assert "▶ * Асмолавічы" in output
+    assert "{{зноскі}}" in output
+    assert "-* Асмолавічы" in output
+    assert "+{{Крыніцы/ГВБ|4-2|Асмолавічы|118}}" in output
+
+
+def test_unknown_variant_preview_emits_ansi_diff_colors(repo_root):
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=True,
+        color_system="truecolor",
+        width=120,
+        no_color=False,
+        highlight=False,
+    )
+    ui = AppUI(no_color=False, console=console)
+    spec = load_source_spec("gvb4", root=repo_root)
+
+    from biblio.models import VariantInfo
+
+    ui.print_unknown_variant(
+        "Тэставая старонка",
+        VariantInfo(
+            full_line="* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            review_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            normalized_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            pages="118",
+            entry="Асмолавічы",
+            context_before=("== Літаратура ==",),
+            context_after=("{{зноскі}}",),
+        ),
+        spec,
+    )
+
+    output = stream.getvalue()
+    assert "\x1b[" in output
+    assert "\x1b[31m-" in output
+    assert "* Асмолавічы // Гарады і вёскі Беларусі" in output
+    assert "\x1b[32m+" in output
+    assert "{{Крыніцы/ГВБ|4-2|Асмолавічы|118}}" in output
+    assert "\x1b[1;33m▶ " in output
 
 
 def test_final_summary_snapshot():
@@ -503,13 +612,32 @@ def test_prompt_page_action_shows_help_once(monkeypatch):
 
     output = stream.getvalue()
     assert output.count("Save controls") == 1
-    assert "Save this page and all remaining non-review-required pages." in output
+    assert "Save this page and all remaining safe pages." in output
     assert "Current edit summary: Summary 1" in output
     assert "Current edit summary: Summary 2" in output
     assert labels == [
-        "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
-        "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
+        "Choose page action [y=save, n=skip, a=save all safe, e=edit summary, q=quit]",
+        "Choose page action [y=save, n=skip, a=save all safe, e=edit summary, q=quit]",
     ]
+
+
+def test_prompt_page_action_explains_review_required_bulk_behavior(monkeypatch):
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=120,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    monkeypatch.setattr(ui, "prompt_choice", lambda label, **kwargs: "n")
+
+    assert ui.prompt_page_action("Summary 1", review_required=True) == "n"
+
+    output = stream.getvalue()
+    assert "Manual review is required for this change." in output
+    assert "manual-review changes will still pause" in output
 
 
 def test_prompt_review_match_action_shows_help_once(monkeypatch):

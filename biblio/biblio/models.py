@@ -180,6 +180,8 @@ class VariantInfo:
     pages: str | None = None
     entry: str | None = None
     extra_arguments: dict[str, str] = field(default_factory=dict)
+    context_before: tuple[str, ...] = ()
+    context_after: tuple[str, ...] = ()
 
 
 @dataclass

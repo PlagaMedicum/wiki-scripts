@@ -408,6 +408,177 @@ def test_run_sources_stops_after_first_bot_right_failure(monkeypatch, tmp_path):
     assert "second:" not in output
 
 
+def test_run_source_stops_after_first_save_failure(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+        def ensure_rule_saved(self, rule):
+            return False
+
+    saved_attempts = []
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self.text = f"content for {title}"
+
+        def save(self, **kwargs):
+            saved_attempts.append(self.title_value)
+            raise RuntimeError("connection reset")
+
+    class FakePywikibot:
+        Page = FakePage
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
+    monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
+    monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (2, ["One", "Two"]))
+    monkeypatch.setattr(
+        "biblio.runner.replace_text",
+        lambda *args, **kwargs: ReplacementResult(
+            text="{{Крыніцы/Тэст}}",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["line_exact"],
+            rendered_templates=["{{Крыніцы/Тэст}}"],
+            page_arguments=[],
+            entry_arguments=[],
+        ),
+    )
+    monkeypatch.setattr("biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ui, "prompt_page_action", lambda current_summary, *, review_required=False: "a"
+    )
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=2,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 1
+    assert saved_attempts == ["One"]
+    output = stream.getvalue()
+    assert "Processing page 1/2: One" in output
+    assert "Processing page 2/2: Two" not in output
+    assert "[error] One: connection reset" in output
+    assert "Stopped after save failure." in output
+
+
+def test_run_source_stops_cleanly_after_page_load_failure_post_skip(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+        def ensure_rule_saved(self, rule):
+            return False
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self._text = f"content for {title}"
+
+        @property
+        def text(self):
+            if self.title_value == "Two":
+                raise ConnectionError("connection reset")
+            return self._text
+
+    class FakePywikibot:
+        Page = FakePage
+
+    replacements = iter(
+        [
+            ReplacementResult(
+                text="{{Крыніцы/Тэст|Mismatch One}}",
+                replacements=1,
+                used_line_rules=[],
+                used_rule_names=["entry_only"],
+                rendered_templates=["{{Крыніцы/Тэст|Mismatch One}}"],
+                page_arguments=[],
+                entry_arguments=["Mismatch One"],
+                review_reasons=["Heuristic entry match."],
+                matched_review_lines=["Mismatch One // Demo encyclopedia"],
+            ),
+        ]
+    )
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
+    monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
+    monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (2, ["One", "Two"]))
+    monkeypatch.setattr("biblio.runner.replace_text", lambda *args, **kwargs: next(replacements))
+    monkeypatch.setattr("biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+    monkeypatch.setattr(ui, "prompt_review_match_action", lambda: "s")
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=2,
+            minor_threshold=1000,
+            apply=False,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=True,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 1
+    output = stream.getvalue()
+    assert "Processing page 1/2: One" in output
+    assert "[dry-run] No changes saved" in output
+    assert "Processing page 2/2: Two" in output
+    assert "[error] Two: connection reset" in output
+    assert "Stopped after page load failure." in output
+
+
 def test_multi_source_run_reuses_site_bundle_for_same_wiki(monkeypatch, tmp_path):
     class FakeState:
         base_rules = []

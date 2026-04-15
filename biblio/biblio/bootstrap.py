@@ -4,6 +4,7 @@ import importlib
 import os
 import re
 import sys
+from importlib import import_module
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -85,6 +86,13 @@ def import_fresh_pywikibot():
     return importlib.import_module("pywikibot")
 
 
+def patch_pywikibot_request_connection_error_handling() -> None:
+    """Make transport resets surface immediately instead of entering Pywikibot's retry loop."""
+    requests_exceptions = import_module("requests.exceptions")
+    api_requests = import_module("pywikibot.data.api._requests")
+    api_requests.ConnectionError = requests_exceptions.ConnectionError
+
+
 def site_has_bot_right(site) -> bool:
     has_right = getattr(site, "has_right", None)
     if callable(has_right):
@@ -118,6 +126,7 @@ def require_bot_right(site, username: str) -> None:
 def create_site(spec: SourceSpec, pywikibot_dir: Path):
     username = bootstrap_pywikibot_from_env(spec, pywikibot_dir)
     pywikibot = import_fresh_pywikibot()
+    patch_pywikibot_request_connection_error_handling()
     site = pywikibot.Site(spec.site_lang, spec.family, user=username)
     site.login()
     require_bot_right(site, username)

@@ -5,6 +5,7 @@ import sys
 
 from biblio.manage import add_source, validate_sources
 from biblio.models import RunOptions
+from biblio.observability import configure_logging
 from biblio.runner import list_sources, run_sources
 from biblio.specs import discover_source_specs
 from biblio.startup import run_startup_wizard
@@ -24,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-color",
         action="store_true",
         help="Disable Rich colors and styling while keeping the same CLI flow.",
+    )
+    common.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Write detailed runtime logs to stderr and the project-local log file.",
     )
 
     parser = argparse.ArgumentParser(
@@ -165,16 +171,23 @@ def _interactive_startup(ui: AppUI) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    log_path = configure_logging(verbose=getattr(args, "verbose", False))
     ui = AppUI(no_color=getattr(args, "no_color", False))
+    if getattr(args, "verbose", False):
+        ui.info(f"[verbose] Detailed logs: {log_path}")
 
-    if args.command is None:
-        return _interactive_startup(ui)
-    if args.command == "list":
-        return list_sources(ui)
-    if args.command == "add-source":
-        return add_source(ui)
-    if args.command == "validate":
-        return validate_sources(ui)
+    try:
+        if args.command is None:
+            return _interactive_startup(ui)
+        if args.command == "list":
+            return list_sources(ui)
+        if args.command == "add-source":
+            return add_source(ui)
+        if args.command == "validate":
+            return validate_sources(ui)
 
-    options = _build_run_options_from_args(args, parser)
-    return run_sources(options, ui)
+        options = _build_run_options_from_args(args, parser)
+        return run_sources(options, ui)
+    except KeyboardInterrupt:
+        ui.warn("Stopped by user.")
+        return 130

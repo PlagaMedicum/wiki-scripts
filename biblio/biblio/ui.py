@@ -264,8 +264,7 @@ class AppUI:
         old_text: str,
         new_text: str,
         context: int,
-        rendered_templates: list[str],
-        page_arguments: list[str],
+        highlight_terms: list[str] | None = None,
     ) -> Text:
         diff = difflib.unified_diff(
             old_text.splitlines(),
@@ -276,7 +275,7 @@ class AppUI:
             n=context,
         )
         text = Text()
-        highlight_terms = [item for item in rendered_templates + page_arguments if item]
+        highlight_terms = [item for item in (highlight_terms or []) if item]
 
         for line in diff:
             if line.startswith("@@"):
@@ -347,8 +346,12 @@ class AppUI:
             old_text=old_text,
             new_text=result.text,
             context=context,
-            rendered_templates=result.rendered_templates,
-            page_arguments=result.page_arguments,
+            highlight_terms=[
+                *result.rendered_templates,
+                *result.page_arguments,
+                *result.entry_arguments,
+                *[value for values in result.extra_argument_values.values() for value in values],
+            ],
         )
         layout = Table.grid(padding=(0, 1))
         layout.add_row(meta)
@@ -375,18 +378,42 @@ class AppUI:
     def print_used_rule(self, rule: dict) -> None:
         self.info(f"[rule] {rule.get('kind')} -> {rule.get('replacement')}")
 
-    def print_unknown_variant(self, title: str, info: VariantInfo, spec: SourceSpec) -> None:
+    def build_variant_context_text(self, info: VariantInfo) -> Text:
+        text = Text()
+        dim_style = "" if self.no_color else "dim"
+        matched_style = "" if self.no_color else "bold yellow"
+
+        for line in info.context_before:
+            text.append(Text(f"  {line}", style=dim_style))
+            text.append("\n")
+
+        matched_lines = info.full_line.splitlines() or [info.full_line]
+        for line in matched_lines:
+            text.append(Text("▶ ", style=matched_style))
+            text.append(Text(line if line else " ", style=matched_style))
+            text.append("\n")
+
+        for line in info.context_after:
+            text.append(Text(f"  {line}", style=dim_style))
+            text.append("\n")
+
+        return text
+
+    def build_unknown_variant_panel(
+        self,
+        *,
+        title: str,
+        info: VariantInfo,
+        spec: SourceSpec,
+    ) -> Panel:
+        suggested_template = spec.render_template(info.pages, info.entry, **info.extra_arguments)
         table = Table.grid(padding=(0, 1))
         table.add_column(style="" if self.no_color else "bold cyan")
         table.add_column()
         table.add_row("Page", title)
-        table.add_row("Full line", info.full_line)
         table.add_row("Review line", info.review_line)
         table.add_row("Normalized line", info.normalized_line)
-        table.add_row(
-            "Suggested template",
-            spec.render_template(info.pages, info.entry, **info.extra_arguments),
-        )
+        table.add_row("Suggested template", suggested_template)
         table.add_row("Extracted pages", info.pages or "none")
         table.add_row("Extracted entry", info.entry or "none")
         for key, value in sorted(info.extra_arguments.items()):
@@ -394,7 +421,39 @@ class AppUI:
                 f"Extracted {key.replace('_', ' ')}",
                 value or "none",
             )
-        self.print(Panel(table, title="Unknown candidate variant", border_style="yellow"))
+
+        preview_old = "\n".join([*info.context_before, info.full_line, *info.context_after])
+        preview_new = "\n".join([*info.context_before, suggested_template, *info.context_after])
+        preview_diff = self.build_diff_text(
+            old_text=preview_old,
+            new_text=preview_new,
+            context=max(len(info.context_before), len(info.context_after), 1),
+            highlight_terms=[
+                suggested_template,
+                *(item for item in [info.pages, info.entry] if item),
+                *info.extra_arguments.values(),
+            ],
+        )
+
+        body = Group(
+            table,
+            Text(""),
+            Text("Context around matched line", style="" if self.no_color else "bold cyan"),
+            self.build_variant_context_text(info),
+            Text(""),
+            Text("Example diff", style="" if self.no_color else "bold cyan"),
+            preview_diff,
+        )
+        return Panel(body, title="Unknown candidate variant", border_style="yellow")
+
+    def print_unknown_variant(self, title: str, info: VariantInfo, spec: SourceSpec) -> None:
+        self.print(
+            self.build_unknown_variant_panel(
+                title=title,
+                info=info,
+                spec=spec,
+            )
+        )
 
     def print_variant_controls(self) -> None:
         table = Table.grid(padding=(0, 1))
@@ -836,7 +895,10 @@ class AppUI:
         table.add_column()
         table.add_row("y", "Save this page.")
         table.add_row("n", "Skip this page.")
-        table.add_row("a", "Save this page and all remaining non-review-required pages.")
+        table.add_row(
+            "a",
+            "Save this page and all remaining safe pages. Review-required pages will still pause.",
+        )
         table.add_row("e", "Edit the summary for the rest of the run.")
         table.add_row("q", "Stop the run immediately.")
         self.print(Panel(table, title="Save controls", border_style="green"))
@@ -848,9 +910,12 @@ class AppUI:
                 self._shown_page_controls = True
             self.info(f"Current edit summary: {current_summary}")
             if review_required:
-                self.warn("Manual review is required for this change. Bulk apply is paused.")
+                self.warn(
+                    "Manual review is required for this change. `a` saves this page now, but later "
+                    "manual-review changes will still pause."
+                )
             return self.prompt_choice(
-                "Choose page action [y=save, n=skip, a=save all, e=edit summary, q=quit]",
+                "Choose page action [y=save, n=skip, a=save all safe, e=edit summary, q=quit]",
                 choices=["y", "n", "a", "e", "q"],
                 default="n",
             )

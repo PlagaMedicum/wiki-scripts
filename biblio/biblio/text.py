@@ -332,11 +332,16 @@ def _match_author_entry_with_page_title(
     ):
         return None
 
-    author_part = normalized_prefix[: -len(normalized_title)].rstrip(" ,;:/")
-    if not author_part or not AUTHOR_LIST_FULL_RE.fullmatch(author_part):
-        return None
+    author_part = normalized_prefix[: -len(normalized_title)].rstrip()
+    author_candidates = [
+        author_part.rstrip(" ,;:/"),
+        author_part.rstrip(" ,;:/."),
+    ]
+    for candidate in author_candidates:
+        if candidate and AUTHOR_LIST_FULL_RE.fullmatch(candidate):
+            return candidate, normalized_title
 
-    return author_part, normalized_title
+    return None
 
 
 def _parse_prefix_components(

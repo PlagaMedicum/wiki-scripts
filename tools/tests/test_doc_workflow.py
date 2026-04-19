@@ -57,6 +57,32 @@ class DocStatusTests(unittest.TestCase):
             self.assertIn("> Review: unreviewed", text)
             self.assertIn("Body.\n", text)
 
+    def test_sync_uses_prettier_docmeta_for_root_readme(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "README.md"
+            path.write_text("# Repo\n\nBody.\n", encoding="utf-8")
+            registry = self.write_registry(
+                root,
+                [
+                    {
+                        "path": "README.md",
+                        "status": "maintained",
+                        "review": ["unreviewed"],
+                        "purpose": "Repo overview.",
+                    }
+                ],
+                managed_roots=["README.md"],
+            )
+
+            changed = doc_status.sync(root, registry)
+
+            self.assertEqual(changed, ["README.md"])
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("> [!NOTE]", text)
+            self.assertIn("**Status:** `maintained`", text)
+            self.assertIn("**Review:** `unreviewed`", text)
+
     def test_lint_fails_for_untracked_managed_doc(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

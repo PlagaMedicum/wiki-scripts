@@ -1,10 +1,10 @@
 # Wiki Scripts
 
 <!-- DOCMETA:START -->
-> Status: maintained
-> Review: unreviewed
-> Purpose: Human-oriented repo overview and navigation only.
-> Source: .specify/doc-registry.json
+> [!NOTE]
+> **Status:** `maintained` | **Review:** `unreviewed`  
+> **Purpose:** Human-oriented repo overview and navigation only.  
+> **Source:** `.specify/doc-registry.json`
 <!-- DOCMETA:END -->
 
 This repository is a workspace for separate wiki tools, mainly around Belarusian Wikipedia. It is

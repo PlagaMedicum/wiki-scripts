@@ -73,6 +73,12 @@ def registry_documents(registry: dict) -> list[ManagedDoc]:
 
 
 def build_block(doc: ManagedDoc) -> str:
+    if doc.path == "README.md":
+        return build_readme_block(doc)
+    return build_standard_block(doc)
+
+
+def build_standard_block(doc: ManagedDoc) -> str:
     review = ", ".join(doc.review)
     return (
         f"{DOCMETA_START}\n"
@@ -80,6 +86,18 @@ def build_block(doc: ManagedDoc) -> str:
         f"> Review: {review}\n"
         f"> Purpose: {doc.purpose}\n"
         f"{SOURCE_LINE}\n"
+        f"{DOCMETA_END}\n"
+    )
+
+
+def build_readme_block(doc: ManagedDoc) -> str:
+    review = ", ".join(f"`{label}`" for label in doc.review)
+    return (
+        f"{DOCMETA_START}\n"
+        "> [!NOTE]\n"
+        f"> **Status:** `{doc.status}` | **Review:** {review}  \n"
+        f"> **Purpose:** {doc.purpose}  \n"
+        f"> **Source:** `.specify/doc-registry.json`\n"
         f"{DOCMETA_END}\n"
     )
 

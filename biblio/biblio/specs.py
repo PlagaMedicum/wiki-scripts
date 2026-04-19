@@ -11,6 +11,7 @@ from biblio.models import (
     CandidateSpec,
     NormalizationOptions,
     RegexRule,
+    ShortRefSpec,
     SourceSpec,
     SourceValidationIssue,
 )
@@ -22,9 +23,10 @@ BUILTIN_MACROS = {
     "WS": r"\s+",
     "OPT_WS": r"\s*",
     "SEP": r"\s*(?:[,;:/])\s*",
-    "DASH": r"\s*[—–-]\s*",
-    "OPT_DASH": r"(?:\s*[—–-]\s*)?",
-    "PAGES": r"\d+(?:\s*[—–-]\s*\d+)?(?:\s*,\s*\d+(?:\s*[—–-]\s*\d+)?)*",
+    "DASH": r"\s*(?:[—–]|-{1,2})\s*",
+    "OPT_DASH": r"(?:\s*(?:[—–]|-{1,2})\s*)?",
+    "INITIAL": r"(?:[A-ZА-ЯЁІЎ]|Дз|Дж)\.",
+    "PAGES": r"\d+(?:\s*(?:[—–]|-{1,2})\s*\d+)?(?:\s*,\s*\d+(?:\s*(?:[—–]|-{1,2})\s*\d+)?)*",
     "YEAR4": r"(?:19|20)\d{2}",
     "ISBN_TOKEN": r"ISBN\s*\d[\d-]+",
 }
@@ -38,7 +40,6 @@ DEFAULT_REJECT_PATTERNS = (r"^\s*:\s*іл",)
 
 PERSISTENT_SOURCE_FILENAMES = (
     "source.toml",
-    "README.md",
 )
 
 RUNTIME_STATE_FILENAMES = (
@@ -55,8 +56,6 @@ COMMON_FILENAME_ALIASES = {
     "reviews.json": "review_variants.json",
     "review.json": "review_variants.json",
     "ignored.json": "ignored_variants.json",
-    "readme": "README.md",
-    "readme.txt": "README.md",
 }
 
 SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -85,10 +84,17 @@ def validate_source_id(source_id: str) -> None:
 
 
 def discover_source_specs(root: Path | None = None) -> list[SourceSpec]:
+    actual_root = root or project_root()
     specs: list[SourceSpec] = []
-    for path in sorted(source_root(root).glob("*/source.toml")):
-        specs.append(load_source_spec(path.parent.name, root=root))
-    return specs
+    for path in sorted(source_root(actual_root).glob("*/source.toml")):
+        specs.append(_load_source_spec_from_dir(path.parent, actual_root))
+    hidden_alias_ids = {
+        alias
+        for spec in specs
+        for variant in spec.volume_variants
+        for alias in variant.aliases
+    }
+    return [spec for spec in specs if spec.source_id not in hidden_alias_ids]
 
 
 def validate_source_layouts(root: Path | None = None) -> list[SourceValidationIssue]:
@@ -192,7 +198,7 @@ def _require_string(data: dict, key: str, section: str) -> str:
 
 def _string_list(data: dict, key: str) -> tuple[str, ...]:
     values = data.get(key, [])
-    if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+    if not isinstance(values, (list, tuple)) or not all(isinstance(item, str) for item in values):
         raise ValueError(f"Expected a string list for {key}")
     return tuple(values)
 
@@ -316,49 +322,87 @@ def _compile_patterns(
     return tuple(compiled)
 
 
-def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
-    actual_root = root or project_root()
-    validate_source_id(source_id)
-    source_dir = source_root(actual_root) / source_id
-    path = source_dir / "source.toml"
-    if not path.exists():
-        raise FileNotFoundError(f"Unknown source '{source_id}': {path}")
+def _merge_terms(*groups: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    values: list[str] = []
+    for group in groups:
+        for value in group:
+            cleaned = value.strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                values.append(cleaned)
+    return tuple(values)
 
-    with path.open("rb") as handle:
-        data = tomllib.load(handle)
 
-    source = _require_table(data, "source")
-    search = _require_table(data, "search")
-    candidate = _require_table(data, "candidate")
-    replacement = _require_table(data, "replacement")
-    summary = _require_table(data, "summary")
-    pages = data.get("pages", {})
-    if not isinstance(pages, dict):
-        raise ValueError("Missing or invalid [pages] section")
-    normalization = data.get("normalization", {})
-    if not isinstance(normalization, dict):
-        raise ValueError("Missing or invalid [normalization] section")
+def _load_short_ref(data: dict | None, *, context: str) -> ShortRefSpec | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError(f"Missing or invalid [{context}] section")
+    return ShortRefSpec(
+        ref=_require_string(data, "ref", context),
+        year=_require_string(data, "year", context),
+    )
 
-    if _require_string(source, "id", "source") != source_id:
-        raise ValueError(f"source.id must match directory name '{source_id}'")
 
+def _merge_macros(
+    base_macros: dict[str, str],
+    overrides: dict,
+    *,
+    context: str,
+) -> dict[str, str]:
+    merged = dict(base_macros)
+    if not isinstance(overrides, dict):
+        raise ValueError(f"Missing or invalid [{context}] section")
+    for key, value in overrides.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{context}.{key} must be a non-empty string")
+        if key in BUILTIN_MACROS:
+            raise ValueError(f"{context}.{key!r} is reserved")
+        merged[key] = value
+    return merged
+
+
+def _build_source_spec(
+    *,
+    source_dir: Path,
+    source_id: str,
+    name: str,
+    site_lang: str,
+    family: str,
+    search_terms: dict,
+    candidate_terms: dict,
+    replacement: dict,
+    summary: dict,
+    pages: dict,
+    normalization: dict,
+    data: dict,
+    macros: dict[str, str],
+    short_ref: ShortRefSpec | None,
+    volume: str | None = None,
+    aliases: tuple[str, ...] = (),
+    volume_variants: tuple[SourceSpec, ...] = (),
+    compile_regex_rules: bool = True,
+) -> SourceSpec:
+    template_without_pages = _require_string(replacement, "without_pages", "replacement")
     template_with_pages = _require_string(replacement, "with_pages", "replacement")
     if template_with_pages.count("{pages}") != 1:
         raise ValueError("replacement.with_pages must contain {pages} exactly once")
-    if "{pages}" in _require_string(replacement, "without_pages", "replacement"):
+    if "{pages}" in template_without_pages:
         raise ValueError("replacement.without_pages must not contain {pages}")
 
     default_summary_format = _require_string(summary, "default_format", "summary")
     if "{template_name}" not in default_summary_format:
         raise ValueError("summary.default_format must include {template_name}")
 
-    macros = _load_macro_map(data)
     argument_extractors = _load_argument_extractors(data, macros)
     allowed_template_fields = {"entry", "pages"} | {
         extractor.name for extractor in argument_extractors
     }
+    if volume is not None or volume_variants:
+        allowed_template_fields.add("volume")
     validate_template_placeholders(
-        _require_string(replacement, "without_pages", "replacement"),
+        template_without_pages,
         allowed_template_fields,
         context="replacement.without_pages",
         disallowed_fields={"pages"},
@@ -375,10 +419,14 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
         context="summary.default_format",
         required_fields={"template_name"},
     )
-    regex_rules = _compile_regex_rules(
-        data.get("regex_rules", []),
-        macros,
-        allowed_template_fields,
+    regex_rules = (
+        _compile_regex_rules(
+            data.get("regex_rules", []),
+            macros,
+            allowed_template_fields,
+        )
+        if compile_regex_rules
+        else ()
     )
 
     alias_rules: list[AliasRule] = []
@@ -397,14 +445,14 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
             )
         )
 
-    insource_terms = _string_list(search, "insource_terms")
-    isbns = _string_list(search, "isbns")
-    keywords = _string_list(search, "keywords")
+    insource_terms = _string_list(search_terms, "insource_terms")
+    isbns = _string_list(search_terms, "isbns")
+    keywords = _string_list(search_terms, "keywords")
     if not (insource_terms or isbns or keywords):
         raise ValueError("[search] must define at least one term")
 
-    must_contain_all = _string_list(candidate, "must_contain_all")
-    must_contain_any = _string_list(candidate, "must_contain_any")
+    must_contain_all = _string_list(candidate_terms, "must_contain_all")
+    must_contain_any = _string_list(candidate_terms, "must_contain_any")
     if not (must_contain_all or must_contain_any):
         raise ValueError("[candidate] must define at least one term")
 
@@ -440,9 +488,9 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
     return SourceSpec(
         source_dir=source_dir,
         source_id=source_id,
-        name=_require_string(source, "name", "source"),
-        site_lang=_require_string(source, "site_lang", "source"),
-        family=_require_string(source, "family", "source"),
+        name=name,
+        site_lang=site_lang,
+        family=family,
         insource_terms=insource_terms,
         isbns=isbns,
         keywords=keywords,
@@ -451,11 +499,7 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
             must_contain_any=must_contain_any,
         ),
         template_name=_require_string(replacement, "template_name", "replacement"),
-        template_without_pages=_require_string(
-            replacement,
-            "without_pages",
-            "replacement",
-        ),
+        template_without_pages=template_without_pages,
         template_with_pages=template_with_pages,
         default_summary_format=default_summary_format,
         page_patterns=_compile_patterns(
@@ -472,4 +516,134 @@ def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
         argument_extractors=argument_extractors,
         alias_rules=tuple(alias_rules),
         normalization=normalization_options,
+        short_ref=short_ref,
+        volume=volume,
+        aliases=aliases,
+        volume_variants=volume_variants,
     )
+
+
+def _load_source_spec_from_dir(source_dir: Path, actual_root: Path) -> SourceSpec:
+    source_id = source_dir.name
+    path = source_dir / "source.toml"
+    with path.open("rb") as handle:
+        data = tomllib.load(handle)
+
+    source = _require_table(data, "source")
+    search = _require_table(data, "search")
+    candidate = _require_table(data, "candidate")
+    replacement = _require_table(data, "replacement")
+    summary = _require_table(data, "summary")
+    short_ref = data.get("short_ref")
+    pages = data.get("pages", {})
+    if not isinstance(pages, dict):
+        raise ValueError("Missing or invalid [pages] section")
+    normalization = data.get("normalization", {})
+    if not isinstance(normalization, dict):
+        raise ValueError("Missing or invalid [normalization] section")
+    volumes = data.get("volumes", [])
+    if not isinstance(volumes, list):
+        raise ValueError("Missing or invalid [[volumes]] section")
+
+    if _require_string(source, "id", "source") != source_id:
+        raise ValueError(f"source.id must match directory name '{source_id}'")
+
+    base_name = _require_string(source, "name", "source")
+    site_lang = _require_string(source, "site_lang", "source")
+    family = _require_string(source, "family", "source")
+    base_macros = _load_macro_map(data)
+    base_short_ref = _load_short_ref(short_ref, context="short_ref")
+
+    volume_variants: list[SourceSpec] = []
+    if volumes:
+        for index, volume_data in enumerate(volumes, start=1):
+            if not isinstance(volume_data, dict):
+                raise ValueError(f"volumes[{index}] must be a table")
+            context = f"volumes[{index}]"
+            volume_value = _require_string(volume_data, "volume", context)
+            volume_name = _require_string(volume_data, "name", context)
+            aliases = _string_list(volume_data, "aliases")
+            for alias in aliases:
+                validate_source_id(alias)
+            volume_search = {
+                "insource_terms": _merge_terms(
+                    _string_list(search, "insource_terms"),
+                    _string_list(volume_data, "insource_terms"),
+                ),
+                "isbns": _merge_terms(
+                    _string_list(search, "isbns"),
+                    _string_list(volume_data, "isbns"),
+                ),
+                "keywords": _merge_terms(
+                    _string_list(search, "keywords"),
+                    _string_list(volume_data, "keywords"),
+                ),
+            }
+            volume_candidate = {
+                "must_contain_all": _merge_terms(
+                    _string_list(candidate, "must_contain_all"),
+                    _string_list(volume_data, "must_contain_all"),
+                ),
+                "must_contain_any": _merge_terms(
+                    _string_list(candidate, "must_contain_any"),
+                    _string_list(volume_data, "must_contain_any"),
+                ),
+            }
+            volume_macros = _merge_macros(
+                base_macros,
+                volume_data.get("macros", {}),
+                context=f"{context}.macros",
+            )
+            volume_short_ref = _load_short_ref(
+                volume_data.get("short_ref"),
+                context=f"{context}.short_ref",
+            ) or base_short_ref
+            volume_variants.append(
+                _build_source_spec(
+                    source_dir=source_dir,
+                    source_id=source_id,
+                    name=volume_name,
+                    site_lang=site_lang,
+                    family=family,
+                    search_terms=volume_search,
+                    candidate_terms=volume_candidate,
+                    replacement=replacement,
+                    summary=summary,
+                    pages=pages,
+                    normalization=normalization,
+                    data=data,
+                    macros=volume_macros,
+                    short_ref=volume_short_ref,
+                    volume=volume_value,
+                    aliases=aliases,
+                )
+            )
+
+    return _build_source_spec(
+        source_dir=source_dir,
+        source_id=source_id,
+        name=base_name,
+        site_lang=site_lang,
+        family=family,
+        search_terms=search,
+        candidate_terms=candidate,
+        replacement=replacement,
+        summary=summary,
+        pages=pages,
+        normalization=normalization,
+        data=data,
+        macros=base_macros,
+        short_ref=base_short_ref,
+        volume_variants=tuple(volume_variants),
+        compile_regex_rules=not volume_variants,
+    )
+
+
+def load_source_spec(source_id: str, root: Path | None = None) -> SourceSpec:
+    actual_root = root or project_root()
+    validate_source_id(source_id)
+    source_dir = source_root(actual_root) / source_id
+    path = source_dir / "source.toml"
+    if not path.exists():
+        raise FileNotFoundError(f"Unknown source '{source_id}': {path}")
+    return _load_source_spec_from_dir(source_dir, actual_root)

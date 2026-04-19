@@ -18,6 +18,7 @@ class FakeState:
         self.active_rules = []
         self.review_variants: list[str] = []
         self.ignored_hashes: set[str] = set()
+        self.exact_rules: list[tuple[str, str]] = []
 
     @property
     def review_keys(self) -> set[str]:
@@ -35,10 +36,18 @@ class FakeState:
         self.ignored_hashes.add(hashed)
         return True
 
+    def add_exact_rule(self, review_line: str, replacement: str) -> bool:
+        rule = (review_line, replacement)
+        if rule in self.exact_rules:
+            return False
+        self.exact_rules.append(rule)
+        return True
+
 
 class FakeUI:
-    def __init__(self, action: str) -> None:
+    def __init__(self, action: str, template_text: str = "{{Крыніцы/Тэст}}") -> None:
         self.action = action
+        self.template_text = template_text
         self.messages: list[str] = []
 
     def print_unknown_variant(self, title: str, info, spec) -> None:
@@ -47,7 +56,14 @@ class FakeUI:
     def prompt_variant_action(self) -> str:
         return self.action
 
+    def prompt_template_text(self, default_template: str) -> str:
+        self.messages.append(f"template-default:{default_template}")
+        return self.template_text
+
     def info(self, message: str) -> None:
+        self.messages.append(message)
+
+    def warn(self, message: str) -> None:
         self.messages.append(message)
 
 
@@ -168,4 +184,54 @@ def test_learn_unknown_variants_reanalyzes_after_review_choice(tmp_path):
 
     assert state.review_variants == ["Old text"]
     assert stats.learned == 1
+    assert updated.has_changes
+
+
+def test_learn_unknown_variants_can_store_manual_exact_rule(tmp_path):
+    spec = _spec(tmp_path)
+    state = FakeState()
+    ui = FakeUI(action="e", template_text="{{Крыніцы/Тэст||42}}")
+    stats = SimpleNamespace(learned=0, ignored=0)
+    deps = _deps(
+        replace_results=[
+            ReplacementResult(
+                text="Old text",
+                replacements=0,
+                used_line_rules=[],
+                page_arguments=[],
+                entry_arguments=[],
+            ),
+            ReplacementResult(
+                text="{{Крыніцы/Тэст||42}}",
+                replacements=1,
+                used_line_rules=[],
+                used_rule_names=["line_exact"],
+                rendered_templates=["{{Крыніцы/Тэст||42}}"],
+                page_arguments=["42"],
+                entry_arguments=[],
+            ),
+        ],
+        infos=[
+            VariantInfo(
+                full_line="Old text",
+                review_line="Old text",
+                normalized_line="Old text",
+                pages="42",
+            )
+        ],
+    )
+
+    initial = analyze_page("Demo", "Old text", spec=spec, state=state, deps=deps)
+    updated = learn_unknown_variants(
+        analysis=initial,
+        spec=spec,
+        state=state,
+        ui=ui,
+        stats=stats,
+        deps=deps,
+    )
+
+    assert state.exact_rules == [("Old text", "{{Крыніцы/Тэст||42}}")]
+    assert stats.learned == 1
+    assert "[rules] Added exact line rule to rules.json" in ui.messages
     assert updated.has_changes

@@ -7,6 +7,7 @@ from biblio.text import (
     extract_entry_arg,
     extract_pages_arg,
     extract_template_arguments,
+    has_suspicious_page_value,
     normalize_biblio_wikitext,
     normalize_review_line,
     split_ref_aware_segments,
@@ -78,6 +79,18 @@ def test_extract_pages_arg_from_template_param_for_gvb2(repo_root):
         "isbn = 985-11-0330-6}}"
     )
     assert extract_pages_arg(line, gvb2_spec) == "67—68"
+
+
+def test_extract_pages_arg_rejects_slash_separated_template_param(repo_root):
+    spec = load_source_spec("belen13", root=repo_root)
+    line = (
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т. 13: Праміле — Рэлаксін|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2001|"
+        "том=13|старонкі=4/4|старонак=576|isbn=985-11-0216-4}}"
+    )
+
+    assert extract_pages_arg(line, spec) is None
+    assert has_suspicious_page_value(line, spec) is True
 
 
 def test_extract_entry_arg_from_list_prefix(repo_root):
@@ -175,6 +188,17 @@ def test_extract_entry_arg_from_template_title_prefix_for_belen13(repo_root):
     assert extract_pages_arg(line, spec) == "202"
 
 
+def test_extract_pages_arg_treats_double_hyphen_as_dash_equivalent(repo_root):
+    spec = load_source_spec("belen16", root=repo_root)
+    line = (
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.16: Трыпалі -- Хвіліна|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2003|"
+        "том=16|старонкі=414--415|старонак=576|isbn=985-11-0263-6}}"
+    )
+
+    assert extract_pages_arg(line, spec) == "414—415"
+
+
 def test_extract_list_style_arguments_for_belen10(repo_root):
     spec = load_source_spec("belen10", root=repo_root)
     line = (
@@ -247,6 +271,22 @@ def test_extract_multi_author_prefix_before_template_for_belen15(repo_root):
     assert extract_pages_arg(line, spec) == "324"
     assert extract_template_arguments(line, spec) == {
         "author": "Вештарт І. Ф., Цярохін С. Ф.",
+    }
+
+
+def test_extract_author_prefix_with_digraph_initial_before_template_for_belen15(repo_root):
+    spec = load_source_spec("belen15", root=repo_root)
+    line = (
+        "* 'Караў У. Дз.' Талстой Дзмітрый Андрэевіч // "
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.15: Следавікі — Трыо|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2002|"
+        "том=15|старонкі=406|старонак=552|isbn=985-11-0251-2 (Т. 15)|тыраж=10&nbsp;000}}"
+    )
+
+    assert extract_entry_arg(line, spec) == "Талстой Дзмітрый Андрэевіч"
+    assert extract_pages_arg(line, spec) == "406"
+    assert extract_template_arguments(line, spec) == {
+        "author": "Караў У. Дз.",
     }
 
 

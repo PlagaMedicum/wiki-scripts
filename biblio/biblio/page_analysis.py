@@ -12,7 +12,11 @@ class VariantLearningUI(Protocol):
 
     def prompt_variant_action(self) -> str: ...
 
+    def prompt_template_text(self, default_template: str) -> str: ...
+
     def info(self, message: str) -> None: ...
+
+    def warn(self, message: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,19 @@ def learn_unknown_variants(
             if state.add_review_variant(info.review_line):
                 stats.learned += 1
                 ui.info("[review] Added candidate to review_variants.json")
+            break
+        if choice == "e":
+            replacement = ui.prompt_template_text(
+                spec.render_template(info.pages, info.entry, **info.extra_arguments)
+            )
+            if not replacement.strip():
+                ui.warn("[edit] Empty replacement ignored.")
+                continue
+            if state.add_exact_rule(info.review_line, replacement):
+                stats.learned += 1
+                ui.info("[rules] Added exact line rule to rules.json")
+            else:
+                ui.info("[rules] Exact line rule already exists in rules.json")
             break
         if choice == "i":
             if state.add_ignored_hash(hashed):

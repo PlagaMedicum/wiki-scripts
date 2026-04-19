@@ -225,6 +225,49 @@ def test_replace_line_exact_rule_uses_entry_and_pages_from_current_line(repo_roo
     assert result.entry_arguments == ["Асмолавічы"]
 
 
+def test_replace_belen_line_exact_rule_updates_matching_sfn_and_requires_manual_review(project_root):
+    spec = load_source_spec("belen5", root=project_root)
+    body = (
+        "{{кніга|аўтар = Мушынскі М.|частка = Гарэцкі Максім Іванавіч|"
+        "загаловак = Беларуская энцыклапедыя: У 18 т. Т. 5: Гальцы — Дагон|"
+        "адказны = Рэдкал.: Г. П. Пашкоў і інш.|месца = Мн.|выдавецтва = БелЭн.|"
+        "год = 1997|старонкі = 81|старонак = 576 с.: іл.|"
+        "isbn = 985-11-0090-0 (т. 5), ISBN 985-11-0035-8|тыраж = 10 000|"
+        "ref= Мушынскі М.}}"
+    )
+    text = (
+        "{{Sfn|Мушынскі М.|1997|с=81}}\n"
+        "* "
+        + body
+        + "\n"
+        "{{Sfn|Іншы аўтар|1997|с=12}}"
+    )
+
+    result = replace_text(
+        text,
+        spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": make_review_key(body, spec),
+                "replacement": "{{Крыніцы/БелЭн|5}}",
+                "enabled": True,
+            }
+        ],
+    )
+
+    assert result.replacements == 2
+    assert result.text == (
+        "{{Sfn|БелЭн|1997|с=81}}\n"
+        "* {{Крыніцы/БелЭн|5|Гарэцкі Максім Іванавіч|Мушынскі М.|81}}\n"
+        "{{Sfn|Іншы аўтар|1997|с=12}}"
+    )
+    assert "sfn_short_ref" in result.used_rule_names
+    assert result.review_reasons == [
+        'Matching {{Sfn}} references were retargeted from ref "Мушынскі М." to "БелЭн" for year 1997; confirm manually.'
+    ]
+
+
 def test_extract_unknown_variant_template_with_url_keeps_pages_and_empty_entry(repo_root):
     spec = load_source_spec("gvb5", root=repo_root)
     text = (
@@ -258,8 +301,11 @@ def test_extract_unknown_variant_info_keeps_surrounding_context(repo_root):
     infos = extract_unknown_variant_infos(text, spec)
 
     assert len(infos) == 1
-    assert infos[0].context_before == ("== Літаратура ==",)
-    assert infos[0].context_after == ("{{зноскі}}",)
+    assert infos[0].source_excerpt == text
+    assert (
+        infos[0].source_excerpt[infos[0].excerpt_match_start : infos[0].excerpt_match_end]
+        == infos[0].full_line
+    )
 
 
 def test_replace_line_exact_rule_keeps_pages_and_empty_entry_for_template_without_part(repo_root):
@@ -404,6 +450,15 @@ def test_extract_unknown_variants_uses_ref_body_not_whole_line(tmp_path):
     assert infos[0].full_line == "{{кніга|загаловак=Гарады і вёскі Беларусі|isbn=985-11-0330-6}}"
     assert "<ref" not in infos[0].review_line
     assert "Ручаёўка" not in infos[0].review_line
+    assert infos[0].source_excerpt == (
+        'Ручаёўка<ref name="энцык">'
+        "{{кніга|загаловак=Гарады і вёскі Беларусі|isbn=985-11-0330-6}}"
+        "</ref> is a village."
+    )
+    assert (
+        infos[0].source_excerpt[infos[0].excerpt_match_start : infos[0].excerpt_match_end]
+        == infos[0].full_line
+    )
 
 
 def test_extract_unknown_variants_ignores_self_closing_refs_before_target_ref(tmp_path):
@@ -699,6 +754,25 @@ def test_extract_unknown_belen16_variant_separates_author_entry_and_responsible(
     )
 
 
+def test_replace_belen16_template_citation_treats_double_hyphen_as_dash_equivalent(repo_root):
+    spec = load_source_spec("belen16", root=repo_root)
+    text = (
+        "* Фірдаўсі // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.16: Трыпалі -- Хвіліна|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2003|"
+        "том=16|старонкі=414--415|старонак=576|isbn=985-11-0263-6 (т. 16)|тыраж=10&nbsp;000}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/БелЭн|16|Фірдаўсі||414—415}}"
+    assert result.page_arguments == ["414—415"]
+    assert result.entry_arguments == ["Фірдаўсі"]
+    assert result.review_reasons == [
+        "Entry or author inferred from bibliography prefix before template citation; confirm manually."
+    ]
+
+
 def test_extract_unknown_belen17_variant_strips_author_from_entry(repo_root):
     spec = load_source_spec("belen17", root=repo_root)
     text = (
@@ -736,6 +810,53 @@ def test_belen15_template_prefix_with_author_list_requires_review(repo_root):
     assert result.review_reasons == [
         "Entry or author inferred from bibliography prefix before template citation; confirm manually."
     ]
+
+
+def test_replace_belen15_template_prefix_with_digraph_initial_author(repo_root):
+    spec = load_source_spec("belen15", root=repo_root)
+    text = (
+        "* 'Караў У. Дз.' Талстой Дзмітрый Андрэевіч // "
+        "{{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. Т.15: Следавікі — Трыо|"
+        "адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|выдавецтва=БелЭн|год=2002|"
+        "том=15|старонкі=406|старонак=552|isbn=985-11-0251-2 (Т. 15)|тыраж=10&nbsp;000}}"
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert result.text == "* {{Крыніцы/БелЭн|15|Талстой Дзмітрый Андрэевіч|Караў У. Дз.|406}}"
+    assert result.entry_arguments == ["Талстой Дзмітрый Андрэевіч"]
+    assert result.page_arguments == ["406"]
+    assert result.extra_argument_values == {
+        "author": ["Караў У. Дз."],
+    }
+    assert result.review_reasons == [
+        "Entry or author inferred from bibliography prefix before template citation; confirm manually."
+    ]
+
+
+def test_replace_belen15_bibliography_line_with_digraph_initial_author_and_responsible(repo_root):
+    spec = load_source_spec("belen15", root=repo_root)
+    text = (
+        "* Караў У. Дз. Талстой Дзмітрый Андрэевіч / У. Дз. Караў // "
+        "Беларуская энцыклапедыя: У 18 т. Т. 15: Следавікі — Трыо / "
+        "Рэдкал.: Г. П. Пашкоў і інш. — Мн. : БелЭн, 2002. — Т. 15. — С. 406. "
+        "— 552 с. — 10 000 экз. — ISBN 985-11-0035-8. — ISBN 985-11-0251-2 (т. 15)."
+    )
+
+    result = replace_text(text, spec, [])
+
+    assert result.replacements == 1
+    assert (
+        result.text
+        == "* {{Крыніцы/БелЭн|15|Талстой Дзмітрый Андрэевіч|Караў У. Дз.|406|У. Дз. Караў}}"
+    )
+    assert result.entry_arguments == ["Талстой Дзмітрый Андрэевіч"]
+    assert result.page_arguments == ["406"]
+    assert result.extra_argument_values == {
+        "author": ["Караў У. Дз."],
+        "responsible": ["У. Дз. Караў"],
+    }
 
 
 def test_replace_belen8_candidate_with_page_title_matched_entry(repo_root):
@@ -784,6 +905,53 @@ def test_replace_belen1_template_prefix_uses_page_title_to_split_author(repo_roo
         'Entry differs from page title: "А. М. Булыка. Апостраф" vs "Апостраф".'
         not in result.review_reasons
     )
+
+
+def test_replace_belen13_candidate_with_slash_pages_stays_for_manual_fix(repo_root):
+    spec = load_source_spec("belen13", root=repo_root)
+    text = (
+        "* 'Семяненя І. М.' Рыбафлавін // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. "
+        "Т. 13: Праміле — Рэлаксін|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=2001|том=13|старонкі=4/4|старонак=576|isbn=985-11-0216-4}}"
+    )
+
+    result = replace_text(text, spec, [], page_title="Рыбафлавін")
+    infos = extract_unknown_variant_infos(text, spec, page_title="Рыбафлавін")
+
+    assert result.replacements == 0
+    assert result.text == text
+    assert len(infos) == 1
+    assert infos[0].pages is None
+    assert infos[0].entry == "Рыбафлавін"
+    assert infos[0].extra_arguments == {"author": "Семяненя І. М."}
+
+
+def test_line_exact_rule_does_not_auto_replace_suspicious_page_value(repo_root):
+    spec = load_source_spec("belen13", root=repo_root)
+    text = (
+        "* 'Семяненя І. М.' Рыбафлавін // {{кніга|загаловак=Беларуская энцыклапедыя: У 18 т. "
+        "Т. 13: Праміле — Рэлаксін|адказны=Рэдкал.: Г. П. Пашкоў і інш|месца=Мн.|"
+        "выдавецтва=БелЭн|год=2001|том=13|старонкі=4/4|старонак=576|isbn=985-11-0216-4}}"
+    )
+    normalized = make_review_key(text, spec)
+
+    result = replace_text(
+        text,
+        spec,
+        [
+            {
+                "kind": "line_exact",
+                "match": normalized,
+                "replacement": "{{Крыніцы/БелЭн|13|Рыбафлавін|Семяненя І. М.|4}}",
+                "enabled": True,
+                "_runtime_source": "review_variants.json",
+            }
+        ],
+        page_title="Рыбафлавін",
+    )
+
+    assert result.replacements == 0
+    assert result.text == text
 
 
 def test_review_variants_promote_to_active_rules(tmp_path, repo_root):

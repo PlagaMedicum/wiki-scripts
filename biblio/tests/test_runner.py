@@ -215,7 +215,7 @@ def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
     )
 
     assert exit_code == 0
-    assert "Processing page 1/1: Test page" in stream.getvalue()
+    assert "[queue] 1/1: Test page" in stream.getvalue()
 
 
 def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_path):
@@ -359,6 +359,66 @@ def test_run_sources_reports_missing_bot_right_cleanly(monkeypatch, tmp_path):
     assert "High-volume (bot) access" in output
 
 
+def test_run_sources_expands_merged_source_into_volume_variants(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+    class FakeSite:
+        pass
+
+    base = _spec(tmp_path)
+    volume_one = replace(base, source_id="belen", name="Т. 1", volume="1")
+    volume_two = replace(base, source_id="belen", name="Т. 2", volume="2")
+    merged = replace(
+        base,
+        source_id="belen",
+        name="Беларуская энцыклапедыя",
+        volume_variants=(volume_one, volume_two),
+    )
+    seen_queries = []
+
+    monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: merged)
+    monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr("biblio.runner.create_site", lambda *args, **kwargs: (object, FakeSite()))
+    monkeypatch.setattr(
+        "biblio.runner.build_search_query",
+        lambda spec: seen_queries.append(spec.volume or "") or f"query-{spec.volume}",
+    )
+    monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (0, []))
+    monkeypatch.setattr("biblio.runner.replace_text", lambda *args, **kwargs: None)
+    monkeypatch.setattr("biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    exit_code = run_sources(
+        RunOptions(
+            source_ids=("belen",),
+            query=None,
+            limit=1,
+            minor_threshold=1000,
+            apply=False,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 0
+    assert seen_queries == ["1", "2"]
+
+
 def test_run_sources_stops_after_first_bot_right_failure(monkeypatch, tmp_path):
     spec = _spec(tmp_path)
     stream = io.StringIO()
@@ -402,13 +462,13 @@ def test_run_sources_stops_after_first_bot_right_failure(monkeypatch, tmp_path):
     )
 
     assert exit_code == 1
-    assert seen == ["first"]
+    assert seen == ["first", "second"]
     output = stream.getvalue()
     assert "first: Authenticated account 'User Bot' lacks the local wiki `bot` right" in output
     assert "second:" not in output
 
 
-def test_run_source_stops_after_first_save_failure(monkeypatch, tmp_path):
+def test_run_source_stops_after_first_non_retryable_save_failure(monkeypatch, tmp_path):
     class FakeState:
         base_rules = []
         review_variants = []
@@ -486,10 +546,97 @@ def test_run_source_stops_after_first_save_failure(monkeypatch, tmp_path):
     assert exit_code == 1
     assert saved_attempts == ["One"]
     output = stream.getvalue()
-    assert "Processing page 1/2: One" in output
-    assert "Processing page 2/2: Two" not in output
+    assert "[queue] 1/2: One" in output
+    assert "[queue] 2/2: Two" not in output
     assert "[error] One: connection reset" in output
     assert "Stopped after save failure." in output
+
+
+def test_run_source_continues_after_retryable_save_failure(monkeypatch, tmp_path):
+    class FakeState:
+        base_rules = []
+        review_variants = []
+        active_rules = []
+        ignored_hashes = set()
+
+        def ensure_rule_saved(self, rule):
+            return False
+
+    saved_attempts = []
+
+    class FakeSite:
+        pass
+
+    class FakePage:
+        def __init__(self, site, title):
+            self.site = site
+            self.title_value = title
+            self.text = f"content for {title}"
+
+        def save(self, **kwargs):
+            saved_attempts.append(self.title_value)
+            if self.title_value == "One":
+                raise ConnectionError("connection reset")
+
+    class FakePywikibot:
+        Page = FakePage
+
+    stream = io.StringIO()
+    ui = AppUI(
+        no_color=True,
+        console=Console(file=stream, force_terminal=False, no_color=True, highlight=False),
+    )
+
+    monkeypatch.setattr("biblio.runner.load_source_spec", lambda *args, **kwargs: _spec(tmp_path))
+    monkeypatch.setattr("biblio.runner.load_source_state", lambda *args, **kwargs: FakeState())
+    monkeypatch.setattr(
+        "biblio.runner.create_site", lambda *args, **kwargs: (FakePywikibot, FakeSite())
+    )
+    monkeypatch.setattr("biblio.runner._load_titles", lambda *args, **kwargs: (2, ["One", "Two"]))
+    monkeypatch.setattr(
+        "biblio.runner.replace_text",
+        lambda *args, **kwargs: ReplacementResult(
+            text="{{Крыніцы/Тэст}}",
+            replacements=1,
+            used_line_rules=[],
+            used_rule_names=["line_exact"],
+            rendered_templates=["{{Крыніцы/Тэст}}"],
+            page_arguments=[],
+            entry_arguments=[],
+        ),
+    )
+    monkeypatch.setattr("biblio.runner.extract_unknown_variant_infos", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ui, "prompt_page_action", lambda current_summary, *, review_required=False: "a"
+    )
+
+    exit_code = run_source(
+        RunOptions(
+            source_ids=("demo",),
+            query=None,
+            limit=2,
+            minor_threshold=1000,
+            apply=True,
+            assume_yes=False,
+            skip_review_required=False,
+            summary=None,
+            context=3,
+            learn_variants=False,
+            show_candidates=False,
+        ),
+        ui,
+        root=tmp_path,
+    )
+
+    assert exit_code == 1
+    assert saved_attempts == ["One", "One", "One", "One", "Two"]
+    output = stream.getvalue()
+    assert "[queue] 1/2: One" in output
+    assert "[failed] One: save failed after retries (connection reset)" in output
+    assert "[queue] 2/2: Two" in output
+    assert "[saved] Two: edit published in " in output
+    assert "Failed" in output
+    assert "One" in output
 
 
 def test_run_source_stops_cleanly_after_page_load_failure_post_skip(monkeypatch, tmp_path):
@@ -572,11 +719,10 @@ def test_run_source_stops_cleanly_after_page_load_failure_post_skip(monkeypatch,
 
     assert exit_code == 1
     output = stream.getvalue()
-    assert "Processing page 1/2: One" in output
+    assert "[queue] 1/2: One" in output
     assert "[dry-run] No changes saved" in output
-    assert "Processing page 2/2: Two" in output
-    assert "[error] Two: connection reset" in output
-    assert "Stopped after page load failure." in output
+    assert "[queue] 2/2: Two" in output
+    assert "[failed] Two: page load failed after retries (connection reset)" in output
 
 
 def test_multi_source_run_reuses_site_bundle_for_same_wiki(monkeypatch, tmp_path):
@@ -752,8 +898,8 @@ def test_accept_all_still_prompts_review_required_matches(monkeypatch, tmp_path)
     assert exit_code == 0
     assert prompts == [True, True]
     assert saved == ["One", "Two"]
-    assert "Processing page 1/2: One" in stream.getvalue()
-    assert "Processing page 2/2: Two" in stream.getvalue()
+    assert "[queue] 1/2: One" in stream.getvalue()
+    assert "[queue] 2/2: Two" in stream.getvalue()
 
 
 def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypatch, tmp_path):
@@ -1010,7 +1156,10 @@ def test_skip_review_required_avoids_prompt_and_save(monkeypatch, tmp_path):
     assert exit_code == 0
     assert prompted == []
     assert saved == []
-    assert "[review-skip] Heuristic entry match." in stream.getvalue()
+    assert (
+        "[skip] One: review required; skipped in bulk mode. Heuristic entry match."
+        in stream.getvalue()
+    )
 
 
 def test_learned_exact_rule_no_longer_requires_title_review(monkeypatch, tmp_path):

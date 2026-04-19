@@ -104,6 +104,20 @@ def make_line_exact_rule(
     }
 
 
+def make_explicit_line_exact_rule(
+    spec: SourceSpec,
+    match_text: str,
+    replacement: str,
+) -> dict:
+    return {
+        "kind": "line_exact",
+        "match": make_review_key(match_text, spec),
+        "replacement": replacement.strip(),
+        "enabled": True,
+        "_runtime_source": "rules.json",
+    }
+
+
 def make_rule_key(rule: dict, spec: SourceSpec) -> tuple[str, str, str]:
     return (
         str(rule.get("kind", "")),
@@ -187,6 +201,11 @@ class SourceState:
         self.ignored_hashes.add(value)
         save_json_list(self.spec.ignored_path, sorted(self.ignored_hashes))
         return True
+
+    def add_exact_rule(self, match_text: str, replacement: str) -> bool:
+        return self.ensure_rule_saved(
+            make_explicit_line_exact_rule(self.spec, match_text, replacement)
+        )
 
     def ensure_rule_saved(self, rule: dict) -> bool:
         key = make_rule_key(rule, self.spec)

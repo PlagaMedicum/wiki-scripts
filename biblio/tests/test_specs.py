@@ -40,9 +40,12 @@ def test_load_gvb1_spec(repo_root):
 
 
 def test_load_belen10_spec(repo_root):
-    spec = load_source_spec("belen10", root=repo_root)
+    merged = load_source_spec("belen", root=repo_root)
+    spec = next(variant for variant in merged.operational_specs if variant.volume == "10")
 
-    assert spec.source_id == "belen10"
+    assert merged.source_id == "belen"
+    assert len(merged.volume_variants) == 10
+    assert spec.source_id == "belen"
     assert spec.template_name == "Крыніцы/БелЭн"
     assert spec.render_template(entry="Маркава") == "{{Крыніцы/БелЭн|10|Маркава}}"
     assert (
@@ -63,10 +66,18 @@ def test_load_belen10_spec(repo_root):
         == "{{Крыніцы/БелЭн|10|Маркава|Шаблюк В. У.|114|В. У. Шаблюк}}"
     )
     assert {extractor.name for extractor in spec.argument_extractors} == {"author", "responsible"}
+    assert spec.short_ref is not None
+    assert spec.short_ref.ref == "БелЭн"
+    assert spec.short_ref.year == "2000"
+    assert build_search_query(spec) == (
+        'insource:"Беларуская энцыклапедыя" insource:"Т. 10: Малайзія — Мугаджары" '
+        'insource:"985-11-0169-9"'
+    )
 
 
 def test_belen1_entry_only_rules_require_review(repo_root):
-    spec = load_source_spec("belen1", root=repo_root)
+    merged = load_source_spec("belen", root=repo_root)
+    spec = next(variant for variant in merged.operational_specs if variant.volume == "1")
     flagged = {
         rule.name: rule.review_required
         for rule in spec.regex_rules
@@ -87,8 +98,9 @@ def test_build_query_uses_all_search_terms(gvb_spec):
 
 def test_discover_source_specs(repo_root):
     ids = [spec.source_id for spec in discover_source_specs(root=repo_root)]
-    assert "belen1" in ids
-    assert "belen18-2" in ids
+    assert "belen" in ids
+    assert "belen1" not in ids
+    assert "belen18-2" not in ids
     assert "gvb1" in ids
     assert "gvb20" in ids
     assert "gvb" not in ids

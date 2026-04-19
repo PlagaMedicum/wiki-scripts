@@ -5,16 +5,21 @@ import re
 from biblio.models import ReplacementResult, SourceSpec, VariantInfo
 from biblio.state import variant_hash
 from biblio.text import (
+    build_match_excerpt,
     coalesce_entry_arg,
     extract_entry_arg,
     extract_pages_arg,
     extract_prefix_components,
     extract_template_arguments,
+    extract_template_param_value,
+    has_suspicious_page_value,
+    iter_ref_aware_segments,
     make_review_key,
     normalize_argument_value,
     normalize_biblio_wikitext,
     normalize_pages_arg,
     normalize_review_line,
+    normalize_whitespace,
     normalized_unit_variants,
     split_candidate_units,
     split_ref_aware_segments,
@@ -24,7 +29,152 @@ from biblio.utils import substitute_tokens
 PREFIX_TEMPLATE_REVIEW_REASON = (
     "Entry or author inferred from bibliography prefix before template citation; confirm manually."
 )
-UNKNOWN_VARIANT_CONTEXT_LINES = 2
+UNKNOWN_VARIANT_CONTEXT_LINES = 1
+SFN_TEMPLATE_START_RE = re.compile(r"\{\{\s*(?P<name>sfn)\b", re.IGNORECASE | re.UNICODE)
+SHORT_REF_REVIEW_REASON_TEMPLATE = (
+    'Matching {{{{Sfn}}}} references were retargeted from ref "{old_ref}" to "{new_ref}" '
+    "for year {year}; confirm manually."
+)
+
+
+def _normalize_short_ref_token(value: str) -> str:
+    return normalize_whitespace(value).casefold()
+
+
+def _extract_short_ref_alias(text: str, spec: SourceSpec) -> str | None:
+    return extract_template_param_value(
+        text,
+        spec,
+        ("ref",),
+        normalizer="whitespace",
+    )
+
+
+def _find_template_end(text: str, start: int) -> int | None:
+    depth = 0
+    index = start
+    while index < len(text) - 1:
+        token = text[index : index + 2]
+        if token == "{{":
+            depth += 1
+            index += 2
+            continue
+        if token == "}}":
+            depth -= 1
+            index += 2
+            if depth == 0:
+                return index
+            continue
+        index += 1
+    return None
+
+
+def _split_top_level_template_parts(inner: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    index = 0
+
+    while index < len(inner):
+        token = inner[index : index + 2]
+        if token == "{{":
+            depth += 1
+            current.append(token)
+            index += 2
+            continue
+        if token == "}}":
+            depth = max(depth - 1, 0)
+            current.append(token)
+            index += 2
+            continue
+        if inner[index] == "|" and depth == 0:
+            parts.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(inner[index])
+        index += 1
+
+    parts.append("".join(current))
+    return parts
+
+
+def _apply_short_ref_sfn_updates(
+    text: str,
+    *,
+    old_ref_aliases: list[str],
+    new_ref: str,
+    year: str,
+) -> tuple[str, int]:
+    if not old_ref_aliases:
+        return text, 0
+
+    normalized_aliases = {
+        _normalize_short_ref_token(alias)
+        for alias in old_ref_aliases
+        if _normalize_short_ref_token(alias)
+    }
+    if not normalized_aliases:
+        return text, 0
+
+    parts: list[str] = []
+    position = 0
+    replacements = 0
+
+    for match in SFN_TEMPLATE_START_RE.finditer(text):
+        start = match.start()
+        end = _find_template_end(text, start)
+        if end is None:
+            continue
+
+        template = text[start:end]
+        inner = template[2:-2]
+        pieces = _split_top_level_template_parts(inner)
+        if not pieces or pieces[0].strip().casefold() != "sfn":
+            continue
+
+        args = pieces[1:]
+        positional_indexes: list[int] = []
+        for index, arg in enumerate(args):
+            if "=" in arg:
+                continue
+            positional_indexes.append(index)
+            if len(positional_indexes) == 2:
+                break
+
+        if len(positional_indexes) < 2:
+            continue
+
+        ref_index, year_index = positional_indexes
+        current_ref = normalize_whitespace(args[ref_index])
+        current_year = normalize_whitespace(args[year_index])
+        if (
+            _normalize_short_ref_token(current_ref) not in normalized_aliases
+            or current_year != year
+        ):
+            continue
+
+        updated_args = list(args)
+        updated_args[ref_index] = new_ref
+        updated_args[year_index] = year
+        updated_template = "{{" + "|".join([pieces[0], *updated_args]) + "}}"
+        if updated_template == template:
+            continue
+
+        parts.append(text[position:start])
+        parts.append(updated_template)
+        position = end
+        replacements += 1
+
+    if replacements == 0:
+        return text, 0
+
+    parts.append(text[position:])
+    return "".join(parts), replacements
+
+
+def _should_block_automatic_replacement(text: str, spec: SourceSpec) -> bool:
+    return has_suspicious_page_value(text, spec)
 
 
 def _add_prefix_template_review(
@@ -73,6 +223,7 @@ def replace_line_exact_rules(
     list[str],
     dict[str, list[str]],
     list[str],
+    list[str],
 ]:
     exact_map: dict[str, dict] = {}
 
@@ -86,7 +237,7 @@ def replace_line_exact_rules(
             exact_map[match_text] = rule
 
     if not exact_map:
-        return text, 0, [], [], [], [], {}, []
+        return text, 0, [], [], [], [], {}, [], []
 
     parts: list[str] = []
     position = 0
@@ -97,13 +248,14 @@ def replace_line_exact_rules(
     entry_arguments: list[str] = []
     extra_argument_values: dict[str, list[str]] = {}
     matched_review_lines: list[str] = []
+    short_ref_aliases: list[str] = []
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
         body = unit.body.strip()
         normalized_body = make_review_key(body, spec)
         rule = exact_map.get(normalized_body)
-        if not rule:
+        if not rule or _should_block_automatic_replacement(body, spec):
             parts.append(text[unit.start : unit.end])
             position = unit.end
             continue
@@ -135,6 +287,10 @@ def replace_line_exact_rules(
             entry_arguments.append(extracted_entry)
         for key, value in extracted_arguments.items():
             extra_argument_values.setdefault(key, []).append(value)
+        if spec.short_ref is not None:
+            old_ref_alias = _extract_short_ref_alias(body, spec)
+            if old_ref_alias and _normalize_short_ref_token(old_ref_alias) != _normalize_short_ref_token(spec.short_ref.ref):
+                short_ref_aliases.append(old_ref_alias)
     parts.append(text[position:])
     return (
         "".join(parts),
@@ -145,6 +301,7 @@ def replace_line_exact_rules(
         entry_arguments,
         extra_argument_values,
         matched_review_lines,
+        short_ref_aliases,
     )
 
 
@@ -163,6 +320,7 @@ def apply_regex_rules(
     dict[str, list[str]],
     list[str],
     list[str],
+    list[str],
 ]:
     current = text
     replacements = 0
@@ -173,13 +331,16 @@ def apply_regex_rules(
     extra_argument_values: dict[str, list[str]] = {}
     review_reasons: list[str] = []
     matched_review_lines: list[str] = []
+    short_ref_aliases: list[str] = []
 
     for rule in spec.regex_rules:
         if not rule.enabled:
             continue
 
-        def replace(match: re.Match[str]) -> str:
+        def build_replacement(match: re.Match[str]) -> str | None:
             match_text = match.group(0)
+            if _should_block_automatic_replacement(match_text, spec):
+                return None
             groups = {key: (value or "") for key, value in match.groupdict().items()}
             extracted_pages = extract_pages_arg(match_text, spec)
             extracted_entry = extract_entry_arg(match_text, spec, page_title)
@@ -220,6 +381,10 @@ def apply_regex_rules(
                 matched_review_lines=matched_review_lines,
                 spec=spec,
             )
+            if spec.short_ref is not None:
+                old_ref_alias = _extract_short_ref_alias(match_text, spec)
+                if old_ref_alias and _normalize_short_ref_token(old_ref_alias) != _normalize_short_ref_token(spec.short_ref.ref):
+                    short_ref_aliases.append(old_ref_alias)
 
             mapping = {
                 **groups,
@@ -231,8 +396,23 @@ def apply_regex_rules(
             }
             return substitute_tokens(rule.replacement, mapping)
 
-        current, count = rule.compiled.subn(replace, current)
-        replacements += count
+        parts: list[str] = []
+        position = 0
+        rule_replacements = 0
+        for match in rule.compiled.finditer(current):
+            parts.append(current[position : match.start()])
+            replacement = build_replacement(match)
+            if replacement is None:
+                parts.append(match.group(0))
+            else:
+                parts.append(replacement)
+                rule_replacements += 1
+            position = match.end()
+        if position == 0:
+            continue
+        parts.append(current[position:])
+        current = "".join(parts)
+        replacements += rule_replacements
 
     return (
         current,
@@ -244,6 +424,7 @@ def apply_regex_rules(
         extra_argument_values,
         review_reasons,
         matched_review_lines,
+        short_ref_aliases,
     )
 
 
@@ -262,6 +443,7 @@ def apply_normalized_unit_regex_rules(
     dict[str, list[str]],
     list[str],
     list[str],
+    list[str],
 ]:
     parts: list[str] = []
     position = 0
@@ -273,6 +455,7 @@ def apply_normalized_unit_regex_rules(
     extra_argument_values: dict[str, list[str]] = {}
     review_reasons: list[str] = []
     matched_review_lines: list[str] = []
+    short_ref_aliases: list[str] = []
 
     for unit in split_candidate_units(text):
         parts.append(text[position : unit.start])
@@ -294,6 +477,8 @@ def apply_normalized_unit_regex_rules(
                 continue
 
             unit_text = unit.body
+            if _should_block_automatic_replacement(unit_text, spec):
+                continue
             groups = {key: (value or "") for key, value in match.groupdict().items()}
             extracted_pages = extract_pages_arg(unit_text, spec)
             extracted_entry = extract_entry_arg(unit_text, spec, page_title)
@@ -348,11 +533,19 @@ def apply_normalized_unit_regex_rules(
                 matched_review_lines=matched_review_lines,
                 spec=spec,
             )
+            if spec.short_ref is not None:
+                old_ref_alias = _extract_short_ref_alias(unit_text, spec)
+                if old_ref_alias and _normalize_short_ref_token(old_ref_alias) != _normalize_short_ref_token(spec.short_ref.ref):
+                    short_ref_aliases.append(old_ref_alias)
             matched = True
             break
 
         if not matched:
-            if page_title and is_candidate_line(unit.body, spec):
+            if (
+                page_title
+                and is_candidate_line(unit.body, spec)
+                and not _should_block_automatic_replacement(unit.body, spec)
+            ):
                 extracted_entry = extract_entry_arg(unit.body, spec, page_title)
                 if (
                     extracted_entry
@@ -406,6 +599,7 @@ def apply_normalized_unit_regex_rules(
         extra_argument_values,
         review_reasons,
         matched_review_lines,
+        short_ref_aliases,
     )
 
 
@@ -425,6 +619,7 @@ def _replace_segment(
         line_entries,
         line_extra_argument_values,
         line_review_lines,
+        line_short_ref_aliases,
     ) = replace_line_exact_rules(
         text,
         spec,
@@ -441,6 +636,7 @@ def _replace_segment(
         extra_argument_values,
         regex_review_reasons,
         regex_review_lines,
+        regex_short_ref_aliases,
     ) = apply_regex_rules(
         current,
         spec,
@@ -456,6 +652,7 @@ def _replace_segment(
         normalized_extra_argument_values,
         normalized_review_reasons,
         normalized_review_lines,
+        normalized_short_ref_aliases,
     ) = apply_normalized_unit_regex_rules(
         current,
         spec,
@@ -477,6 +674,9 @@ def _replace_segment(
         extra_argument_values=merged_extra_argument_values,
         review_reasons=regex_review_reasons + normalized_review_reasons,
         matched_review_lines=line_review_lines + regex_review_lines + normalized_review_lines,
+        short_ref_aliases=(
+            line_short_ref_aliases + regex_short_ref_aliases + normalized_short_ref_aliases
+        ),
     )
 
 
@@ -497,6 +697,7 @@ def replace_text(
     extra_argument_values: dict[str, list[str]] = {}
     review_reasons: list[str] = []
     matched_review_lines: list[str] = []
+    short_ref_aliases: list[str] = []
 
     for kind, segment, open_tag, close_tag in split_ref_aware_segments(text):
         result = _replace_segment(
@@ -520,10 +721,30 @@ def replace_text(
             extra_argument_values.setdefault(key, []).extend(values)
         review_reasons.extend(result.review_reasons)
         matched_review_lines.extend(result.matched_review_lines)
+        short_ref_aliases.extend(result.short_ref_aliases)
+
+    final_text = "".join(parts)
+    sfn_replacements = 0
+    if spec.short_ref is not None and short_ref_aliases:
+        final_text, sfn_replacements = _apply_short_ref_sfn_updates(
+            final_text,
+            old_ref_aliases=short_ref_aliases,
+            new_ref=spec.short_ref.ref,
+            year=spec.short_ref.year,
+        )
+        if sfn_replacements:
+            review_reason = SHORT_REF_REVIEW_REASON_TEMPLATE.format(
+                old_ref=short_ref_aliases[0],
+                new_ref=spec.short_ref.ref,
+                year=spec.short_ref.year,
+            )
+            if review_reason not in review_reasons:
+                review_reasons.append(review_reason)
+            used_rule_names.extend(["sfn_short_ref"] * sfn_replacements)
 
     return ReplacementResult(
-        text="".join(parts),
-        replacements=total_replacements,
+        text=final_text,
+        replacements=total_replacements + sfn_replacements,
         used_line_rules=used_line_rules,
         used_rule_names=used_rule_names,
         rendered_templates=rendered_templates,
@@ -532,6 +753,7 @@ def replace_text(
         extra_argument_values=extra_argument_values,
         review_reasons=review_reasons,
         matched_review_lines=matched_review_lines,
+        short_ref_aliases=short_ref_aliases,
     )
 
 
@@ -560,7 +782,7 @@ def extract_unknown_variant_infos(
     infos: list[VariantInfo] = []
     seen: set[str] = set()
 
-    for _, segment, _, _ in split_ref_aware_segments(text):
+    for _, segment, segment_start, _, _, _ in iter_ref_aware_segments(text):
         units = split_candidate_units(segment)
         for unit in units:
             body = unit.body.strip()
@@ -574,13 +796,18 @@ def extract_unknown_variant_infos(
                 continue
 
             seen.add(key)
-            before_lines = tuple(
-                segment[: unit.start].splitlines()[-UNKNOWN_VARIANT_CONTEXT_LINES:]
+            full_line = unit.raw_text.rstrip("\r\n")
+            absolute_match_start = segment_start + unit.start
+            absolute_match_end = absolute_match_start + len(full_line)
+            source_excerpt, excerpt_match_start, excerpt_match_end = build_match_excerpt(
+                text,
+                match_start=absolute_match_start,
+                match_end=absolute_match_end,
+                context_lines=UNKNOWN_VARIANT_CONTEXT_LINES,
             )
-            after_lines = tuple(segment[unit.end :].splitlines()[:UNKNOWN_VARIANT_CONTEXT_LINES])
             infos.append(
                 VariantInfo(
-                    full_line=unit.raw_text.strip(),
+                    full_line=full_line,
                     review_line=review_line,
                     normalized_line=normalized_line,
                     pages=extract_pages_arg(review_line, spec),
@@ -590,8 +817,9 @@ def extract_unknown_variant_infos(
                         spec,
                         page_title,
                     ),
-                    context_before=before_lines,
-                    context_after=after_lines,
+                    source_excerpt=source_excerpt,
+                    excerpt_match_start=excerpt_match_start,
+                    excerpt_match_end=excerpt_match_end,
                 )
             )
 

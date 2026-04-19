@@ -21,6 +21,13 @@ REVIEW_LINE_PREFIX_RE = re.compile(
     re.UNICODE,
 )
 TEMPLATE_DELIMITER_RE = re.compile(r"\{\{|\}\}")
+SUSPICIOUS_PAGE_VALUE_RE = re.compile(
+    r"(?:\b(?:с|стар)\.?\s*|\|\s*(?:старонкі|pages?|pp?)\s*=\s*)"
+    r"\d+(?:\s*[—–-]\s*\d+)?\s*/\s*\d",
+    re.IGNORECASE | re.UNICODE,
+)
+DOUBLE_HYPHEN_RANGE_RE = re.compile(r"(?<=\d)\s*--\s*(?=\d)")
+DOUBLE_HYPHEN_DASH_RE = re.compile(r"(?<=\S)\s+--\s+(?=\S)")
 
 
 def normalize_biblio_wikitext(text: str, spec: SourceSpec) -> str:
@@ -35,6 +42,8 @@ def normalize_biblio_wikitext(text: str, spec: SourceSpec) -> str:
     if options.normalize_nbsp:
         text = text.replace("\u00a0", " ")
     if options.normalize_dashes:
+        text = DOUBLE_HYPHEN_RANGE_RE.sub("—", text)
+        text = DOUBLE_HYPHEN_DASH_RE.sub(" — ", text)
         text = re.sub(r"\s*[—–]\s*", " — ", text)
 
     for alias in spec.alias_rules:
@@ -51,9 +60,15 @@ def normalize_biblio_wikitext(text: str, spec: SourceSpec) -> str:
 
 
 def normalize_pages_arg(pages: str) -> str:
+    pages = DOUBLE_HYPHEN_RANGE_RE.sub("—", pages)
     pages = re.sub(r"\s*[—–-]\s*", "—", pages)
     pages = re.sub(r"\s*,\s*", ", ", pages)
     return pages.strip()
+
+
+def has_suspicious_page_value(text: str, spec: SourceSpec) -> bool:
+    normalized = normalize_biblio_wikitext(text, spec)
+    return bool(SUSPICIOUS_PAGE_VALUE_RE.search(normalized))
 
 
 def normalize_entry_arg(entry: str) -> str:
@@ -97,7 +112,11 @@ def normalize_review_line(line: str, spec: SourceSpec) -> str:
     line = re.sub(r"\s*:\s*", ": ", line)
     line = re.sub(r"\bТ\.\s*(\d+)\b", r"Т. \1", line, flags=re.IGNORECASE)
     line = re.sub(r"\bкн\.\s*(\d+)\b", r"кн. \1", line, flags=re.IGNORECASE)
-    line = re.sub(r"\b([А-ЯA-Z])\.\s*([А-ЯA-Z])\.", r"\1. \2.", line)
+    line = re.sub(
+        rf"\b(?P<first>{INITIAL_TOKEN_RE})\s*(?P<second>{INITIAL_TOKEN_RE})",
+        r"\g<first> \g<second>",
+        line,
+    )
     line = re.sub(r"\s+", " ", line).strip()
     return line
 
@@ -126,9 +145,10 @@ VOLUME_MARKER_RE = re.compile(
     r"\bт\.\s*\d+\b|\bкн\.\s*\d+\b",
     re.IGNORECASE | re.UNICODE,
 )
+INITIAL_TOKEN_RE = r"(?:[A-ZА-ЯЁІЎ]|Дз|Дж)\."
 NAME_TOKEN_RE = r"[A-ZА-ЯЁІЎ][^\s,/.():;]+(?:[-'][^\s,/.():;]+)*"
-SURNAME_INITIALS_RE = rf"{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*,?(?:\s+[A-ZА-ЯЁІЎ]\.){{1,3}}"
-INITIALS_SURNAME_RE = rf"(?:[A-ZА-ЯЁІЎ]\.\s*){{1,3}}{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*"
+SURNAME_INITIALS_RE = rf"{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*,?(?:\s+{INITIAL_TOKEN_RE}){{1,3}}"
+INITIALS_SURNAME_RE = rf"(?:{INITIAL_TOKEN_RE}\s*){{1,3}}{NAME_TOKEN_RE}(?:\s+{NAME_TOKEN_RE})*"
 QUOTED_SURNAME_INITIALS_RE = rf"[\"'«“„]?{SURNAME_INITIALS_RE}[\"'»”]?"
 QUOTED_INITIALS_SURNAME_RE = rf"[\"'«“„]?{INITIALS_SURNAME_RE}[\"'»”]?"
 AUTHOR_ITEM_RE = rf"(?:{QUOTED_SURNAME_INITIALS_RE}|{QUOTED_INITIALS_SURNAME_RE})"
@@ -167,29 +187,87 @@ class CandidateUnit:
 def split_ref_aware_segments(
     text: str,
 ) -> list[tuple[str, str, str | None, str | None]]:
-    segments: list[tuple[str, str, str | None, str | None]] = []
+    return [
+        (kind, segment, open_tag, close_tag)
+        for kind, segment, _, _, open_tag, close_tag in iter_ref_aware_segments(text)
+    ]
+
+
+def iter_ref_aware_segments(
+    text: str,
+) -> list[tuple[str, str, int, int, str | None, str | None]]:
+    segments: list[tuple[str, str, int, int, str | None, str | None]] = []
     position = 0
 
     for match in REF_BODY_RE.finditer(text):
         if match.start() > position:
-            segments.append(("text", text[position : match.start()], None, None))
+            segments.append(
+                (
+                    "text",
+                    text[position : match.start()],
+                    position,
+                    match.start(),
+                    None,
+                    None,
+                )
+            )
         segments.append(
             (
                 "ref",
                 match.group("body"),
+                match.start("body"),
+                match.end("body"),
                 match.group("open"),
                 match.group("close"),
             )
         )
         position = match.end()
 
-    if position < len(text):
-        segments.append(("text", text[position:], None, None))
-
-    if not segments:
-        segments.append(("text", text, None, None))
+    if position < len(text) or not segments:
+        segments.append(("text", text[position:], position, len(text), None, None))
 
     return segments
+
+
+def build_match_excerpt(
+    text: str,
+    *,
+    match_start: int,
+    match_end: int,
+    context_lines: int = 1,
+) -> tuple[str, int, int]:
+    if match_start < 0 or match_end < match_start or match_end > len(text):
+        raise ValueError("Invalid match bounds for source excerpt.")
+
+    if not text:
+        return "", 0, 0
+
+    def line_start(position: int) -> int:
+        if position <= 0:
+            return 0
+        return text.rfind("\n", 0, position) + 1
+
+    def line_end(position: int) -> int:
+        if position >= len(text):
+            return len(text)
+        newline = text.find("\n", position)
+        return len(text) if newline == -1 else newline
+
+    excerpt_start = line_start(match_start)
+    for _ in range(context_lines):
+        if excerpt_start == 0:
+            break
+        excerpt_start = line_start(excerpt_start - 1)
+
+    anchor_end = match_start if match_end == match_start else match_end - 1
+    excerpt_end = line_end(anchor_end)
+    for _ in range(context_lines):
+        if excerpt_end >= len(text):
+            break
+        excerpt_end = line_end(excerpt_end + 1)
+
+    excerpt = text[excerpt_start:excerpt_end]
+    return excerpt, match_start - excerpt_start, match_end - excerpt_start
 
 
 def _template_balance_delta(text: str) -> int:
@@ -556,6 +634,8 @@ def extract_pages_arg(text: str, spec: SourceSpec) -> str | None:
 
     for regex in spec.page_patterns:
         for match in regex.finditer(normalized):
+            if re.match(r"\s*/", normalized[match.end("pages") :]):
+                continue
             pages = normalize_pages_arg(match.group("pages"))
             tail = normalized[match.end() : match.end() + 20]
 

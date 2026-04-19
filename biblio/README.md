@@ -1,199 +1,107 @@
 # Biblio
 
-`biblio` is the preferred Python CLI for controlled bibliography cleanup runs. It was first
-developed for be.wikipedia.org, so the defaults and examples lean toward that wiki, but the source
-folders are generic and can be retargeted to another local wiki.
+<!-- DOCMETA:START -->
+> Status: maintained
+> Review: code-reviewed
+> Purpose: Operator entry points and current documented contract for biblio.
+> Source: .specify/doc-registry.json
+<!-- DOCMETA:END -->
 
-This directory is the project root for the bibliography tool inside the wider `scripts/`
-repository.
+`biblio` is the Python tool for bibliography and citation cleanup on wiki pages. It remains a
+narrow tool: deterministic source-driven matching, reviewable changes, and controlled wiki edits.
 
-## Quick Local Setup
+It was first built for be.wikipedia.org, but the project is being kept generic enough to retarget
+to other local wikis later.
 
-1. Sync the locked project environment with `uv`:
+## Current Shape
 
-   ```bash
-   cd biblio
-   uv sync --dev
-   ```
+- one Python project
+- one installed CLI command: `biblio`
+- one operator Makefile
+- source definitions tracked as `sources/<source_id>/source.toml`
+- local runtime state kept next to the source as JSON and not treated as authored docs
 
-2. Create `biblio/.env` with your bot-password credentials from `Special:BotPasswords` on
-   the target wiki.
-3. Run `uv run --locked biblio --help` to check the installed command.
-4. Run `make run` to open the startup wizard.
+The future direction is to separate source-population/import work from source-processing/edit work,
+but that split is not implemented yet.
 
-Special:BotPasswords setup:
+## Quick Start
 
-- create a bot password for the account you will use
-- choose a clear label, such as `biblio-local`
-- grant `High-volume (bot)` access so MediaWiki will accept bot-marked saves for that session
-- put the base account name, without `@label`, in `WIKI_BOT_USERNAME`
-- put only the chosen label in `WIKI_BOT_PASSWORD_SUFFIX`
-- put the generated bot password secret in `WIKI_BOT_PASSWORD`
-- do not commit `.env`
-
-Example mapping:
-
-```dotenv
-WIKI_BOT_USERNAME=ExampleBot
-WIKI_BOT_PASSWORD_SUFFIX=biblio-local
-WIKI_BOT_PASSWORD=REDACTED
-```
-
-That corresponds to a bot-password login shown by MediaWiki as `ExampleBot@biblio-local`.
-
-## Operator Runbook
-
-Start here for a normal run:
-
-- `make run` opens the interactive startup wizard.
-- `make list` shows the configured sources.
-- `make validate` checks source folder layouts and canonical filenames.
-- `make add-source` creates a new source scaffold.
-
-The canonical human entry point is `make run`. The installed command and the internal module path
-are both `biblio`.
-
-All saved page edits are submitted with MediaWiki's bot flag, and startup now hard-fails if the
-authenticated session does not actually hold the `bot` right.
-
-To run a specific source without using the wizard, pass the CLI arguments through the Makefile or
-call the CLI directly:
-
-```bash
-make run ARGS="run gvb1 --limit 10"
-uv run --locked biblio run gvb1 --limit 10
-uv run --locked biblio run gvb1 --limit 10 --verbose
-```
-
-Observability:
-
-- normal CLI output stays operator-focused and does not write raw page text or diffs into runtime logs
-- detailed runtime logs are written to `biblio/logs/biblio.log`
-- `--verbose` keeps the normal CLI flow but also echoes safe runtime metadata and timing hints locally
-- slow page loads and saves now print `[delay] ...` warnings with elapsed time
-- save attempts now print `[save] <title>: saving...` before the blocking API call so the run does not look frozen
-
-## Maintainer Workflow
-
-For design notes, architecture, and review context, read:
-
-- [Documentation index](docs/README.md)
-- [Architecture overview](docs/architecture.md)
-- [Architecture review](docs/architecture-review.md)
-- [Page save boundary](docs/page-save-boundary.md)
-
-For code and data:
-
-- [Package code](biblio/)
-- [Source definitions](sources/)
-- [Tests](tests/)
-
-## Layout
-
-- `biblio/`: shared Python package
-- `sources/<source_id>/`: per-source config plus optional local runtime state
-- `logs/`: local rotating runtime log file for safe operator diagnostics
-- `docs/`: maintainer documentation and architectural review
-- `tests/`: unit and CLI coverage
-- `.env`, `.pywikibot/`, `apicache/`, `throttle.ctrl`: local operator config and runtime state
-
-## Adapting To Another Local Wiki
-
-The code was first built for be.wiki, but a new local wiki usually only needs source and auth
-changes, not a rewrite.
-
-- copy or add a source folder under `sources/<source_id>/`
-- set the target wiki in that source's `site_lang` and `family`
-- adjust the source search terms, template names, page patterns, and normalization toggles
-- review the default edit summary text and any Belarusian wiki-facing template output before reuse
-- keep `WIKI_BOT_USERNAME`, `WIKI_BOT_PASSWORD_SUFFIX`, and `WIKI_BOT_PASSWORD` pointing at the
-  target wiki's bot password credentials
-- if the new wiki needs different login variable names or endpoint defaults, update the shared
-  bootstrap contract and the docs together
-- keep the source-specific README local to the source folder and link back to this project README
-- treat the existing `sources/` tree as be.wiki-specific examples, not a drop-in source pack for
-  another wiki
-
-## Requirements
-
-- Python 3.14+
-- `uv` 0.11.6+
-- `pywikibot`
-- `python-dotenv`
-- `rich`
-- a local `.env` file in this directory with:
-  - `WIKI_BOT_USERNAME`
-  - `WIKI_BOT_PASSWORD_SUFFIX`
-  - `WIKI_BOT_PASSWORD`
-
-## Dependency Tracking
-
-`biblio` now treats `uv.lock` as the authoritative dependency snapshot.
-
-- Runtime dependencies are intentionally minimal: `pywikibot`, `python-dotenv`, and `rich`.
-- Dev-only tools live in the `dev` dependency group and are not shipped as runtime requirements.
-- `make run`, `make test`, `make lint`, and `make audit` all execute with `uv run --locked`, so
-  they refuse to drift away from the committed lockfile.
-- The Makefile keeps `uv` and audit caches inside the project tree, so the workflow does not rely
-  on mutable global cache directories.
-
-## Install
-
-Run these commands from `biblio/`:
+Run from `biblio/`:
 
 ```bash
 uv sync --dev
+cp .env.example .env
+make run
 ```
 
-That installs the package plus the locked development toolchain into the local `uv` environment.
+Example `.env`:
 
-If you need a plain editable install without `uv`, `pip install -e .` still works for the package
-itself, but the tracked maintainer workflow is `uv`.
+```dotenv
+WIKI_BOT_USERNAME=YourBot@biblio-local
+WIKI_BOT_PASSWORD=REDACTED
+```
 
-## Direct CLI Equivalents
+`WIKI_BOT_USERNAME` now uses the full BotPasswords login in the form `username@label`.
+
+## Common Commands
+
+- `make run`
+- `make list`
+- `make validate`
+- `make add-source`
+- `make test`
+- `make lint`
+- `make format`
+- `make audit`
+- `make check`
+
+Direct CLI examples:
 
 ```bash
 uv run --locked biblio
-uv run --locked biblio list
-uv run --locked biblio validate
-uv run --locked biblio add-source
 uv run --locked biblio run gvb1 --limit 10
-uv run --locked python -m biblio
+uv run --locked biblio run gvb1 --limit 10 --apply
 ```
 
-## Read Order
+## Source Contract
 
-1. [README.md](README.md)
-2. [docs/README.md](docs/README.md)
-3. [docs/architecture.md](docs/architecture.md)
-4. [docs/architecture-review.md](docs/architecture-review.md)
-5. `sources/<source_id>/README.md`
+Tracked source definition:
 
-## Source Notes
+- `sources/<source_id>/source.toml`
 
-Each source keeps its own canonical files:
-
-- `source.toml`
-- `README.md`
-
-The JSON runtime files are local and gitignored:
+Local runtime state:
 
 - `rules.json`
 - `review_variants.json`
 - `ignored_variants.json`
 
-## Development
+Per-source `README.md` files are no longer part of the source-definition contract.
 
-Use the local Makefile for the normal project loop:
+## Review Rules
 
-```bash
-make sync
-make lock
-make test
-make lint
-make audit
-make format
-make check
-```
+- broad regex rules require manual review
+- uncertain source mapping or import matches require manual review
+- page-wide rewrites may auto-apply only when the match is exact and deterministic
+- learned replacements need one manually approved proven occurrence before automatic promotion
 
-`make check` syncs the locked environment, then runs tests, linting, and a dependency audit.
+## Scope Boundary
+
+Use `biblio` for:
+
+- bibliography and citation cleanup
+- deterministic template replacement
+- structured source families that still fit source-driven matching
+
+Do not stretch `biblio` into a general wiki text engine. If a request stops looking like
+bibliography or citation cleanup, it should become a separate tool.
+
+## Current Requirements
+
+- Python `3.14+` in the current project metadata
+- `uv`
+- a local `.env`
+
+## Further Reading
+
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/testing-strategy.md`](docs/testing-strategy.md)

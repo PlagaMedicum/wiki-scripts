@@ -1,135 +1,82 @@
 # Suppressor
 
-`suppressor` is the preferred human-facing command for the Rust daemon that performs rapid public
-revision deletion. The daemon was first developed for be.wikipedia.org, so the current defaults
-and examples target be.wiki, but the config is intended to be retargeted to another local wiki.
+<!-- DOCMETA:START -->
+> Status: maintained
+> Review: code-reviewed
+> Purpose: Operator entry points and current documented scope for suppressor.
+> Source: .specify/doc-registry.json
+<!-- DOCMETA:END -->
 
-It watches Wikimedia EventStreams, keeps a local cache of strict newline-separated titles from
-`Удзельнік:Wizardist/SuppressionList`, maintains a reconciliation-derived redirect-aware watched
-set, immediately hides `user` and `comment` on matching new revisions, and runs checkpointed
-reconciliation with nightly plus randomized same-day rechecks.
+`suppressor` is the Rust daemon for rapid public RevDel on matched wiki revisions. This tool stays
+narrow on purpose: fast reaction, strict runtime behavior, and conservative handling of sensitive
+data.
 
-## Navigation
+## Current Shape
 
-- [Docs index](docs/README.md)
-- [Operations spec](specs/operations.md)
-- [Runtime boundaries](docs/runtime-boundaries.md)
-- [Architecture analysis](docs/architecture-analysis.md)
-- [Implementation spec](specs/implementation.md)
-- [systemd unit](systemd/suppressor.service)
+- one daemon
+- one local TUI / supervisor client
+- one current production baseline aimed at be.wiki
+- one local machine deployment model
 
-## Quick Local Setup
+Future multiwiki support is possible, but it is not the current runtime model.
 
-1. Install Rust stable with `cargo`.
-2. Copy `.env.example` to `.env`.
-3. Open `Special:BotPasswords` on the target wiki and create a new bot password for the account
-   you want to use.
-4. Put the full bot login, including the `@label` suffix shown on `Special:BotPasswords`, into
-   `BEWIKI_BOT_USERNAME`.
-5. Put the generated bot password secret into `BEWIKI_BOT_PASSWORD`.
-6. Adjust `config.toml` if you are not targeting be.wiki.
-7. Run `make env-check`, `make check-auth`, and then `make dry-run`.
+## Quick Start
 
-Example mapping:
+Run from `suppressor/`:
+
+```bash
+cp .env.example .env
+make env-check
+make check-auth
+make dry-run
+```
+
+Example `.env`:
 
 ```dotenv
-BEWIKI_BOT_USERNAME=ExampleBot@revdel-watch
+BEWIKI_BOT_USERNAME=YourBot@revdel-watch
 BEWIKI_BOT_PASSWORD=REDACTED
 ```
 
-## Status
-
-- This directory now contains the current Rust implementation of the daemon.
-- The current target is a Linux-first single-binary daemon with a default `suppressor/.env` file and local state files.
-- The tracked config and specs document the current defaults, but they still reflect live operator inputs rather than frozen policy.
-
-## Next Step
-
-- [Docs index](docs/README.md) for navigation.
-- [Operations spec](specs/operations.md) for setup and day-to-day use.
-- [Runtime boundaries](docs/runtime-boundaries.md) for the current architecture map and state categories.
-- [Architecture analysis](docs/architecture-analysis.md) for the critical refactor notes.
+`BEWIKI_BOT_USERNAME` uses the full BotPasswords login in the form `username@label`.
 
 ## Common Commands
 
-- `suppressor --help`
-- `make help`
 - `make env-check`
 - `make check-auth`
 - `make dry-run`
 - `make run`
 - `make tui`
-- `make check`
+- `make reload-cache`
+- `make nightly-sweep-now`
 - `make build`
 - `make release`
-- `make lint`
-- `make fmt`
-- `suppressor --verbose run`
-- `suppressor --verbose dry-run`
+- `make check`
 
-## Operator Notes
+## Scope Boundary
 
-- Use the local `config.toml` and `.env` in this directory.
-- The preferred binary name is `suppressor`, but the directory, crate, and current env vars still
-  keep the older `bewiki_` prefix.
-- Runtime state belongs under `state/` and is not hand-edited.
-- `make tui` opens the supervisor/control client for the daemon. It launches commands, posts signals, and reads local state; it is not a second runtime implementation.
-- In the TUI, `Tab` or `Left`/`Right` switches between the action list and the live output pane.
-- When `Live Output` is focused, `Up`/`Down`, `PageUp`/`PageDown`, `Home`, and `End` scroll the captured logs.
-- The status pane shows live reconciliation progress from `state/runtime_status.json`, including the active mode, queued reruns, current title, and completed/total page count.
-- `check-auth` and live startup now hard-fail unless the session has `bot`, `deleterevision`, and `deletelogentry`.
-- `revisiondelete` actions cannot be marked as minor edits by this daemon.
-- `revisiondelete` has no separate bot request switch, so bot-marked log entries depend on the account rights; the daemon enforces the `bot` right before it will run.
-- `--verbose` raises only the local daemon's own log detail; it is intended for operator diagnosis, not for dumping payloads.
-- Safe delay and backoff telemetry is exposed through the existing Prometheus endpoint and debug logs.
-- Journal-facing logs must stay free of secrets, raw suppressed comments, tokens, and other private payloads.
+Current scope:
 
-## Adapting To Another Local Wiki
-
-The current defaults are be.wiki-specific, but the daemon is structured around config files and
-local state instead of hard-coded server logic.
-
-- change `[wiki]` in `config.toml` to the target wiki API URL, EventStreams URL, `wiki_code`,
-  `server_name`, and user-agent
-- change `[auth]` in `config.toml` if the target wiki uses different environment variable names for
-  the bot password credentials
-- update `.env` so `BEWIKI_BOT_USERNAME` and `BEWIKI_BOT_PASSWORD` match the target wiki's
-  `Special:BotPasswords` values
-- update `[suppression_list].title` to the local page that should drive the watched title list
-- confirm that the target wiki exposes a compatible recent-changes stream and that the service
-  account has the local rights needed for revision deletion
-- keep the `state/` directory local to the machine; it is runtime data, not source control data
-- if the target wiki has different rights or a different suppression workflow, revisit the
-  `revdel` section and the operator runbook together
-
-The `bewiki_` prefix remains in internal file names and environment variable names for now because
-the implementation was developed here first and those names are still wired through the codebase.
-
-## Scope
-
-In scope:
-
-- Rust stable implementation
-- EventStreams real-time path
-- suppression-list cache and refresh logic
+- EventStreams ingestion
+- watched-title matching
 - immediate public RevDel for `user|comment`
-- nightly reconciliation/backfill sweep
-- local config, local state, structured logs, and metrics
+- reconciliation and backfill
+- local TUI supervision
 
-Out of scope:
+Not current scope:
 
-- full suppression (`suppress=yes`)
-- revision content hiding in the normal path
-- per-page polling as the main real-time mechanism
-- browser UI or database server
+- broader moderation platform work
+- remote multi-operator control
+- public network service exposure
 
-## Primary References
+## Current Baseline
 
-- [MediaWiki recent changes stream](https://www.mediawiki.org/wiki/API%3ARecent_changes_stream)
-- [Wikitech EventStreams](https://wikitech.wikimedia.org/wiki/EventStreams)
-- [MediaWiki revisiondelete API](https://www.mediawiki.org/wiki/API%3ARevisiondelete)
-- [MediaWiki revisions API](https://www.mediawiki.org/wiki/API%3ARevisions)
-- [MediaWiki bot passwords](https://www.mediawiki.org/wiki/Manual%3ABot_passwords)
-- [bewiki group rights](https://be.wikipedia.org/wiki/%D0%90%D0%B4%D0%BC%D1%8B%D1%81%D0%BB%D0%BE%D0%B2%D0%B0%D0%B5%3AListGroupRights)
+The checked-in config is the current working be.wiki production baseline. It is a real baseline,
+not a promise that every other wiki is already supported.
 
-Next document: [Docs index](docs/README.md)
+## Further Reading
+
+- [`docs/runtime-boundaries.md`](docs/runtime-boundaries.md)
+- [`docs/testing-strategy.md`](docs/testing-strategy.md)
+- [`docs/operations.md`](docs/operations.md)
+- [`docs/implementation.md`](docs/implementation.md)

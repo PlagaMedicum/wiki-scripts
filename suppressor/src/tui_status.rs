@@ -23,6 +23,10 @@ pub(crate) struct StatusSnapshot {
     pub status_error: Option<String>,
 }
 
+fn compact_status_error(scope: &str, detail: impl std::fmt::Display) -> String {
+    format!("st.err {scope}: {detail}")
+}
+
 pub(crate) fn collect_status(
     paths: &RuntimePaths,
     managed_session: Option<&str>,
@@ -40,15 +44,13 @@ pub(crate) fn collect_status(
                 snapshot.daemon_pid = Some(pid);
                 snapshot.daemon_running = PathBuf::from(format!("/proc/{pid}")).exists();
             }
-            Ok(_) => {
-                snapshot.status_error = Some("PID file contains a non-positive pid.".to_string())
-            }
+            Ok(_) => snapshot.status_error = Some(compact_status_error("pid", "non-positive pid")),
             Err(error) => {
-                snapshot.status_error = Some(format!("Invalid pid file contents: {error}"));
+                snapshot.status_error = Some(compact_status_error("pid", error));
             }
         },
         Ok(None) => {}
-        Err(error) => snapshot.status_error = Some(format!("Unable to read pid file: {error:#}")),
+        Err(error) => snapshot.status_error = Some(compact_status_error("pid", format!("{error:#}"))),
     }
 
     if let Ok(last_event_id) = load_text(&paths.last_event_id_file) {
@@ -58,9 +60,7 @@ pub(crate) fn collect_status(
     match load_json::<ProcessedRevidsState>(&paths.processed_revids_file) {
         Ok(Some(state)) => snapshot.processed_revids = state.revids.len(),
         Ok(None) => {}
-        Err(error) => {
-            snapshot.status_error = Some(format!("Unable to read processed revisions: {error:#}"))
-        }
+        Err(error) => snapshot.status_error = Some(compact_status_error("processed", format!("{error:#}"))),
     }
 
     match load_json::<SuppressionListCache>(&paths.cache_file) {
@@ -70,25 +70,19 @@ pub(crate) fn collect_status(
             snapshot.watched_titles = cache.watched_titles_normalized.len();
         }
         Ok(None) => {}
-        Err(error) => {
-            snapshot.status_error = Some(format!("Unable to read cache snapshot: {error:#}"))
-        }
+        Err(error) => snapshot.status_error = Some(compact_status_error("cache", format!("{error:#}"))),
     }
 
     match load_json::<NightlySweepProgress>(&paths.nightly_sweep_progress_file) {
         Ok(Some(progress)) => snapshot.checkpoint_pages = progress.pages.len(),
         Ok(None) => {}
-        Err(error) => {
-            snapshot.status_error = Some(format!("Unable to read checkpoint state: {error:#}"))
-        }
+        Err(error) => snapshot.status_error = Some(compact_status_error("checkpoints", format!("{error:#}"))),
     }
 
     match load_json::<RuntimeStatus>(&paths.runtime_status_file) {
         Ok(Some(runtime_status)) => snapshot.runtime_status = Some(runtime_status),
         Ok(None) => {}
-        Err(error) => {
-            snapshot.status_error = Some(format!("Unable to read runtime status: {error:#}"))
-        }
+        Err(error) => snapshot.status_error = Some(compact_status_error("runtime", format!("{error:#}"))),
     }
 
     snapshot
@@ -176,5 +170,20 @@ mod tests {
                 .map(|status| status.daemon_state.as_str()),
             Some("running")
         );
+    }
+
+    #[test]
+    fn collect_status_compacts_pid_errors() {
+        let temp = tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let paths = RuntimePaths::resolve(&config_path, &config);
+
+        save_text_atomic(&paths.pid_file, "0").unwrap();
+
+        let snapshot = collect_status(&paths, None);
+
+        assert_eq!(snapshot.status_error.as_deref(), Some("st.err pid: non-positive pid"));
     }
 }

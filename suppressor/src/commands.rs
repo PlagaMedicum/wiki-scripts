@@ -60,15 +60,25 @@ impl AuthenticatedCommandContext {
     }
 }
 
+fn format_auth_status_lines(auth: &AuthState) -> Vec<String> {
+    let mut rights = auth.rights.iter().cloned().collect::<Vec<_>>();
+    rights.sort();
+    vec![
+        format!("auth.user={}", auth.username),
+        format!("auth.bot={}", auth.has_bot_right()),
+        format!("auth.rights={}", rights.join(",")),
+    ]
+}
+
+fn format_hide_revid_result(revid: u64) -> String {
+    format!("revdel.ok revid={revid}")
+}
+
 pub async fn run_check_auth(config_path: PathBuf, verbose: bool) -> Result<()> {
     let command = AuthenticatedCommandContext::load(&config_path, "check-auth", verbose).await?;
-    println!("authenticated_as={}", command.auth.username);
-    println!("bot_marked_actions={}", command.auth.has_bot_right());
-    println!("rights={}", {
-        let mut rights = command.auth.rights.iter().cloned().collect::<Vec<_>>();
-        rights.sort();
-        rights.join(",")
-    });
+    for line in format_auth_status_lines(&command.auth) {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -76,7 +86,7 @@ pub async fn run_hide_revid(config_path: PathBuf, revid: u64, verbose: bool) -> 
     let command = AuthenticatedCommandContext::load(&config_path, "hide-revid", verbose).await?;
     info!(revid, "hiding revision from command");
     revision_delete_with_auth_context(&command, &[revid]).await?;
-    println!("hidden revid {}", revid);
+    println!("{}", format_hide_revid_result(revid));
     Ok(())
 }
 
@@ -156,7 +166,10 @@ async fn revision_delete_with_auth_context(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
+    use crate::auth::AuthState;
 
     #[test]
     fn command_context_resolves_pid_path() {
@@ -169,5 +182,28 @@ mod tests {
             command.paths.pid_file,
             temp.path().join("./state/daemon.pid")
         );
+    }
+
+    #[test]
+    fn formats_compact_auth_status_lines() {
+        let auth = AuthState {
+            username: "ExampleBot".to_string(),
+            csrf_token: "token".to_string(),
+            rights: HashSet::from(["bot".to_string(), "edit".to_string()]),
+        };
+
+        assert_eq!(
+            format_auth_status_lines(&auth),
+            vec![
+                "auth.user=ExampleBot".to_string(),
+                "auth.bot=true".to_string(),
+                "auth.rights=bot,edit".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn formats_compact_hide_revid_result() {
+        assert_eq!(format_hide_revid_result(42), "revdel.ok revid=42");
     }
 }

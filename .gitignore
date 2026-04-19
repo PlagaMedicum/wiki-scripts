@@ -20,3 +20,5 @@ biblio/sources/
 biblio/logs/
 biblio/.uv-cache/
 biblio/.pip-audit-cache/
+.specify/extensions/.cache/
+.specify/extensions/.registry

@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "allowed_statuses": [
+    "maintained",
+    "draft",
+    "generated",
+    "archived"
+  ],
+  "allowed_reviews": [
+    "unreviewed",
+    "code-reviewed",
+    "client-input-derived",
+    "client-confirmed",
+    "operator-verified",
+    "generated"
+  ],
+  "managed_roots": [
+    "README.md",
+    ".specify/memory/constitution.md",
+    "specs/README.md",
+    "specs/000-repo-governance",
+    "biblio/README.md",
+    "biblio/docs",
+    "suppressor/README.md",
+    "suppressor/docs"
+  ],
+  "exclude_globs": [
+    ".agents/**",
+    ".specify/templates/**"
+  ],
+  "documents": [
+    {
+      "path": "README.md",
+      "status": "maintained",
+      "review": [
+        "unreviewed"
+      ],
+      "purpose": "Human-oriented repo overview and navigation only."
+    },
+    {
+      "path": ".specify/memory/constitution.md",
+      "status": "maintained",
+      "review": [
+        "client-input-derived"
+      ],
+      "purpose": "Repo governance rules and non-negotiable workflow requirements."
+    },
+    {
+      "path": "specs/README.md",
+      "status": "maintained",
+      "review": [
+        "client-input-derived"
+      ],
+      "purpose": "Explains the standing governance spec versus change-specific feature specs."
+    },
+    {
+      "path": "specs/000-repo-governance/spec.md",
+      "status": "maintained",
+      "review": [
+        "client-input-derived"
+      ],
+      "purpose": "Accepted repo model, scope boundaries, and documentation rules."
+    },
+    {
+      "path": "specs/000-repo-governance/research.md",
+      "status": "maintained",
+      "review": [
+        "unreviewed"
+      ],
+      "purpose": "Remaining repo-level open questions, rationale, and missing proof rules."
+    },
+    {
+      "path": "specs/000-repo-governance/quickstart.md",
+      "status": "maintained",
+      "review": [
+        "client-input-derived"
+      ],
+      "purpose": "Practical Spec Kit workflow for this repo, including the explicit docs gate."
+    },
+    {
+      "path": "specs/000-repo-governance/plan.md",
+      "status": "maintained",
+      "review": [
+        "client-input-derived"
+      ],
+      "purpose": "Current documentation structure contract for the repo."
+    },
+    {
+      "path": "specs/000-repo-governance/tasks.md",
+      "status": "maintained",
+      "review": [
+        "unreviewed"
+      ],
+      "purpose": "Lean future-work backlog for repo workflow and tool-boundary follow-up."
+    },
+    {
+      "path": "biblio/README.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Operator entry points and current documented contract for biblio."
+    },
+    {
+      "path": "biblio/docs/architecture.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Current biblio boundaries, module roles, and source-definition rules."
+    },
+    {
+      "path": "biblio/docs/testing-strategy.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Current biblio testing strategy and coverage shape."
+    },
+    {
+      "path": "suppressor/README.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Operator entry points and current documented scope for suppressor."
+    },
+    {
+      "path": "suppressor/docs/runtime-boundaries.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Current suppressor runtime boundaries and architectural constraints."
+    },
+    {
+      "path": "suppressor/docs/testing-strategy.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Current suppressor testing strategy and maintained test story."
+    },
+    {
+      "path": "suppressor/docs/implementation.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Current suppressor implementation contract at the documented scope."
+    },
+    {
+      "path": "suppressor/docs/operations.md",
+      "status": "maintained",
+      "review": [
+        "code-reviewed"
+      ],
+      "purpose": "Operator setup and runtime contract for suppressor."
+    }
+  ]
+}

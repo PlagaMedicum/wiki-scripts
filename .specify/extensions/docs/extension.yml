@@ -1,0 +1,25 @@
+schema_version: "1.0"
+
+extension:
+  id: docs
+  name: "Deterministic Docs Workflow"
+  version: "1.0.0"
+  description: "Repo-local command for the explicit docs sync/lint/test/status gate"
+  author: local
+
+requires:
+  speckit_version: ">=0.7.3"
+  tools:
+    - name: python3
+      required: true
+
+provides:
+  commands:
+    - name: speckit.docs.docs
+      file: commands/speckit.docs.docs.md
+      description: "Run the repo's explicit docs workflow gate"
+
+tags:
+  - "docs"
+  - "workflow"
+  - "deterministic"

@@ -9,6 +9,7 @@ description = "Reusable bibliography replacement tooling first developed for be.
 requires-python = ">=3.14"
 dependencies = [
   "pywikibot>=11.1,<12",
+  "prompt-toolkit>=3.0.52,<4",
   "python-dotenv>=1.2.2,<2",
   "rich>=14.3.3,<15",
 ]

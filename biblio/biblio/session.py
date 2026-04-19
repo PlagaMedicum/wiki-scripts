@@ -34,6 +34,7 @@ class PageDecision:
 class RunPolicy:
     options: RunOptions
     accept_all: bool = False
+    bulk_mode_active: bool = False
     summary_override: str | None = None
     stopped: bool = False
 
@@ -46,11 +47,15 @@ class RunPolicy:
     def should_prompt_page(self, *, review_required: bool) -> bool:
         return (not self.accept_all) or review_required
 
+    def is_bulk_mode(self) -> bool:
+        return self.options.apply and self.bulk_mode_active
+
     def apply_page_decision(self, decision: PageDecision) -> None:
         if decision.summary_override is not None:
             self.summary_override = decision.summary_override
         if decision.is_accept_all:
             self.accept_all = True
+            self.bulk_mode_active = True
         if decision.is_quit:
             self.stopped = True
 

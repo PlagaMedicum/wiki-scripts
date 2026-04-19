@@ -15,10 +15,18 @@ class PageEdit:
 
 
 @dataclass(frozen=True)
+class LoadedPage:
+    page: object
+    title: str
+    text: str
+
+
+@dataclass(frozen=True)
 class WikiClient:
     pywikibot: object
     site: object
     load_titles_func: Callable[[object, str, int], tuple[int, list[str]]]
+    _write_session_ready: bool = field(default=False, init=False, repr=False, compare=False)
 
     def page(self, title: str):
         return self.pywikibot.Page(self.site, title)
@@ -26,14 +34,55 @@ class WikiClient:
     def load_titles(self, query: str, limit: int) -> tuple[int, list[str]]:
         return self.load_titles_func(self.site, query, limit)
 
-    def save_page(self, page, edit: PageEdit) -> None:
-        page.text = edit.text
+    def load_page(self, title: str) -> LoadedPage:
+        page = self.page(title)
+        return LoadedPage(page=page, title=title, text=page.text)
+
+    def prime_write_session(self) -> bool:
+        if self._write_session_ready:
+            return False
+        tokens = getattr(self.site, "tokens", None)
+        if tokens is not None:
+            tokens["csrf"]
+        object.__setattr__(self, "_write_session_ready", True)
+        return True
+
+    def reconnect(self) -> None:
+        object.__setattr__(self, "_write_session_ready", False)
+        login = getattr(self.site, "login", None)
+        if callable(login):
+            login()
+
+    def save_page(self, page_or_title, edit: PageEdit) -> None:
+        page = page_or_title if not isinstance(page_or_title, str) else self.page(page_or_title)
+        # Reuse the prepared text directly and skip botMayEdit() round-trips.
+        page._text = edit.text
         page.save(
             summary=edit.summary,
             minor=edit.minor,
             bot=True,
+            force=True,
             asynchronous=False,
         )
+
+    def current_user(self) -> str | None:
+        username = getattr(self.site, "username", None)
+        if callable(username):
+            try:
+                value = username()
+            except Exception:
+                return None
+            return str(value) if value else None
+        return None
+
+    def has_bot_right(self) -> bool:
+        has_right = getattr(self.site, "has_right", None)
+        if callable(has_right):
+            try:
+                return bool(has_right("bot"))
+            except Exception:
+                return False
+        return False
 
 
 @dataclass

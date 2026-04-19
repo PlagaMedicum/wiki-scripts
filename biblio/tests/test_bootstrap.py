@@ -13,6 +13,19 @@ def test_normalize_bot_username_converts_underscores_to_spaces():
     assert normalize_bot_username("User_Bot") == "User Bot"
 
 
+def test_split_bot_password_login_splits_full_login():
+    assert bootstrap.split_bot_password_login("User_Bot@local-run") == ("User Bot", "local-run")
+
+
+def test_split_bot_password_login_requires_suffix():
+    try:
+        bootstrap.split_bot_password_login("User Bot")
+    except RuntimeError as error:
+        assert "Username@label" in str(error)
+    else:
+        raise AssertionError("Expected split_bot_password_login to require a suffix")
+
+
 def test_resolve_dotenv_path_uses_project_root_from_source_dir(tmp_path):
     spec = SourceSpec(
         source_dir=tmp_path / "sources" / "demo",
@@ -92,6 +105,16 @@ def test_create_site_bootstraps_before_import(monkeypatch, tmp_path):
         "patch_pywikibot_request_connection_error_handling",
         lambda: calls.append(("patch",)),
     )
+    monkeypatch.setattr(
+        bootstrap,
+        "apply_pywikibot_runtime_config",
+        lambda pywikibot, config: calls.append(("config", config.put_throttle)),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "patch_pywikibot_wait_reporting",
+        lambda: calls.append(("wait-hooks",)),
+    )
 
     pywikibot_module, site = bootstrap.create_site(spec, tmp_path / ".pywikibot")
 
@@ -100,7 +123,9 @@ def test_create_site_bootstraps_before_import(monkeypatch, tmp_path):
     assert calls == [
         ("bootstrap", tmp_path / ".pywikibot"),
         ("import", str(tmp_path / ".pywikibot")),
+        ("config", 0.2),
         ("patch",),
+        ("wait-hooks",),
         ("site", "be", "wikipedia", "User Bot"),
         ("login",),
         ("has_right", "bot"),
@@ -134,6 +159,8 @@ def test_create_site_requires_bot_right(monkeypatch, tmp_path):
         "patch_pywikibot_request_connection_error_handling",
         lambda: None,
     )
+    monkeypatch.setattr(bootstrap, "apply_pywikibot_runtime_config", lambda pywikibot, config: None)
+    monkeypatch.setattr(bootstrap, "patch_pywikibot_wait_reporting", lambda: None)
 
     spec = SourceSpec(
         source_dir=tmp_path / "sources" / "demo",
@@ -179,3 +206,52 @@ def test_patch_pywikibot_request_connection_error_handling(monkeypatch):
     bootstrap.patch_pywikibot_request_connection_error_handling()
 
     assert fake_api_requests.ConnectionError is FakeRequestsConnectionError
+
+
+def test_load_pywikibot_runtime_config_defaults(monkeypatch):
+    monkeypatch.delenv("BIBLIO_MIN_THROTTLE", raising=False)
+    monkeypatch.delenv("BIBLIO_PUT_THROTTLE", raising=False)
+    monkeypatch.delenv("BIBLIO_MAX_RETRIES", raising=False)
+    monkeypatch.delenv("BIBLIO_RETRY_WAIT", raising=False)
+    monkeypatch.delenv("BIBLIO_RETRY_MAX", raising=False)
+    monkeypatch.delenv("BIBLIO_MAXLAG", raising=False)
+    monkeypatch.delenv("BIBLIO_NOISYSLEEP", raising=False)
+
+    config = bootstrap.load_pywikibot_runtime_config()
+
+    assert config == bootstrap.PywikibotRuntimeConfig()
+
+
+def test_apply_pywikibot_runtime_config_sets_known_fields():
+    class FakeConfig:
+        minthrottle = 10
+        put_throttle = 10
+        max_retries = 10
+        retry_wait = 10
+        retry_max = 10
+        maxlag = 10
+        noisysleep = 10
+
+    class FakePywikibot:
+        config = FakeConfig()
+
+    bootstrap.apply_pywikibot_runtime_config(
+        FakePywikibot,
+        bootstrap.PywikibotRuntimeConfig(
+            min_throttle=0.2,
+            put_throttle=1.5,
+            max_retries=4,
+            retry_wait=3,
+            retry_max=12,
+            maxlag=6,
+            noisysleep=0.0,
+        ),
+    )
+
+    assert FakePywikibot.config.minthrottle == 0.2
+    assert FakePywikibot.config.put_throttle == 1.5
+    assert FakePywikibot.config.max_retries == 4
+    assert FakePywikibot.config.retry_wait == 3
+    assert FakePywikibot.config.retry_max == 12
+    assert FakePywikibot.config.maxlag == 6
+    assert FakePywikibot.config.noisysleep == 0.0

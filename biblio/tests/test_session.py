@@ -79,6 +79,18 @@ def test_run_policy_prompts_review_required_pages_even_after_accept_all(tmp_path
     assert policy.should_prompt_page(review_required=True)
 
 
+def test_run_policy_accept_all_turns_on_bulk_mode(tmp_path):
+    policy = RunPolicy(options=_options(apply=True), accept_all=False, bulk_mode_active=False)
+
+    policy.apply_page_decision(
+        prompt_page_decision(FakePromptUI(actions=["a"]), "Summary", review_required=False)
+    )
+
+    assert policy.accept_all is True
+    assert policy.bulk_mode_active is True
+    assert policy.is_bulk_mode() is True
+
+
 def test_needs_interactive_input_respects_skip_review_required():
     assert needs_interactive_input(
         _options(apply=True, assume_yes=True, skip_review_required=False),

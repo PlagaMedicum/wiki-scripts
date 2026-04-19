@@ -57,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Interactively create a new source folder with canonical filenames.",
     )
+    add_source_parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Use the legacy prompt-by-prompt CLI instead of the prompt_toolkit TUI.",
+    )
     add_source_parser.set_defaults(command="add-source")
 
     validate_parser = subparsers.add_parser(
@@ -182,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "list":
             return list_sources(ui)
         if args.command == "add-source":
-            return add_source(ui)
+            return add_source(ui, plain=getattr(args, "plain", False))
         if args.command == "validate":
             return validate_sources(ui)
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 
 import pytest
 from biblio.cli import main
-from biblio.models import ReplacementResult, RunStats
+from biblio.models import BulkRunStatus, ReplacementResult, RunStats
 from biblio.specs import discover_source_specs, load_source_spec
 from biblio.ui import AppUI, ChecklistOption
 from rich.console import Console
@@ -225,8 +226,49 @@ def test_rich_diff_panel_snapshot(gvb_spec):
     output = stream.getvalue()
     assert "Proposed change" in output
     assert "Тэставая старонка" in output
+    assert "Inferred pages" in output
+    assert "Decision" in output
+    assert "safe to auto-apply" in output
     assert "{{Крыніцы/ГВБ|1-1||213}}" in output
     assert "@@" in output
+
+
+def test_rich_diff_panel_explains_manual_review_reasoning():
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=100,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    result = ReplacementResult(
+        text="{{Крыніцы/БелЭн|2|Асаковыя|Скуратовіч А.}}",
+        replacements=1,
+        used_line_rules=[],
+        used_rule_names=["template_citation"],
+        rendered_templates=["{{Крыніцы/БелЭн|2|Асаковыя|Скуратовіч А.}}"],
+        page_arguments=[],
+        entry_arguments=["Асаковыя"],
+        extra_argument_values={"author": ["Скуратовіч А."]},
+        review_reasons=["Entry or author inferred from bibliography prefix before template citation; confirm manually."],
+    )
+
+    ui.print_diff_panel(
+        title="Асаковыя",
+        result=result,
+        old_text="old",
+        context=3,
+    )
+
+    output = stream.getvalue()
+    assert "Decision" in output
+    assert "manual review required" in output
+    assert "Reason" in output
+    assert "At least one value was inferred heuristically" in output
+    assert "Manual reasons" in output
+    assert "Inferred author" in output
 
 
 def test_rich_diff_panel_emits_ansi_diff_colors():
@@ -277,29 +319,36 @@ def test_unknown_variant_preview_shows_context_and_example_diff(repo_root):
 
     from biblio.models import VariantInfo
 
+    source_excerpt = (
+        'Ручаёўка<ref name="энцык">'
+        "* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118."
+        "</ref> is a village."
+    )
+    matched = "* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118."
+
     ui.print_unknown_variant(
         "Тэставая старонка",
         VariantInfo(
-            full_line="* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            full_line=matched,
             review_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
             normalized_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
             pages="118",
             entry="Асмолавічы",
-            context_before=("== Літаратура ==",),
-            context_after=("{{зноскі}}",),
+            source_excerpt=source_excerpt,
+            excerpt_match_start=source_excerpt.index(matched),
+            excerpt_match_end=source_excerpt.index(matched) + len(matched),
         ),
         spec,
     )
 
     output = stream.getvalue()
     assert "Unknown candidate variant" in output
-    assert "Context around matched line" in output
+    assert "Source excerpt" in output
     assert "Example diff" in output
-    assert "== Літаратура ==" in output
-    assert "▶ * Асмолавічы" in output
-    assert "{{зноскі}}" in output
-    assert "-* Асмолавічы" in output
-    assert "+{{Крыніцы/ГВБ|4-2|Асмолавічы|118}}" in output
+    assert 'Ручаёўка<ref name="энцык">' in output
+    assert "</ref> is a village." in output
+    assert '-Ручаёўка<ref name="энцык">* Асмолавічы' in output
+    assert '+Ручаёўка<ref name="энцык">{{Крыніцы/ГВБ|4-2|Асмолавічы|118}}</ref>' in output
 
 
 def test_unknown_variant_preview_emits_ansi_diff_colors(repo_root):
@@ -317,16 +366,24 @@ def test_unknown_variant_preview_emits_ansi_diff_colors(repo_root):
 
     from biblio.models import VariantInfo
 
+    source_excerpt = (
+        'Ручаёўка<ref name="энцык">'
+        "* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118."
+        "</ref> is a village."
+    )
+    matched = "* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118."
+
     ui.print_unknown_variant(
         "Тэставая старонка",
         VariantInfo(
-            full_line="* Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
+            full_line=matched,
             review_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
             normalized_line="Асмолавічы // Гарады і вёскі Беларусі: Энцыклапедыя ... — С. 118.",
             pages="118",
             entry="Асмолавічы",
-            context_before=("== Літаратура ==",),
-            context_after=("{{зноскі}}",),
+            source_excerpt=source_excerpt,
+            excerpt_match_start=source_excerpt.index(matched),
+            excerpt_match_end=source_excerpt.index(matched) + len(matched),
         ),
         spec,
     )
@@ -334,10 +391,10 @@ def test_unknown_variant_preview_emits_ansi_diff_colors(repo_root):
     output = stream.getvalue()
     assert "\x1b[" in output
     assert "\x1b[31m-" in output
-    assert "* Асмолавічы // Гарады і вёскі Беларусі" in output
+    assert '<ref name="энцык">' in output
     assert "\x1b[32m+" in output
     assert "{{Крыніцы/ГВБ|4-2|Асмолавічы|118}}" in output
-    assert "\x1b[1;33m▶ " in output
+    assert "\x1b[1;33m* Асмолавічы // Гарады і вёскі Беларусі" in output
 
 
 def test_final_summary_snapshot():
@@ -356,9 +413,12 @@ def test_final_summary_snapshot():
             matched=4,
             saved=2,
             skipped=6,
+            failed=1,
             errors=1,
+            retry_events=3,
             learned=1,
             ignored=2,
+            failed_titles=["Broken page"],
         )
     )
 
@@ -366,6 +426,87 @@ def test_final_summary_snapshot():
     assert "Run summary" in output
     assert "Processed" in output
     assert "10" in output
+    assert "Failed" in output
+    assert "Retry attempts" in output
+    assert "Failed pages" in output
+    assert "Broken page" in output
+
+
+def test_bulk_status_panel_snapshot():
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=100,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    ui.print(
+        ui.build_bulk_status_panel(
+            BulkRunStatus(
+                source_label="belen13 (БелЭн 13) [1/1]",
+                total_pages=114,
+                current_index=15,
+                current_title="Краязнаўства Беларусі",
+                phase="save",
+                detail="Publishing edit to the wiki",
+                phase_elapsed=6.2,
+                processed=15,
+                matched=12,
+                saved=11,
+                skipped=3,
+                failed=1,
+                retries=2,
+            )
+        )
+    )
+
+    output = stream.getvalue()
+    assert "Bulk apply status" in output
+    assert "belen13 (БелЭн 13) [1/1]" in output
+    assert "15/114" in output
+    assert "Краязнаўства Беларусі" in output
+    assert "save (6.20s)" in output
+    assert "Publishing edit to the wiki" in output
+    assert "Failed" in output
+    assert "Retries" in output
+
+
+def test_bulk_status_prints_plain_status_lines():
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=False,
+        width=100,
+        no_color=True,
+        highlight=False,
+    )
+    ui = AppUI(no_color=True, console=console)
+    status = BulkRunStatus(
+        source_label="demo (Demo) [1/1]",
+        total_pages=5,
+        current_index=2,
+        current_title="Page title",
+        phase="save",
+        detail="Publishing edit to the wiki",
+        processed=2,
+        matched=2,
+        saved=1,
+        skipped=0,
+        failed=0,
+        retries=1,
+    )
+
+    ui.begin_bulk_run(status)
+    ui.update_bulk_status(status)
+    ui.update_bulk_status(replace(status, phase="retry", detail="Retrying save in 2.00s"))
+
+    output = stream.getvalue()
+    normalized_output = " ".join(output.split())
+    assert output.count("[bulk-status]") == 2
+    assert "| 2/5 | save | Page title | Publishing edit to the wiki |" in normalized_output
+    assert "| 2/5 | retry | Page title | Retrying save in 2.00s |" in normalized_output
 
 
 def test_prompt_csv_without_default_does_not_pass_empty_default(monkeypatch):
@@ -410,6 +551,7 @@ def test_run_guidance_mentions_interactive_controls():
     assert "Interactive guidance" in output
     assert "review_variants.json" in output
     assert "`y` save" in output
+    assert "learned or edited" in output
     assert "still stop for confirmation" in output
     assert "skipped automatically instead of prompting" in output
     assert "candidate lines" in output
@@ -583,9 +725,10 @@ def test_prompt_variant_action_shows_help_once(monkeypatch):
     output = stream.getvalue()
     assert output.count("Variant review controls") == 1
     assert "Add this variant to review_variants.json" in output
+    assert "save an exact rule to rules.json" in output
     assert labels == [
-        "Choose variant action [r=review, i=ignore, s=skip]",
-        "Choose variant action [r=review, i=ignore, s=skip]",
+        "Choose variant action [r=review, e=edit, i=ignore, s=skip]",
+        "Choose variant action [r=review, e=edit, i=ignore, s=skip]",
     ]
 
 
@@ -664,7 +807,8 @@ def test_prompt_review_match_action_shows_help_once(monkeypatch):
     output = stream.getvalue()
     assert output.count("Manual review controls") == 1
     assert "future exact replacement" in output
+    assert "save an exact rule to rules.json" in output
     assert labels == [
-        "Choose review action [r=learn exact, i=ignore, s=skip]",
-        "Choose review action [r=learn exact, i=ignore, s=skip]",
+        "Choose review action [r=learn exact, e=edit, i=ignore, s=skip]",
+        "Choose review action [r=learn exact, e=edit, i=ignore, s=skip]",
     ]

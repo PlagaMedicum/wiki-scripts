@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from biblio.manage_questions import (
-    collect_scaffold,
-)
+from biblio.manage_questions import collect_scaffold_plain
 from biblio.manage_questions import (
     guess_candidate_defaults as _guess_candidate_defaults,
 )
 from biblio.manage_reports import (
+    render_add_source_preview,
     render_add_source_summary,
 )
 from biblio.manage_reports import (
@@ -23,11 +22,17 @@ guess_candidate_defaults = _guess_candidate_defaults
 __all__ = ["add_source", "guess_candidate_defaults", "validate_sources"]
 
 
-def add_source(ui: AppUI, root: Path | None = None) -> int:
+def add_source(ui: AppUI, root: Path | None = None, *, plain: bool = False) -> int:
     actual_root = root or project_root()
-    scaffold = collect_scaffold(ui, actual_root)
+    if plain or not ui.console.is_terminal:
+        scaffold = collect_scaffold_plain(ui, actual_root)
+    else:
+        from biblio.manage_tui import collect_scaffold_tui
+
+        scaffold = collect_scaffold_tui(ui, actual_root)
 
     render_add_source_summary(ui, scaffold)
+    render_add_source_preview(ui, scaffold)
     if not ui.confirm("Create these files?", default=True):
         ui.warn("Source creation cancelled.")
         return 1

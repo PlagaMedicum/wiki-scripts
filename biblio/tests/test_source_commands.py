@@ -7,7 +7,7 @@ from biblio.cli import main
 from biblio.manage import guess_candidate_defaults
 
 
-def _write_source_tree(root, source_id, *, include_readme=True, include_rules=True):
+def _write_source_tree(root, source_id, *, include_rules=True):
     source_dir = root / "sources" / source_id
     source_dir.mkdir(parents=True)
     source_toml = (
@@ -64,8 +64,6 @@ def _write_source_tree(root, source_id, *, include_readme=True, include_rules=Tr
         source_dir.joinpath("rules.json").write_text("[]", encoding="utf-8")
         source_dir.joinpath("review_variants.json").write_text("[]", encoding="utf-8")
         source_dir.joinpath("ignored_variants.json").write_text("[]", encoding="utf-8")
-    if include_readme:
-        source_dir.joinpath("README.md").write_text("# Temporary source\n", encoding="utf-8")
     return source_dir
 
 
@@ -78,15 +76,24 @@ def test_cli_registers_source_management_commands(capsys):
     assert "validate" in output
 
 
+def test_add_source_help_mentions_plain_mode(capsys):
+    with pytest.raises(SystemExit):
+        main(["add-source", "--help"])
+
+    output = capsys.readouterr().out
+
+    assert "--plain" in output
+
+
 def test_validate_reports_missing_canonical_files(monkeypatch, tmp_path, capsys):
-    _write_source_tree(tmp_path, "valid-source", include_readme=False, include_rules=False)
+    _write_source_tree(tmp_path, "valid-source", include_rules=False)
     broken_dir = tmp_path / "sources" / "broken-source"
     broken_dir.mkdir(parents=True)
     broken_dir.joinpath("source.toml").write_text(
         textwrap.dedent(
             """
             [source]
-            id = "broken-source"
+            id = "wrong-id"
             name = "Broken source"
             site_lang = "be"
             family = "wikipedia"
@@ -120,11 +127,6 @@ def test_validate_reports_missing_canonical_files(monkeypatch, tmp_path, capsys)
         + "\n",
         encoding="utf-8",
     )
-    broken_dir.joinpath("rules.JSON").write_text("[]", encoding="utf-8")
-    broken_dir.joinpath("review_variants.json").write_text("[]", encoding="utf-8")
-    broken_dir.joinpath("ignored_variants.json").write_text("[]", encoding="utf-8")
-    broken_dir.joinpath("readme.md").write_text("# wrong case\n", encoding="utf-8")
-
     monkeypatch.setattr("biblio.specs.project_root", lambda: tmp_path)
     monkeypatch.setattr("biblio.runner.project_root", lambda: tmp_path)
     monkeypatch.setattr("biblio.manage.project_root", lambda: tmp_path)
@@ -134,8 +136,7 @@ def test_validate_reports_missing_canonical_files(monkeypatch, tmp_path, capsys)
 
     assert exit_code != 0
     assert "broken-source" in output
-    assert "README.md" in output
-    assert "readme.md" in output
+    assert "source.toml" in output
 
 
 def test_validate_accepts_canonical_layout(monkeypatch, tmp_path, capsys):
@@ -201,7 +202,6 @@ def test_add_source_creates_definition_and_runtime_files(monkeypatch, tmp_path):
         "Example term",
     )
     assert source_dir.joinpath("source.toml").exists()
-    assert source_dir.joinpath("README.md").exists()
     assert source_dir.joinpath("rules.json").read_text(encoding="utf-8") == "[]\n"
     assert source_dir.joinpath("review_variants.json").read_text(encoding="utf-8") == "[]\n"
     assert source_dir.joinpath("ignored_variants.json").read_text(encoding="utf-8") == "[]\n"
@@ -216,3 +216,87 @@ def test_guess_candidate_defaults_prefers_text_for_all_and_isbns_for_any():
 
     assert candidate_all == ("Гомельская вобласць",)
     assert candidate_any == ("985-11-0303-9", "985-11-0302-0")
+
+
+def test_add_source_can_scaffold_merged_multi_volume_source(monkeypatch, tmp_path):
+    text_responses = iter(
+        [
+            "Merged source",
+            "merged-source",
+            "be",
+            "wikipedia",
+            "Крыніцы/Прыклад",
+            "{{Крыніцы/Прыклад|{volume}}}",
+            "{{Крыніцы/Прыклад|{volume}|{pages}}}",
+            "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}",
+            "Volume one",
+            "1",
+            "БелЭн",
+            "1996",
+            "Volume two",
+            "2",
+            "БелЭн",
+            "1997",
+            "Merged source targets example bibliography references on be.wikipedia.org.",
+        ]
+    )
+    csv_responses = iter(
+        [
+            "Shared term",
+            "",
+            "",
+            "Shared term",
+            "",
+            "volume-one",
+            "Volume term 1",
+            "ISBN 1",
+            "",
+            "Volume term 1",
+            "ISBN 1",
+            "volume-two",
+            "Volume term 2",
+            "ISBN 2",
+            "",
+            "Volume term 2",
+            "ISBN 2",
+        ]
+    )
+    confirm_responses = iter([False, True])
+    int_responses = iter([2])
+
+    monkeypatch.setattr("biblio.manage.project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "biblio.ui.AppUI.prompt_text",
+        lambda self, label, default=None: next(text_responses),
+    )
+    monkeypatch.setattr(
+        "biblio.ui.AppUI.prompt_optional_text",
+        lambda self, label, default="": next(text_responses),
+    )
+    monkeypatch.setattr(
+        "biblio.ui.AppUI.prompt_csv",
+        lambda self, label, default=None: tuple(
+            item.strip() for item in next(csv_responses).split(",") if item.strip()
+        ),
+    )
+    monkeypatch.setattr(
+        "biblio.ui.AppUI.prompt_int",
+        lambda self, label, default, minimum=0: next(int_responses),
+    )
+    monkeypatch.setattr(
+        "biblio.ui.AppUI.confirm",
+        lambda self, label, default=True: next(confirm_responses),
+    )
+
+    exit_code = main(["add-source", "--no-color"])
+
+    source_toml = (tmp_path / "sources" / "merged-source" / "source.toml").read_text(
+        encoding="utf-8"
+    )
+    assert exit_code == 0
+    assert 'without_pages = "{{Крыніцы/Прыклад|{volume}}}"' in source_toml
+    assert 'with_pages = "{{Крыніцы/Прыклад|{volume}|{pages}}}"' in source_toml
+    assert source_toml.count("[[volumes]]") == 2
+    assert 'volume = "1"' in source_toml
+    assert 'volume = "2"' in source_toml
+    assert "[volumes.short_ref]" in source_toml

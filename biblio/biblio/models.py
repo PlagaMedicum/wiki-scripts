@@ -56,6 +56,45 @@ class NormalizationOptions:
 
 
 @dataclass(frozen=True)
+class ShortRefSpec:
+    ref: str
+    year: str
+
+
+@dataclass(frozen=True)
+class SourceArgumentExtractorScaffold:
+    name: str
+    template_params: tuple[str, ...] = ()
+    normalizer: str = "entry"
+
+
+@dataclass(frozen=True)
+class TemplateRoleParams:
+    role: str
+    params: tuple[str, ...] = ()
+    default: str | None = None
+
+
+@dataclass(frozen=True)
+class ImportedVolumeFacts:
+    volume: str
+    title: str
+    year: str | None = None
+    isbn: str | None = None
+
+
+@dataclass(frozen=True)
+class ImportedTemplateFacts:
+    template_title: str
+    template_name: str
+    source_search_seed: tuple[str, ...] = ()
+    role_params: tuple[TemplateRoleParams, ...] = ()
+    volumes: tuple[ImportedVolumeFacts, ...] = ()
+    extra_params: tuple[str, ...] = ()
+    raw_text: str = field(repr=False, default="")
+
+
+@dataclass(frozen=True)
 class SourceSpec:
     source_dir: Path
     source_id: str
@@ -76,10 +115,20 @@ class SourceSpec:
     argument_extractors: tuple[ArgumentExtractor, ...] = ()
     alias_rules: tuple[AliasRule, ...] = ()
     normalization: NormalizationOptions = NormalizationOptions()
+    short_ref: ShortRefSpec | None = None
+    volume: str | None = None
+    aliases: tuple[str, ...] = ()
+    volume_variants: tuple[SourceSpec, ...] = field(
+        default_factory=tuple,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def template_fields(self) -> frozenset[str]:
         fields = {"entry", "pages"}
+        if self.volume is not None or self.volume_variants:
+            fields.add("volume")
         fields.update(extractor.name for extractor in self.argument_extractors)
         return frozenset(fields)
 
@@ -94,6 +143,8 @@ class SourceSpec:
             "entry": entry or "",
             "pages": pages or "",
         }
+        if self.volume is not None or self.volume_variants:
+            values["volume"] = self.volume or ""
         for extractor in self.argument_extractors:
             values.setdefault(extractor.name, "")
         for key, value in arguments.items():
@@ -138,6 +189,10 @@ class SourceSpec:
                 values.append(item)
         return tuple(values)
 
+    @property
+    def operational_specs(self) -> tuple[SourceSpec, ...]:
+        return self.volume_variants or (self,)
+
 
 @dataclass(frozen=True)
 class RunOptions:
@@ -170,6 +225,7 @@ class ReplacementResult:
     extra_argument_values: dict[str, list[str]] = field(default_factory=dict)
     review_reasons: list[str] = field(default_factory=list)
     matched_review_lines: list[str] = field(default_factory=list)
+    short_ref_aliases: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -180,8 +236,9 @@ class VariantInfo:
     pages: str | None = None
     entry: str | None = None
     extra_arguments: dict[str, str] = field(default_factory=dict)
-    context_before: tuple[str, ...] = ()
-    context_after: tuple[str, ...] = ()
+    source_excerpt: str = ""
+    excerpt_match_start: int = 0
+    excerpt_match_end: int = 0
 
 
 @dataclass
@@ -190,9 +247,29 @@ class RunStats:
     matched: int = 0
     saved: int = 0
     skipped: int = 0
+    failed: int = 0
     errors: int = 0
     learned: int = 0
     ignored: int = 0
+    retry_events: int = 0
+    failed_titles: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class BulkRunStatus:
+    source_label: str
+    total_pages: int
+    current_index: int = 0
+    current_title: str = ""
+    phase: str = "queue"
+    detail: str = ""
+    phase_elapsed: float = 0.0
+    processed: int = 0
+    matched: int = 0
+    saved: int = 0
+    skipped: int = 0
+    failed: int = 0
+    retries: int = 0
 
 
 @dataclass(frozen=True)
@@ -221,3 +298,22 @@ class SourceScaffold:
     page_patterns: tuple[str, ...]
     reject_patterns: tuple[str, ...]
     description: str
+    argument_extractors: tuple[SourceArgumentExtractorScaffold, ...] = ()
+    template_role_params: tuple[TemplateRoleParams, ...] = ()
+    import_notes: tuple[str, ...] = ()
+    imported_from_title: str | None = None
+    volumes: tuple[SourceVolumeScaffold, ...] = ()
+
+
+@dataclass(frozen=True)
+class SourceVolumeScaffold:
+    volume: str
+    name: str
+    aliases: tuple[str, ...] = ()
+    insource_terms: tuple[str, ...] = ()
+    isbns: tuple[str, ...] = ()
+    keywords: tuple[str, ...] = ()
+    candidate_all: tuple[str, ...] = ()
+    candidate_any: tuple[str, ...] = ()
+    short_ref_ref: str | None = None
+    short_ref_year: str | None = None

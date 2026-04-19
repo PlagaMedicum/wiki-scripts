@@ -5,11 +5,12 @@ from pathlib import Path
 from rich.panel import Panel
 from rich.table import Table
 
+from biblio.manage_render import render_source_toml
 from biblio.models import SourceScaffold, SourceValidationIssue
 from biblio.specs import (
     PERSISTENT_SOURCE_FILENAMES,
     RUNTIME_STATE_FILENAMES,
-    source_root,
+    discover_source_specs,
     validate_source_layouts,
 )
 from biblio.ui import AppUI
@@ -28,23 +29,36 @@ def render_add_source_summary(ui: AppUI, scaffold: SourceScaffold) -> None:
     summary.add_row("Tracked files", ", ".join(PERSISTENT_SOURCE_FILENAMES))
     summary.add_row("Local runtime files", ", ".join(RUNTIME_STATE_FILENAMES))
     summary.add_row("Template", scaffold.template_name)
+    summary.add_row("Volumes", str(len(scaffold.volumes) or 1))
     summary.add_row("Insource terms", _csv_default(scaffold.insource_terms) or "none")
     summary.add_row("Candidate all", _csv_default(scaffold.candidate_all) or "none")
     summary.add_row("Candidate any", _csv_default(scaffold.candidate_any) or "none")
     ui.print(Panel(summary, title="New source scaffold", border_style="blue"))
 
 
+def render_add_source_preview(ui: AppUI, scaffold: SourceScaffold) -> None:
+    ui.print(
+        Panel(
+            render_source_toml(scaffold),
+            title="Preview: source.toml",
+            border_style="green",
+        )
+    )
+
+
 def render_validation_success(ui: AppUI, root: Path) -> None:
     table = Table(title="Validated source layouts")
     table.add_column("Source", style="" if ui.no_color else "bold cyan")
     table.add_column("Files")
-    for source_dir in sorted(source_root(root).iterdir()):
-        if source_dir.is_dir():
-            table.add_row(
-                source_dir.name,
-                f"{', '.join(PERSISTENT_SOURCE_FILENAMES)} "
-                f"(runtime state: {', '.join(RUNTIME_STATE_FILENAMES)})",
-            )
+    for spec in discover_source_specs(root=root):
+        source_label = spec.source_id
+        if spec.volume_variants:
+            source_label = f"{source_label} ({len(spec.volume_variants)} volumes)"
+        table.add_row(
+            source_label,
+            f"{', '.join(PERSISTENT_SOURCE_FILENAMES)} "
+            f"(runtime state: {', '.join(RUNTIME_STATE_FILENAMES)})",
+        )
     ui.print(table)
     ui.info("[ok] Source layouts and filenames are valid.")
 

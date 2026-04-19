@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from biblio.models import SourceScaffold
+from biblio.models import (
+    SourceArgumentExtractorScaffold,
+    SourceScaffold,
+    SourceVolumeScaffold,
+    TemplateRoleParams,
+)
 
 
 def _csv_default(values: tuple[str, ...]) -> str:
@@ -23,7 +28,76 @@ def _toml_list(values: tuple[str, ...]) -> str:
     return "\n".join(lines)
 
 
+def _render_volume_block(volume: SourceVolumeScaffold) -> list[str]:
+    lines = [
+        "[[volumes]]",
+        f"volume = {_toml_string(volume.volume)}",
+        f"name = {_toml_string(volume.name)}",
+        f"aliases = {_toml_list(volume.aliases)}",
+        f"insource_terms = {_toml_list(volume.insource_terms)}",
+        f"isbns = {_toml_list(volume.isbns)}",
+        f"keywords = {_toml_list(volume.keywords)}",
+        f"must_contain_all = {_toml_list(volume.candidate_all)}",
+        f"must_contain_any = {_toml_list(volume.candidate_any)}",
+    ]
+    if volume.short_ref_ref and volume.short_ref_year:
+        lines.extend(
+            [
+                "",
+                "[volumes.short_ref]",
+                f"ref = {_toml_string(volume.short_ref_ref)}",
+                f"year = {_toml_string(volume.short_ref_year)}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "[volumes.macros]",
+            '# VOLUME = "..."',
+            '# SOURCE_ISBN = "..."',
+            '# TOM_PARAM = "..."',
+        ]
+    )
+    return lines
+
+
+def _role_param_lookup(
+    values: tuple[TemplateRoleParams, ...],
+) -> dict[str, TemplateRoleParams]:
+    return {value.role: value for value in values}
+
+
+def _render_argument_extractor(extractor: SourceArgumentExtractorScaffold) -> list[str]:
+    return [
+        f"[argument_extractors.{extractor.name}]",
+        f"template_params = {_toml_list(extractor.template_params)}",
+        f"normalizer = {_toml_string(extractor.normalizer)}",
+    ]
+
+
+def _render_template_role_hints(scaffold: SourceScaffold) -> list[str]:
+    lookup = _role_param_lookup(scaffold.template_role_params)
+    lines: list[str] = []
+    if scaffold.imported_from_title:
+        lines.append(f"# Imported from template page: {scaffold.imported_from_title}")
+    if lookup:
+        lines.append("# Imported template parameter aliases:")
+        for role in ("volume", "entry", "author", "pages", "responsible", "ref"):
+            binding = lookup.get(role)
+            if not binding or not binding.params:
+                continue
+            default_note = f" (default: {binding.default})" if binding.default else ""
+            lines.append(f"# - {role}: {', '.join(binding.params)}{default_note}")
+    if scaffold.import_notes:
+        lines.append("# Imported notes:")
+        for note in scaffold.import_notes:
+            lines.append(f"# - {note}")
+    return lines
+
+
 def render_source_toml(scaffold: SourceScaffold) -> str:
+    template_without_pages = scaffold.template_without_pages
+    template_with_pages = scaffold.template_with_pages
     lines = [
         "[source]",
         f"id = {_toml_string(scaffold.source_id)}",
@@ -42,8 +116,8 @@ def render_source_toml(scaffold: SourceScaffold) -> str:
         "",
         "[replacement]",
         f"template_name = {_toml_string(scaffold.template_name)}",
-        f"without_pages = {_toml_string(scaffold.template_without_pages)}",
-        f"with_pages = {_toml_string(scaffold.template_with_pages)}",
+        f"without_pages = {_toml_string(template_without_pages)}",
+        f"with_pages = {_toml_string(template_with_pages)}",
         "",
         "[summary]",
         f"default_format = {_toml_string(scaffold.default_summary_format)}",
@@ -60,70 +134,30 @@ def render_source_toml(scaffold: SourceScaffold) -> str:
         "normalize_dashes = true",
         "collapse_whitespace = true",
         "",
-        "[macros]",
-        '# Add bibliography-specific fragments here, e.g. TITLE = "..."',
-        "",
-        "# Example broad regex rule skeleton:",
-        "# [[regex_rules]]",
-        '# name = "example_rule"',
-        '# pattern = "(?m)^(?P<prefix>{{LIST_PREFIX}})...$"',
-        '# replacement = "{prefix}{template}"',
-        '# flags = "VERBOSE|UNICODE|MULTILINE"',
-        "# enabled = true",
-        "",
     ]
-    return "\n".join(lines)
-
-
-def render_source_readme(scaffold: SourceScaffold) -> str:
-    description = scaffold.description or (
-        "This source scaffolds bibliography replacement rules for "
-        f"{scaffold.name} on be.wikipedia.org."
-    )
-    default_summary = scaffold.default_summary_format.replace(
-        "{template_name}",
-        scaffold.template_name,
-    )
-    return "\n".join(
+    hint_lines = _render_template_role_hints(scaffold)
+    if hint_lines:
+        lines.extend(hint_lines)
+        lines.append("")
+    for extractor in scaffold.argument_extractors:
+        lines.extend(_render_argument_extractor(extractor))
+        lines.append("")
+    lines.extend(
         [
-            f"# `{scaffold.source_id}`",
+            "[macros]",
+            '# Add bibliography-specific fragments here, e.g. TITLE = "..."',
             "",
-            description,
-            "",
-            "## Navigation",
-            "",
-            "- [Project README](../../README.md)",
-            "- [Documentation index](../../docs/README.md)",
-            "- [Architecture overview](../../docs/architecture.md)",
-            "- [Architecture review](../../docs/architecture-review.md)",
-            "",
-            "## Search Terms",
-            "",
-            f"- Insource terms: {_csv_default(scaffold.insource_terms) or 'none'}",
-            f"- ISBNs: {_csv_default(scaffold.isbns) or 'none'}",
-            f"- Keywords: {_csv_default(scaffold.keywords) or 'none'}",
-            "",
-            "## Replacement Forms",
-            "",
-            f"- Without pages: `{scaffold.template_without_pages}`",
-            f"- With pages: `{scaffold.template_with_pages}`",
-            "",
-            "## Candidate Detection",
-            "",
-            f"- Must contain all: {_csv_default(scaffold.candidate_all) or 'none'}",
-            f"- Must contain any: {_csv_default(scaffold.candidate_any) or 'none'}",
-            "",
-            "## Default Edit Summary",
-            "",
-            f"- `{default_summary}`",
-            "",
-            "## Notes",
-            "",
-            "- Add bibliography-specific macros in `source.toml` under `[macros]`.",
-            "- Add broad regex rules in `[[regex_rules]]`.",
-            "- `rules.json`, `review_variants.json`, and `ignored_variants.json` are local runtime "
-            "state managed by the workflow.",
-            "- The runtime JSON files are gitignored and do not need to be committed.",
+            "# Example broad regex rule skeleton:",
+            "# [[regex_rules]]",
+            '# name = "example_rule"',
+            '# pattern = "(?m)^(?P<prefix>{{LIST_PREFIX}})...$"',
+            '# replacement = "{prefix}{template}"',
+            '# flags = "VERBOSE|UNICODE|MULTILINE"',
+            "# enabled = true",
             "",
         ]
     )
+    for volume in scaffold.volumes:
+        lines.extend(_render_volume_block(volume))
+        lines.append("")
+    return "\n".join(lines)

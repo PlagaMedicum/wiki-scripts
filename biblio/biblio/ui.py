@@ -4,17 +4,27 @@ import difflib
 import os
 import sys
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from threading import RLock
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import track
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskID,
+    TextColumn,
+    TimeElapsedColumn,
+    track,
+)
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from biblio.models import ReplacementResult, RunStats, SourceSpec, VariantInfo
+from biblio.models import BulkRunStatus, ReplacementResult, RunStats, SourceSpec, VariantInfo
+from biblio.observability import format_elapsed
 
 
 @dataclass(frozen=True)
@@ -35,13 +45,35 @@ class AppUI:
         self._shown_variant_controls = False
         self._shown_review_match_controls = False
         self._shown_page_controls = False
+        self._bulk_status: BulkRunStatus | None = None
+        self._run_progress: Progress | None = None
+        self._run_progress_task: TaskID | None = None
+        self._last_bulk_status_line: str | None = None
+        self._screen_ui_suspend_depth = 0
+        self._console_lock = RLock()
 
     @contextmanager
     def _suspend_screen_ui(self):
-        yield
+        should_resume_progress = (
+            self._screen_ui_suspend_depth == 0 and self._run_progress is not None
+        )
+        self._screen_ui_suspend_depth += 1
+        if should_resume_progress:
+            self._stop_run_progress()
+        try:
+            yield
+        finally:
+            self._screen_ui_suspend_depth -= 1
+            if (
+                should_resume_progress
+                and self._screen_ui_suspend_depth == 0
+                and self._bulk_status is not None
+            ):
+                self._ensure_bulk_live()
 
     def _print_message(self, message: str, *, style: str = "") -> None:
-        self.console.print(message, style=style, markup=False)
+        with self._console_lock:
+            self.console.print(message, style=style, markup=False)
 
     def _supports_screen_ui(self) -> bool:
         return self._supports_single_key_input() and self.console.is_terminal
@@ -61,7 +93,37 @@ class AppUI:
             yield live
 
     def print(self, renderable) -> None:
-        self.console.print(renderable)
+        with self._console_lock:
+            self.console.print(renderable)
+
+    def begin_bulk_run(self, status: BulkRunStatus) -> None:
+        self._bulk_status = status
+        self._ensure_bulk_live()
+
+    def update_bulk_status(self, status: BulkRunStatus) -> None:
+        self._bulk_status = status
+        self._ensure_bulk_live()
+
+    def finish_bulk_run(self) -> None:
+        self._stop_bulk_live()
+        self._bulk_status = None
+
+    def report_transport_wait(self, message: str) -> None:
+        self.warn(message)
+        if self._bulk_status is None:
+            return
+        phase = self._bulk_status.phase
+        if message.startswith("[retry]"):
+            phase = "retry"
+        elif message.startswith("[throttle]") or message.startswith("[maxlag]"):
+            phase = "throttle"
+        self.update_bulk_status(
+            replace(
+                self._bulk_status,
+                phase=phase,
+                detail=message,
+            )
+        )
 
     def info(self, message: str) -> None:
         self._print_message(message)
@@ -169,7 +231,7 @@ class AppUI:
                 rows.append(
                     (
                         "Manual-review matches",
-                        "Dry-run learning also lets you review heuristic matches and add their exact lines to review_variants.json.",
+                        "With Learn variants enabled, heuristic/manual-review matches can be learned or edited before saving, or promoted to review_variants.json for future exact replacement.",
                     )
                 )
         if apply and not assume_yes:
@@ -222,7 +284,7 @@ class AppUI:
         self.print(Panel(table, title="Interactive guidance", border_style="magenta"))
 
     def print_processing_page(self, *, index: int, total: int, title: str) -> None:
-        self.info(f"Processing page {index}/{total}: {title}")
+        self.info(f"[queue] {index}/{total}: {title}")
 
     def print_state_counts(
         self,
@@ -257,6 +319,112 @@ class AppUI:
     def status(self, message: str):
         with self.console.status(message):
             yield
+
+    def build_bulk_status_panel(self, status: BulkRunStatus) -> Panel:
+        table = Table.grid(expand=True, padding=(0, 1))
+        table.add_column(style="" if self.no_color else "bold cyan")
+        table.add_column()
+        phase_value = status.phase
+        if status.phase_elapsed > 0:
+            phase_value = f"{phase_value} ({format_elapsed(status.phase_elapsed)})"
+        table.add_row("Source", status.source_label)
+        table.add_row("Page", f"{status.current_index}/{status.total_pages}")
+        table.add_row("Title", status.current_title or "n/a")
+        table.add_row("Phase", phase_value)
+        table.add_row("Detail", status.detail or "running")
+        table.add_row("Processed", str(status.processed))
+        table.add_row("Matched", str(status.matched))
+        table.add_row("Saved", str(status.saved))
+        table.add_row("Skipped", str(status.skipped))
+        table.add_row("Failed", str(status.failed))
+        table.add_row("Retries", str(status.retries))
+        return Panel(table, title="Bulk apply status", border_style="cyan")
+
+    def _bulk_status_line(self, status: BulkRunStatus) -> str:
+        return (
+            f"[bulk-status] {status.source_label} | "
+            f"{status.current_index}/{status.total_pages} | "
+            f"{status.phase} | "
+            f"{status.current_title or 'n/a'} | "
+            f"{status.detail or 'running'} | "
+            f"processed={status.processed} matched={status.matched} saved={status.saved} "
+            f"skipped={status.skipped} failed={status.failed} retries={status.retries}"
+        )
+
+    def _decision_label(self, result: ReplacementResult) -> str:
+        if result.review_reasons:
+            return "manual review required"
+        return "safe to auto-apply"
+
+    def _decision_reason(self, result: ReplacementResult) -> str:
+        if result.review_reasons:
+            return (
+                "At least one value was inferred heuristically or disagrees with the page context, "
+                "so operator confirmation is required."
+            )
+        return "All extracted values came from exact or already approved rules with no remaining ambiguity."
+
+    def _bulk_progress_completed(self, status: BulkRunStatus) -> int:
+        if status.phase in {"saved", "skip", "failed"}:
+            return min(status.processed, status.total_pages)
+        return min(max(status.processed - 1, 0), status.total_pages)
+
+    def _ensure_run_progress(self, status: BulkRunStatus) -> None:
+        if not self.console.is_terminal or self._screen_ui_suspend_depth > 0:
+            return
+
+        if self._run_progress is None:
+            self._run_progress = Progress(
+                SpinnerColumn(style="" if self.no_color else "cyan"),
+                TextColumn("[progress]", style="" if self.no_color else "bold cyan"),
+                BarColumn(bar_width=None),
+                TextColumn("{task.completed}/{task.total}"),
+                TextColumn("{task.fields[phase]}", style="" if self.no_color else "green"),
+                TextColumn("{task.fields[title]}"),
+                TimeElapsedColumn(),
+                console=self.console,
+                transient=True,
+                auto_refresh=False,
+            )
+            self._run_progress.start()
+            self._run_progress_task = self._run_progress.add_task(
+                "bulk-apply",
+                total=max(status.total_pages, 1),
+                completed=self._bulk_progress_completed(status),
+                phase=status.phase,
+                title=status.current_title or "n/a",
+            )
+        elif self._run_progress_task is not None:
+            self._run_progress.update(
+                self._run_progress_task,
+                total=max(status.total_pages, 1),
+                completed=self._bulk_progress_completed(status),
+                phase=status.phase,
+                title=status.current_title or "n/a",
+            )
+        if self._run_progress is not None:
+            self._run_progress.refresh()
+
+    def _ensure_bulk_live(self) -> None:
+        if self._bulk_status is None:
+            return
+        self._ensure_run_progress(self._bulk_status)
+        line = self._bulk_status_line(self._bulk_status)
+        if line == self._last_bulk_status_line:
+            return
+        self._last_bulk_status_line = line
+        self.info(line)
+
+    def _stop_run_progress(self) -> None:
+        if self._run_progress is None:
+            return
+        self._run_progress.stop()
+        self._run_progress = None
+        self._run_progress_task = None
+
+    def _stop_bulk_live(self) -> None:
+        self._stop_run_progress()
+        self._last_bulk_status_line = None
 
     def build_diff_text(
         self,
@@ -315,7 +483,7 @@ class AppUI:
         meta.add_row("Page", title)
         meta.add_row("Replacements", str(result.replacements))
         meta.add_row(
-            "Rules",
+            "Matched rules",
             ", ".join(dict.fromkeys(result.used_rule_names)) or "n/a",
         )
         meta.add_row(
@@ -323,22 +491,23 @@ class AppUI:
             ", ".join(dict.fromkeys(result.rendered_templates)) or "n/a",
         )
         meta.add_row(
-            "Page args",
+            "Inferred pages",
             ", ".join(dict.fromkeys(result.page_arguments)) or "none",
         )
         meta.add_row(
-            "Entry args",
+            "Inferred entry",
             ", ".join(dict.fromkeys(result.entry_arguments)) or "none",
         )
         meta.add_row(
-            "Review",
-            "required" if result.review_reasons else "automatic",
+            "Decision",
+            self._decision_label(result),
         )
+        meta.add_row("Reason", self._decision_reason(result))
         if result.review_reasons:
-            meta.add_row("Review reasons", " ".join(dict.fromkeys(result.review_reasons)))
+            meta.add_row("Manual reasons", " ".join(dict.fromkeys(result.review_reasons)))
         for key, values in sorted(result.extra_argument_values.items()):
             meta.add_row(
-                f"{key.replace('_', ' ').title()} args",
+                f"Inferred {key.replace('_', ' ')}",
                 ", ".join(dict.fromkeys(values)) or "none",
             )
 
@@ -378,25 +547,30 @@ class AppUI:
     def print_used_rule(self, rule: dict) -> None:
         self.info(f"[rule] {rule.get('kind')} -> {rule.get('replacement')}")
 
-    def build_variant_context_text(self, info: VariantInfo) -> Text:
-        text = Text()
-        dim_style = "" if self.no_color else "dim"
+    def resolve_variant_excerpt(self, info: VariantInfo) -> tuple[str, int, int]:
+        excerpt = info.source_excerpt or info.full_line
+        match_start = info.excerpt_match_start
+        match_end = info.excerpt_match_end
+        if (
+            not excerpt
+            or match_start < 0
+            or match_end < match_start
+            or match_end > len(excerpt)
+            or match_end == match_start
+        ):
+            excerpt = info.full_line
+            match_start = 0
+            match_end = len(info.full_line)
+        return excerpt, match_start, match_end
+
+    def build_variant_excerpt_text(self, info: VariantInfo) -> Text:
+        excerpt, match_start, match_end = self.resolve_variant_excerpt(info)
+        surrounding_style = "" if self.no_color else "white"
         matched_style = "" if self.no_color else "bold yellow"
 
-        for line in info.context_before:
-            text.append(Text(f"  {line}", style=dim_style))
-            text.append("\n")
-
-        matched_lines = info.full_line.splitlines() or [info.full_line]
-        for line in matched_lines:
-            text.append(Text("▶ ", style=matched_style))
-            text.append(Text(line if line else " ", style=matched_style))
-            text.append("\n")
-
-        for line in info.context_after:
-            text.append(Text(f"  {line}", style=dim_style))
-            text.append("\n")
-
+        text = Text(excerpt[:match_start], style=surrounding_style)
+        text.append(excerpt[match_start:match_end], style=matched_style)
+        text.append(excerpt[match_end:], style=surrounding_style)
         return text
 
     def build_unknown_variant_panel(
@@ -422,12 +596,12 @@ class AppUI:
                 value or "none",
             )
 
-        preview_old = "\n".join([*info.context_before, info.full_line, *info.context_after])
-        preview_new = "\n".join([*info.context_before, suggested_template, *info.context_after])
+        preview_old, match_start, match_end = self.resolve_variant_excerpt(info)
+        preview_new = f"{preview_old[:match_start]}{suggested_template}{preview_old[match_end:]}"
         preview_diff = self.build_diff_text(
             old_text=preview_old,
             new_text=preview_new,
-            context=max(len(info.context_before), len(info.context_after), 1),
+            context=max(len(preview_old.splitlines()), len(preview_new.splitlines()), 1),
             highlight_terms=[
                 suggested_template,
                 *(item for item in [info.pages, info.entry] if item),
@@ -438,8 +612,8 @@ class AppUI:
         body = Group(
             table,
             Text(""),
-            Text("Context around matched line", style="" if self.no_color else "bold cyan"),
-            self.build_variant_context_text(info),
+            Text("Source excerpt", style="" if self.no_color else "bold cyan"),
+            self.build_variant_excerpt_text(info),
             Text(""),
             Text("Example diff", style="" if self.no_color else "bold cyan"),
             preview_diff,
@@ -460,6 +634,7 @@ class AppUI:
         table.add_column(style="" if self.no_color else "bold cyan")
         table.add_column()
         table.add_row("r", "Add this variant to review_variants.json for future promotion.")
+        table.add_row("e", "Edit the replacement template and save an exact rule to rules.json.")
         table.add_row("i", "Ignore this variant in future runs.")
         table.add_row("s", "Skip this candidate and continue.")
         self.print(Panel(table, title="Variant review controls", border_style="yellow"))
@@ -472,6 +647,7 @@ class AppUI:
             "r",
             "Add the matched review-required line(s) to review_variants.json for future exact replacement.",
         )
+        table.add_row("e", "Edit the replacement template and save an exact rule to rules.json.")
         table.add_row("i", "Ignore this review-required match in future learn runs.")
         table.add_row("s", "Skip this page for now.")
         self.print(Panel(table, title="Manual review controls", border_style="yellow"))
@@ -824,8 +1000,8 @@ class AppUI:
                 self.print_variant_controls()
                 self._shown_variant_controls = True
             return self.prompt_choice(
-                "Choose variant action [r=review, i=ignore, s=skip]",
-                choices=["r", "i", "s"],
+                "Choose variant action [r=review, e=edit, i=ignore, s=skip]",
+                choices=["r", "e", "i", "s"],
                 default="s",
             )
 
@@ -835,10 +1011,13 @@ class AppUI:
                 self.print_review_match_controls()
                 self._shown_review_match_controls = True
             return self.prompt_choice(
-                "Choose review action [r=learn exact, i=ignore, s=skip]",
-                choices=["r", "i", "s"],
+                "Choose review action [r=learn exact, e=edit, i=ignore, s=skip]",
+                choices=["r", "e", "i", "s"],
                 default="s",
             )
+
+    def prompt_template_text(self, default_template: str) -> str:
+        return self.prompt_text("Replacement template", default=default_template)
 
     def prompt_text(self, label: str, *, default: str | None = None) -> str:
         with self._suspend_screen_ui():
@@ -939,7 +1118,7 @@ class AppUI:
             table.add_row(line)
         self.print(table)
 
-    def build_final_summary(self, stats: RunStats) -> Table:
+    def build_final_summary(self, stats: RunStats):
         table = Table(title="Run summary")
         table.add_column("Metric", style="" if self.no_color else "bold cyan")
         table.add_column("Value", justify="right")
@@ -947,10 +1126,19 @@ class AppUI:
         table.add_row("Matched", str(stats.matched))
         table.add_row("Saved", str(stats.saved))
         table.add_row("Skipped", str(stats.skipped))
+        table.add_row("Failed", str(stats.failed))
         table.add_row("Errors", str(stats.errors))
+        table.add_row("Retry attempts", str(stats.retry_events))
         table.add_row("Learned variants", str(stats.learned))
         table.add_row("Ignored variants", str(stats.ignored))
-        return table
+        if not stats.failed_titles:
+            return table
+
+        failures = Table(title="Failed pages")
+        failures.add_column("Title", style="" if self.no_color else "bold red")
+        for title in stats.failed_titles:
+            failures.add_row(title)
+        return Group(table, failures)
 
     def print_final_summary(self, stats: RunStats) -> None:
         self.print(self.build_final_summary(stats))

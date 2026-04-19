@@ -5,9 +5,13 @@ compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
   source: git:commands/speckit.git.commit.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
 
 # Auto-Commit Changes
+
 
 Automatically stage and commit all changes after a Spec Kit command completes.
 

@@ -1,8 +1,13 @@
 ---
-description: "Detect Git remote URL for GitHub integration"
+description: Detect Git remote URL for GitHub integration
+docmeta:
+  status: maintained
+  review: workflow-local
+  source: document-local metadata
 ---
 
 # Detect Git Remote URL
+
 
 Detect the Git remote URL for integration with GitHub services (e.g., issue creation).
 

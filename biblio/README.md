@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Operator entry points and current documented contract for biblio.
+  source: .specify/doc-registry.json
+---
+
 # Biblio
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Operator entry points and current documented contract for biblio.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 `biblio` is the Python tool for bibliography and citation cleanup on wiki pages. It remains a
 narrow tool: deterministic source-driven matching, reviewable changes, and controlled wiki edits.
@@ -22,7 +24,8 @@ to other local wikis later.
 - local runtime state kept next to the source as JSON and not treated as authored docs
 
 The future direction is to separate source-population/import work from source-processing/edit work,
-but that split is not implemented yet.
+and the code now has an initial boundary for that work, but it is still one Python project and one
+CLI rather than a real package or deployment split.
 
 ## Quick Start
 
@@ -83,6 +86,16 @@ Per-source `README.md` files are no longer part of the source-definition contrac
 - uncertain source mapping or import matches require manual review
 - page-wide rewrites may auto-apply only when the match is exact and deterministic
 - learned replacements need one manually approved proven occurrence before automatic promotion
+
+## Current Boundary Progress
+
+The split discussed in repo governance has started only at the code-organization level:
+
+- source onboarding/import work now lives mainly around `manage_import.py`, `manage_tui.py`, and
+  related source-management flow
+- page-processing/edit work still lives around analysis, execution, save policy, and the run flow
+- shared code is still inside one Python package, so this is a boundary-in-progress, not a finished
+  architecture split
 
 ## Scope Boundary
 

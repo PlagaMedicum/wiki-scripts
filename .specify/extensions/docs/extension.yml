@@ -15,8 +15,8 @@ requires:
 
 provides:
   commands:
-    - name: speckit.docs.docs
-      file: commands/speckit.docs.docs.md
+    - name: speckit.docs
+      file: commands/speckit.docs.md
       description: "Run the repo's explicit docs workflow gate"
 
 tags:

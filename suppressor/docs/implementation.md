@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Current suppressor implementation contract at the documented scope.
+  source: .specify/doc-registry.json
+---
+
 # Suppressor Implementation
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Current suppressor implementation contract at the documented scope.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Purpose
 

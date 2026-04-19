@@ -1,11 +1,16 @@
 ---
-name: "speckit-constitution"
-description: "Create or update the project constitution from interactive or provided principle inputs, ensuring all dependent templates stay in sync."
-compatibility: "Requires spec-kit project structure with .specify/ directory"
+name: speckit-constitution
+description: Create or update the project constitution from interactive or provided principle inputs, ensuring all dependent templates stay in sync.
+compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
-  author: "github-spec-kit"
-  source: "templates/commands/constitution.md"
+  author: github-spec-kit
+  source: templates/commands/constitution.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
+
+# Update Constitution
 
 
 ## User Input

@@ -8,6 +8,8 @@
   ],
   "allowed_reviews": [
     "unreviewed",
+    "reviewed",
+    "approved",
     "code-reviewed",
     "client-input-derived",
     "client-confirmed",
@@ -33,7 +35,7 @@
       "path": "README.md",
       "status": "maintained",
       "review": [
-        "unreviewed"
+        "reviewed"
       ],
       "purpose": "Human-oriented repo overview and navigation only."
     },
@@ -41,7 +43,8 @@
       "path": ".specify/memory/constitution.md",
       "status": "maintained",
       "review": [
-        "client-input-derived"
+        "client-input-derived",
+        "approved"
       ],
       "purpose": "Repo governance rules and non-negotiable workflow requirements."
     },
@@ -49,7 +52,8 @@
       "path": "specs/README.md",
       "status": "maintained",
       "review": [
-        "client-input-derived"
+        "client-input-derived",
+        "approved"
       ],
       "purpose": "Explains the standing governance spec versus change-specific feature specs."
     },
@@ -65,7 +69,7 @@
       "path": "specs/000-repo-governance/research.md",
       "status": "maintained",
       "review": [
-        "unreviewed"
+        "reviewed"
       ],
       "purpose": "Remaining repo-level open questions, rationale, and missing proof rules."
     },
@@ -89,7 +93,7 @@
       "path": "specs/000-repo-governance/tasks.md",
       "status": "maintained",
       "review": [
-        "unreviewed"
+        "reviewed"
       ],
       "purpose": "Lean future-work backlog for repo workflow and tool-boundary follow-up."
     },

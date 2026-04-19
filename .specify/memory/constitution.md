@@ -1,11 +1,15 @@
+---
+docmeta:
+  status: maintained
+  review:
+  - client-input-derived
+  - approved
+  purpose: Repo governance rules and non-negotiable workflow requirements.
+  source: .specify/doc-registry.json
+---
+
 # Wiki Scripts Constitution
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: client-input-derived
-> Purpose: Repo governance rules and non-negotiable workflow requirements.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Core Principles
 
@@ -59,10 +63,10 @@ then `tasks.md`, then implementation, then the explicit docs gate.
 - Spec Kit provides the structure; Codex or other LLM tools may draft, analyze, or implement
   within that structure, but they do not establish product intent on their own.
 - Close non-trivial work with `make docs`, `python3 tools/doc_workflow.py all`, or
-  `/speckit.docs.docs`.
+  `/speckit.docs`.
 - Managed docs MUST be covered by `.specify/doc-registry.json`.
-- Managed DOCMETA blocks are machine-controlled. If review state or purpose changes, update the
-  registry instead of hand-editing the Markdown block.
+- Managed-doc frontmatter is machine-controlled. If review state or purpose changes, update the
+  registry instead of hand-editing the Markdown metadata.
 - Repo policy changes MUST update `README.md`, this constitution, and the standing governance spec
   where relevant.
 - When vision, acceptance criteria, or review requirements are unclear enough to risk wrong work,

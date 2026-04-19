@@ -1,8 +1,13 @@
 ---
-description: "Initialize a Git repository with an initial commit"
+description: Initialize a Git repository with an initial commit
+docmeta:
+  status: maintained
+  review: workflow-local
+  source: document-local metadata
 ---
 
 # Initialize Git Repository
+
 
 Initialize a Git repository in the current project directory if one does not already exist.
 

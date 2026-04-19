@@ -1,9 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: workflow-local
+  purpose: Template for implementation plans and design records.
+  source: document-local metadata
+---
+
 # Implementation Plan: [FEATURE]
 
-**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
 
@@ -17,15 +21,20 @@
   the iteration process.
 -->
 
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
+**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75, or explicitly unknown]  
+**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM, or explicitly unknown]  
 **Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
-**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]  
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Testing**: [e.g., pytest, XCTest, cargo test, or explicitly unknown]  
+**Target Platform**: [e.g., Linux server, iOS 15+, WASM, or explicitly unknown]
+**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app, or explicitly unknown]  
+**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps, or explicitly unknown]  
+**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable, or explicitly unknown]  
+**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens, or explicitly unknown]
+
+If a direct human answer is still required, write it into `questions.md` or a feature-local review
+file and either resolve it during research or stop instead of inventing policy. Do not rewrite
+managed-doc review labels by hand; change `.specify/doc-registry.json` when durable review state
+changes.
 
 ## Constitution Check
 
@@ -41,6 +50,8 @@ Include document impact in this check:
 - whether the constitution or Spec Kit workflow files change
 - whether `.specify/doc-registry.json` changes
 - whether `make docs` / `python3 tools/doc_workflow.py all` must be run
+- whether the feature needs `questions.md` or `review-queue.md` updates to capture pending human
+  input explicitly
 
 ## Project Structure
 
@@ -51,7 +62,10 @@ specs/[###-feature]/
 ├── plan.md              # This file (/speckit.plan command output)
 ├── research.md          # Phase 0 output (/speckit.plan command)
 ├── data-model.md        # Phase 1 output (/speckit.plan command)
+├── questions.md         # Optional: direct human questions for the feature
+├── review-queue.md      # Optional: current human action queue for the feature
 ├── quickstart.md        # Phase 1 output (/speckit.plan command)
+├── checklists/          # Optional: requirements-quality checklists
 ├── contracts/           # Phase 1 output (/speckit.plan command)
 └── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
 ```
@@ -101,7 +115,8 @@ ios/ or android/
 ```
 
 **Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
+directories captured above. In this repo, that often means a project root such as `biblio/` or
+`suppressor/`, not a synthetic top-level `src/` tree.]
 
 ## Complexity Tracking
 

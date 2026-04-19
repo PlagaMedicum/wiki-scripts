@@ -16,13 +16,12 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - direct script execution path
     import doc_status  # type: ignore[no-redef]
 
-UNRESOLVED_MARKERS = (
-    "TODO(",
-    "<!-- TODO:",
-    "<!--TODO:",
-    "TBD",
-    "[NEEDS CLARIFICATION",
-    ": not decided:",
+UNRESOLVED_MARKER_PATTERNS = (
+    ("TODO(", re.compile(r"todo\(", re.IGNORECASE)),
+    ("<!-- TODO:", re.compile(r"<!--\s*todo:", re.IGNORECASE)),
+    ("TBD", re.compile(r"\btbd\b", re.IGNORECASE)),
+    ("[NEEDS CLARIFICATION", re.compile(r"\[needs clarification", re.IGNORECASE)),
+    (": not decided:", re.compile(r":\s*not decided:", re.IGNORECASE)),
 )
 
 STALE_REFERENCES = (
@@ -32,19 +31,34 @@ STALE_REFERENCES = (
     "docs/spec-driven-development.md",
     "docs/architecture-principles.md",
     "suppressor/specs/",
-    "tools/doc_status.py",
 )
 
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 TASK_ITEM_RE = re.compile(r"^- \[(?P<done>[ xX])\] ", re.MULTILINE)
+QUESTION_HEADING_RE = re.compile(r"^###\s+(?P<id>Q\d+):\s+(?P<title>.+?)\s*$", re.MULTILINE)
+QUESTION_STATUS_RE = re.compile(
+    r"^- Status:\s+(?P<status>pending-answer|pending-comment|answered|commented|resolved)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+FENCED_CODE_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+STATUS_PRINT_ORDER = (
+    ("APP", "approval_needed"),
+    ("REV", "manual_review_needed"),
+    ("ANS", "answer_needed"),
+    ("COM", "comment_requested"),
+    ("UPD", "update_needed"),
+    ("CLS", "closure_needed"),
+    ("ERR", "registry_or_link_errors"),
+)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("sync", help="Rewrite managed doc metadata from the registry")
-    subparsers.add_parser("lint", help="Check that managed doc metadata matches the registry")
+    subparsers.add_parser("sync", help="Rewrite and augment repo Markdown frontmatter metadata")
+    subparsers.add_parser("lint", help="Check that repo Markdown metadata matches the frontmatter rules")
     subparsers.add_parser("test", help="Run docs-tool unit tests")
     status_parser = subparsers.add_parser("status", help="Report deterministic docs status categories")
     status_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
@@ -89,15 +103,17 @@ def feature_spec_dirs(root: Path) -> list[Path]:
     )
 
 
-def scan_markdown_paths(root: Path, registry: dict) -> list[Path]:
+def scan_markdown_paths(root: Path, registry: dict, active_feature: str | None) -> list[Path]:
     paths: set[Path] = set(managed_doc_paths(root, registry))
 
     governance_dir = root / "specs" / "000-repo-governance"
     if governance_dir.is_dir():
         paths.update(governance_dir.rglob("*.md"))
 
-    for feature_dir in feature_spec_dirs(root):
-        paths.update(feature_dir.rglob("*.md"))
+    if active_feature:
+        active_dir = root / active_feature
+        if active_dir.is_dir():
+            paths.update(active_dir.rglob("*.md"))
 
     return sorted(paths)
 
@@ -136,10 +152,93 @@ def contains_tasks_completion(path: Path) -> bool:
     return bool(matches) and all(match.group("done").lower() == "x" for match in matches)
 
 
+def contains_stale_reference(text: str, stale_ref: str) -> bool:
+    pattern = re.compile(rf"(?<![A-Za-z0-9._/-]){re.escape(stale_ref)}(?![A-Za-z0-9._/-])")
+    return bool(pattern.search(text))
+
+
+def strip_non_actionable_markdown(text: str) -> str:
+    text = FENCED_CODE_RE.sub("", text)
+    return INLINE_CODE_RE.sub("", text)
+
+
+def unresolved_marker_hits(text: str) -> list[str]:
+    stripped = strip_non_actionable_markdown(text)
+    hits: list[str] = []
+    for label, pattern in UNRESOLVED_MARKER_PATTERNS:
+        if pattern.search(stripped):
+            hits.append(label)
+    return hits
+
+
+def question_queue_report(root: Path, active_feature: str | None) -> dict[str, list[str]]:
+    report = {
+        "answer_needed": [],
+        "comment_requested": [],
+    }
+    if not active_feature:
+        return report
+
+    path = root / active_feature / "questions.md"
+    if not path.is_file():
+        return report
+
+    text = path.read_text(encoding="utf-8")
+    rel = path.relative_to(root).as_posix()
+    matches = list(QUESTION_HEADING_RE.finditer(text))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        block = text[match.end() : end]
+        status_match = QUESTION_STATUS_RE.search(block)
+        if not status_match:
+            continue
+        item = f"{rel}: {match.group('id')} {match.group('title')}"
+        status = status_match.group("status").lower()
+        if status == "pending-answer":
+            report["answer_needed"].append(item)
+        elif status == "pending-comment":
+            report["comment_requested"].append(item)
+
+    return report
+
+
+def review_queue_report(root: Path, active_feature: str | None) -> dict[str, list[str]]:
+    report = {
+        "answer_needed": [],
+        "comment_requested": [],
+        "update_needed": [],
+    }
+    if not active_feature:
+        return report
+
+    path = root / active_feature / "review-queue.md"
+    if not path.is_file():
+        return report
+
+    rel = path.relative_to(root).as_posix()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) != 5:
+            continue
+        if cells[0] == "ID" or set(cells[0]) == {"-"}:
+            continue
+        queue_id, status, subject, owner, note = cells
+        if status not in report:
+            continue
+        report[status].append(f"{rel}: {queue_id} {subject} ({owner}) - {note}")
+
+    return report
+
+
 def status_report(root: Path, registry_file: Path | None = None) -> dict[str, list[str]]:
     report = {
         "approval_needed": [],
         "manual_review_needed": [],
+        "answer_needed": [],
+        "comment_requested": [],
         "update_needed": [],
         "closure_needed": [],
         "registry_or_link_errors": [],
@@ -153,32 +252,45 @@ def status_report(root: Path, registry_file: Path | None = None) -> dict[str, li
         return report
 
     for entry in tracked_docs:
-        if "client-input-derived" in entry.review:
+        if doc_status.needs_explicit_client_approval(entry.review):
             report["approval_needed"].append(f"{entry.path}: explicit client approval still needed")
-        if "unreviewed" in entry.review:
+        if doc_status.needs_manual_review(entry.review):
             report["manual_review_needed"].append(f"{entry.path}: manual review still needed")
 
     report["registry_or_link_errors"].extend(doc_status.lint(root, registry_file or registry_path(root)))
 
-    for path in scan_markdown_paths(root, registry):
+    active_feature = load_feature_pointer(root)
+    question_report = question_queue_report(root, active_feature)
+    report["answer_needed"].extend(question_report["answer_needed"])
+    report["comment_requested"].extend(question_report["comment_requested"])
+    queue_report = review_queue_report(root, active_feature)
+    report["answer_needed"].extend(queue_report["answer_needed"])
+    report["comment_requested"].extend(queue_report["comment_requested"])
+    report["update_needed"].extend(queue_report["update_needed"])
+
+    for path in scan_markdown_paths(root, registry, active_feature):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root).as_posix()
-        for marker in UNRESOLVED_MARKERS:
-            if marker in text:
-                report["update_needed"].append(f"{rel}: contains unresolved marker {marker!r}")
+        for marker in unresolved_marker_hits(text):
+            report["update_needed"].append(f"{rel}: contains unresolved marker {marker!r}")
         for stale_ref in STALE_REFERENCES:
-            if stale_ref in text:
+            if contains_stale_reference(text, stale_ref):
                 report["update_needed"].append(f"{rel}: references stale path or command {stale_ref!r}")
         report["registry_or_link_errors"].extend(local_link_errors(root, path, text))
 
-    active_feature = load_feature_pointer(root)
     if active_feature:
         active_dir = root / active_feature
         if not active_dir.is_dir():
             report["closure_needed"].append(
                 f".specify/feature.json: points to missing feature directory {active_feature}"
             )
-        elif contains_tasks_completion(active_dir / "tasks.md"):
+        elif contains_tasks_completion(active_dir / "tasks.md") and not any(
+            (
+                report["answer_needed"],
+                report["comment_requested"],
+                report["update_needed"],
+            )
+        ):
             report["closure_needed"].append(
                 f"{active_feature}: tasks are complete but the active feature pointer still targets it"
             )
@@ -195,8 +307,11 @@ def status_report(root: Path, registry_file: Path | None = None) -> dict[str, li
 
 
 def print_status(report: dict[str, list[str]]) -> None:
-    for category, items in report.items():
-        print(f"{category}:")
+    legend = " | ".join(f"{short}={long}" for short, long in STATUS_PRINT_ORDER)
+    print(f"Legend: {legend}")
+    for short, category in STATUS_PRINT_ORDER:
+        items = report[category]
+        print(f"{short}:")
         if not items:
             print("  - none")
             continue

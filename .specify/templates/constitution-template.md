@@ -1,4 +1,14 @@
+---
+docmeta:
+  status: maintained
+  review: workflow-local
+  purpose: Template for the repo constitution and amendment records.
+  source: document-local metadata
+---
+
 # [PROJECT_NAME] Constitution
+
+
 <!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
 
 ## Core Principles

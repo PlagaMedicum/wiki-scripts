@@ -5,9 +5,13 @@ compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
   source: git:commands/speckit.git.validate.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
 
 # Validate Feature Branch
+
 
 Validate that the current Git branch follows the expected feature branch naming conventions.
 

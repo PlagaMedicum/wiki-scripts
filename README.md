@@ -1,18 +1,21 @@
+---
+docmeta:
+  status: maintained
+  review: reviewed
+  purpose: Human-oriented repo overview and navigation only.
+  source: .specify/doc-registry.json
+---
+
 # Wiki Scripts
 
-<!-- DOCMETA:START -->
-> [!NOTE]
-> **Status:** `maintained` | **Review:** `unreviewed`  
-> **Purpose:** Human-oriented repo overview and navigation only.  
-> **Source:** `.specify/doc-registry.json`
-<!-- DOCMETA:END -->
 
 This repository is a workspace for separate wiki tools, mainly around Belarusian Wikipedia. It is
 not one application and not a generic wiki platform.
 
 Most of the repo has been developed with heavy LLM assistance, currently centered on Codex plus a
-repo-local Spec Kit workflow. Because of that, the authoritative state is the code, the reviewed
-project docs, and the standing governance spec rather than stray generated prose.
+repo-local Spec Kit workflow. That speeds iteration, but it also means mistakes, overclaims, and
+workflow drift are still possible. The repo therefore relies on reviewed docs, explicit governance,
+and deterministic checks so important assumptions do not stay buried in generated prose or chat.
 
 ## Current Projects
 
@@ -28,11 +31,11 @@ project docs, and the standing governance spec rather than stray generated prose
 
 ## Working Style
 
-- keep tools separate instead of letting the repo collapse into one mixed codebase
-- keep each tool narrow enough to stay reviewable and operable
-- use Spec Kit for non-trivial changes so specs, plans, tasks, and implementation stay connected
-- prefer deterministic scripts and explicit human review over free-form doc rewriting
-- keep durable repo docs lean, with one owned place for each stable topic
+- treat this repo as a multi-project workspace, not one shared application
+- start non-trivial changes in `specs/NNN-feature-name/` and keep the active feature pointer honest
+- use file-backed review state (`questions.md`, `review-queue.md`, registry-backed frontmatter) instead of relying on chat memory
+- keep durable policy in `.specify/memory/constitution.md` and `specs/000-repo-governance/`
+- expect LLM output to need verification; reviewed docs, tests, and the explicit docs gate are the control surface
 
 ## Where To Look Next
 
@@ -43,5 +46,8 @@ project docs, and the standing governance spec rather than stray generated prose
   [`.specify/memory/constitution.md`](.specify/memory/constitution.md)
 - practical repo workflow:
   [`specs/000-repo-governance/quickstart.md`](specs/000-repo-governance/quickstart.md)
+- current active review surface:
+  [`.specify/feature.json`](.specify/feature.json), then the referenced feature's `review-queue.md`
+  and `questions.md` if an active feature exists
 - change-specific planning and implementation artifacts:
   [`specs/`](specs/README.md)

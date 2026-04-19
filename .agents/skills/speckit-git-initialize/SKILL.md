@@ -5,9 +5,13 @@ compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
   source: git:commands/speckit.git.initialize.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
 
 # Initialize Git Repository
+
 
 Initialize a Git repository in the current project directory if one does not already exist.
 

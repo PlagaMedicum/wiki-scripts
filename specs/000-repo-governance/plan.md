@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: client-input-derived
+  purpose: Current documentation structure contract for the repo.
+  source: .specify/doc-registry.json
+---
+
 # Repo Documentation Structure Plan
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: client-input-derived
-> Purpose: Current documentation structure contract for the repo.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Current Structure Contract
 
@@ -37,6 +39,8 @@ There is no separate top-level `docs/` tree anymore.
 
 - feature specification
 - design and research artifacts
+- optional feature-local questions and review queues for pending human input
+- optional requirements-quality checklists
 - implementation task breakdown
 - evidence and change-local notes
 
@@ -47,8 +51,11 @@ Feature specs are not part of the managed human-doc registry.
 - Managed docs are listed in `.specify/doc-registry.json`.
 - `tools/doc_workflow.py sync` rewrites their metadata blocks deterministically.
 - `tools/doc_workflow.py lint` fails if registry state and Markdown drift apart.
-- `tools/doc_workflow.py status` reports review backlog, update backlog, stale feature specs, and
-  registry/link problems.
+- `tools/doc_workflow.py status` reports additive review backlog semantics from the registry,
+  feature-local answer/comment queues, update backlog, stale feature specs, and registry/link
+  problems.
+- Feature-local workflow docs use local metadata headers and queue schemas; they are not part of
+  the managed-doc registry.
 
 ## Explicit Final Gate
 
@@ -65,7 +72,7 @@ That runs:
 3. docs-tool tests
 4. status reporting
 
-The equivalent explicit Spec Kit command is `/speckit.docs.docs`.
+The equivalent explicit Spec Kit command is `/speckit.docs`.
 
 ## Project-Local Docs
 

@@ -1,34 +1,38 @@
+---
+docmeta:
+  status: maintained
+  review: reviewed
+  purpose: Lean future-work backlog for repo workflow and tool-boundary follow-up.
+  source: .specify/doc-registry.json
+---
+
 # Future Work
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: unreviewed
-> Purpose: Lean future-work backlog for repo workflow and tool-boundary follow-up.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Repo Workflow
 
-- Add commit-granularity guidance for long-running features so Spec Kit work does not sit in one
-  giant uncommitted batch.
-- Review whether the local Spec Kit template overrides should be reset during a later controlled
-  `specify init` refresh.
-- Decide whether the repo-local docs extension should stay local-only or become a reusable preset.
-
-## Biblio
-
-- Turn the proposed first split for import/population versus processing/edit boundaries into a
-  scoped implementation spec.
-- Turn the proposed “100% match” proof rule into implementation-facing checks and tests.
-- Encode the approved manual-review rules directly in code and tests where they are still only
-  documented policy.
+- Complete `001-docs-governance-hardening` to add file-backed question queues, stricter docs status
+  visibility, and `.specify` guardrails for LLM-assisted work.
+- Keep repo-local Spec Kit template overrides conservative and close to upstream defaults unless the
+  user explicitly asks for a reviewed deviation.
+- Treat the repo-local docs extension and workflow hardening as a candidate reusable basis only after
+  `001-docs-governance-hardening` proves stable.
 
 ## Suppressor
 
-- Test whether journalling entries can be hidden automatically; if not, evaluate the safest
-  bot-marking or filtering fallback that still avoids loops.
-- Encode the operational targets in implementation-facing docs and tests.
-- Review whether the current stop conditions need a separate operator-visible status surface.
+- Start `002-suppressor-journalling-policy` to decide whether journalling entries can be hidden
+  automatically and, if not, define the safest bot-marking or filtering fallback that still avoids
+  loops.
+- Start `003-suppressor-operator-contract` to encode the operational targets, stop conditions, and
+  any separate operator-visible status surface in implementation-facing docs and tests.
 - Investigate the observed default-parallel suppressor suite failure around redirect-target
   fetching; isolated and single-threaded runs pass, so publication should not overclaim full-suite
   stability.
+
+## Biblio
+
+- Start `004-biblio-boundary-cut` to turn the current code-level import/population versus
+  processing/edit boundary into a scoped implementation spec with explicit entrypoint and ownership
+  lines.
+- Start `005-biblio-proof-rule` to turn the proposed “100% match” proof rule and the approved
+  manual-review rules into implementation-facing checks and tests.

@@ -5,9 +5,13 @@ compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
   source: git:commands/speckit.git.feature.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
 
 # Create Feature Branch
+
 
 Create and switch to a new git feature branch for the given specification. This command handles **branch creation only** — the spec directory and files are created by the core `/speckit.specify` workflow.
 

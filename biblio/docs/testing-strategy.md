@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Current biblio testing strategy and coverage shape.
+  source: .specify/doc-registry.json
+---
+
 # Biblio Testing Strategy
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Current biblio testing strategy and coverage shape.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Test Layers
 

@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Current suppressor runtime boundaries and architectural constraints.
+  source: .specify/doc-registry.json
+---
+
 # Suppressor Runtime Boundaries
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Current suppressor runtime boundaries and architectural constraints.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Current Reality
 

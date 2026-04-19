@@ -1,11 +1,15 @@
+---
+docmeta:
+  status: maintained
+  review:
+  - client-input-derived
+  - approved
+  purpose: Explains the standing governance spec versus change-specific feature specs.
+  source: .specify/doc-registry.json
+---
+
 # Specs
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: client-input-derived
-> Purpose: Explains the standing governance spec versus change-specific feature specs.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 `specs/` is the only structured top-level docs area in this repo.
 
@@ -40,13 +44,19 @@ specs/<id>/
 ├── plan.md
 ├── research.md
 ├── data-model.md
+├── questions.md        # Optional: direct human questions and requested comments
+├── review-queue.md     # Optional: current human action queue for the feature
 ├── quickstart.md
+├── checklists/         # Optional: requirements-quality checklists
 ├── contracts/
 └── tasks.md
 ```
 
 Feature specs are owned by the Spec Kit workflow and are not part of the managed human-doc
 registry.
+
+If a feature needs direct human approval, comments, or answers, record that need in feature-local
+files such as `questions.md` or `review-queue.md` instead of relying only on chat history.
 
 Completed feature specs should stay only while they still add active context. Git history is the
 default archive once durable lessons are fixed elsewhere.

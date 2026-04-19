@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Operator entry points and current documented scope for suppressor.
+  source: .specify/doc-registry.json
+---
+
 # Suppressor
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Operator entry points and current documented scope for suppressor.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 `suppressor` is the Rust daemon for rapid public RevDel on matched wiki revisions. This tool stays
 narrow on purpose: fast reaction, strict runtime behavior, and conservative handling of sensitive

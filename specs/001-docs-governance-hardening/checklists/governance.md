@@ -1,0 +1,69 @@
+---
+docmeta:
+  status: working
+  review: feature-local
+  purpose: Governance checklist for docs governance hardening quality and review readiness.
+  source: document-local metadata
+  feature: '[spec.md](../spec.md)'
+---
+
+# Governance Checklist: Docs Governance Hardening
+
+
+## Requirement Completeness
+
+- [X] CHK001 Are file-backed review and question workflows defined for both the active feature and the deterministic status tool? [Completeness, Spec §FR-001, Spec §FR-002]
+- [X] CHK002 Does the spec define which pending human actions must be represented explicitly in repo files? [Completeness, Spec §FR-001, Spec §FR-006]
+- [X] CHK003 Are the major unresolved governance backlog chunks named as future features instead of left as generic backlog prose? [Completeness, Spec §FR-003]
+
+## Requirement Clarity
+
+- [X] CHK004 Is the boundary between `specs/000-repo-governance/` and `specs/NNN-feature-name/` stated in implementation-facing terms? [Clarity, Spec §FR-004]
+- [X] CHK005 Is “deterministic” defined clearly enough for status-report behavior to be verified without guessing? [Clarity, Spec §FR-002, Spec §SC-001]
+- [X] CHK006 Is the phrase “policy-bearing template edits” explained concretely enough to guide future `.specify` changes? [Clarity, Spec §FR-005, Spec §FR-007]
+
+## Requirement Consistency
+
+- [X] CHK007 Are the status names used consistently across the spec, review queue, questions file, and status-report contract? [Consistency, Spec §FR-001, Spec §FR-002]
+- [X] CHK008 Do the success criteria align with the functional requirements without introducing extra undocumented queue behaviors? [Consistency, Spec §FR-001, Spec §FR-002, Spec §SC-001]
+
+## Acceptance Criteria Quality
+
+- [X] CHK009 Can the success criteria for queue visibility be measured by running documented commands and reading documented files? [Acceptance Criteria, Spec §SC-001, Spec §SC-002]
+- [X] CHK010 Do the success criteria distinguish current workflow hardening from later `biblio` and `suppressor` implementation work? [Acceptance Criteria, Spec §SC-003]
+
+## Scenario Coverage
+
+- [X] CHK011 Are requirements defined for the case where the active feature has open questions but no managed-doc review changes? [Coverage, Edge Case]
+- [X] CHK012 Are requirements defined for the case where a standing governance doc and a feature-local queue disagree about the current action needed? [Coverage, Edge Case]
+
+## Edge Case Coverage
+
+- [X] CHK013 Does the spec define what happens when there is no active feature pointer but a maintainer still needs a review queue? [Edge Case, Spec §Edge Cases]
+- [X] CHK014 Are mixed resolved and unresolved question states handled explicitly in the requirements? [Edge Case, Spec §Edge Cases]
+
+## Non-Functional Requirements
+
+- [X] CHK015 Are the constraints against automatic approval and silent policy invention explicit enough to review objectively? [Non-Functional, Spec §FR-005, Spec §FR-007]
+- [X] CHK016 Are test-coverage expectations specified for status-report behavior changes? [Non-Functional, Spec §FR-007, Spec §SC-004]
+
+## Dependencies & Assumptions
+
+- [X] CHK017 Are the assumptions about managed-doc review labels versus feature-local queues documented and non-conflicting? [Assumption, Spec §Assumptions]
+- [X] CHK018 Are dependencies on existing docs tooling and Spec Kit scripts documented rather than implied? [Dependency, Plan §Technical Context]
+
+## Ambiguities & Conflicts
+
+- [X] CHK019 Is there any unresolved ambiguity about whether pending-answer and pending-comment states belong in the status tool or only in Markdown files? [Ambiguity, Gap]
+- [X] CHK020 Do the requirements avoid conflating review visibility with an automatic approval system? [Conflict, Spec §FR-002, Spec §Assumptions]
+
+## Workflow Schema Quality
+
+- [X] CHK021 Are additive managed-doc review labels defined clearly enough to distinguish provenance from approval state? [Clarity, Spec §FR-002, Spec §FR-009]
+- [X] CHK022 Are terminal question states such as `answered`, `commented`, and `resolved` defined so the status tool can stop reporting them as pending? [Consistency, Spec §FR-009]
+- [X] CHK023 Are metadata/header expectations defined for feature-local workflow docs such as `questions.md`, `review-queue.md`, and `contracts/status-report.md`? [Completeness, Spec §FR-008]
+- [X] CHK024 Are review-queue requirements specific enough to define which rows the status tool should parse and which remain human-facing only? [Clarity, Spec §FR-002, Spec §FR-009]
+- [X] CHK025 Is unresolved-marker detection specified consistently enough to cover lowercase and mixed-case TODO comments? [Coverage, Spec §FR-010, Spec §SC-003]
+- [X] CHK026 Does the spec state clearly that marker syntax documented in inline code or fenced examples must not be reported as unresolved work? [Clarity, Spec §FR-011, Spec §SC-003]
+- [X] CHK027 Are additive review-label combinations specified clearly enough that provenance and terminal approval/review state can coexist without false backlog items? [Consistency, Spec §FR-012, Spec §SC-001]
+- [X] CHK028 Does the spec encode the post-`001` feature order clearly enough that inline TODO comments are unnecessary? [Completeness, Spec §FR-013, Spec §SC-004]

@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Operator setup and runtime contract for suppressor.
+  source: .specify/doc-registry.json
+---
+
 # Suppressor Operations
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Operator setup and runtime contract for suppressor.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## First Run
 

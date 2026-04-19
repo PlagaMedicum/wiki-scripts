@@ -1,8 +1,13 @@
 ---
-description: "Auto-commit changes after a Spec Kit command completes"
+description: Auto-commit changes after a Spec Kit command completes
+docmeta:
+  status: maintained
+  review: workflow-local
+  source: document-local metadata
 ---
 
 # Auto-Commit Changes
+
 
 Automatically stage and commit all changes after a Spec Kit command completes.
 

@@ -1,13 +1,17 @@
 ---
-name: speckit-docs-docs
+name: speckit-docs
 description: Run the repo's explicit docs workflow gate
 compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
-  source: docs:commands/speckit.docs.docs.md
+  source: docs:commands/speckit.docs.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
 
 # Run Docs Workflow
+
 
 Run the repo-local deterministic docs gate.
 

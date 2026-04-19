@@ -5,9 +5,13 @@ compatibility: Requires spec-kit project structure with .specify/ directory
 metadata:
   author: github-spec-kit
   source: git:commands/speckit.git.remote.md
+docmeta:
+  status: maintained
+  review: workflow-local
 ---
 
 # Detect Git Remote URL
+
 
 Detect the Git remote URL for integration with GitHub services (e.g., issue creation).
 

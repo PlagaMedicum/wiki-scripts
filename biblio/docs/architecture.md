@@ -1,15 +1,21 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Current biblio boundaries, module roles, and source-definition rules.
+  source: .specify/doc-registry.json
+---
+
 # Biblio Architecture
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Current biblio boundaries, module roles, and source-definition rules.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Current Reality
 
 `biblio` is currently a modular Python CLI application, not a split service architecture.
+
+An initial internal boundary now exists between source onboarding/import flow and
+source-processing/edit flow, but that boundary is still inside one package and one operator-facing
+CLI.
 
 It has three important boundary areas:
 
@@ -46,6 +52,13 @@ These modules sequence the operator workflow:
 - `manage_*.py`
 
 This layer should coordinate policy without turning into a second domain layer.
+
+The current onboarding/import side is most visible in:
+
+- `manage_import.py`
+- `manage_tui.py`
+- `manage_questions.py`
+- `manage_write.py`
 
 ### Adapters
 
@@ -104,7 +117,7 @@ If a request stops being bibliography-shaped, it should become a separate tool.
 
 Planned direction, not current implementation:
 
-- start separating source-population/import work from source-processing/edit work with the smallest
-  useful real boundary
+- turn the current code-level onboarding/import boundary into a more explicit real boundary with
+  the smallest useful next step
 - keep shared reusable components beneath that split
 - keep one operator-facing Makefile even if the backend shape grows

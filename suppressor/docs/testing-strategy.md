@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: code-reviewed
+  purpose: Current suppressor testing strategy and maintained test story.
+  source: .specify/doc-registry.json
+---
+
 # Suppressor Testing Strategy
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: code-reviewed
-> Purpose: Current suppressor testing strategy and maintained test story.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Test Layers
 
@@ -38,9 +40,9 @@
 - no full live EventStreams-to-RevDel CI path
 - no full real-TUI integration automation
 - no broad live-wiki production simulation in CI
-- the default full suite currently shows a redirect-target failure that passes when run in
-  isolation or with `--test-threads=1`, so the current suite should be treated as useful coverage,
-  not proof that all parallel or state-sensitive behavior is settled
+- the default full suite currently shows `cache::source::tests::fetch_redirect_target_uses_api_redirect_targets`
+  failing while the isolated test and `--test-threads=1` pass, so the current suite should be
+  treated as useful coverage, not proof that all parallel or state-sensitive behavior is settled
 
 ## Testing Rule
 

@@ -1,8 +1,13 @@
 ---
-description: "Validate current branch follows feature branch naming conventions"
+description: Validate current branch follows feature branch naming conventions
+docmeta:
+  status: maintained
+  review: workflow-local
+  source: document-local metadata
 ---
 
 # Validate Feature Branch
+
 
 Validate that the current Git branch follows the expected feature branch naming conventions.
 

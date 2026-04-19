@@ -1,4 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: workflow-local
+  purpose: Explains the repo-local git extension commands and hook behavior.
+  source: document-local metadata
+---
+
 # Git Branching Workflow Extension
+
 
 Git repository initialization, feature branch creation, numbering (sequential/timestamp), validation, remote detection, and auto-commit for Spec Kit.
 

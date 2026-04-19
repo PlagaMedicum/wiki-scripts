@@ -1,11 +1,13 @@
+---
+docmeta:
+  status: maintained
+  review: client-input-derived
+  purpose: Accepted repo model, scope boundaries, and documentation rules.
+  source: .specify/doc-registry.json
+---
+
 # Repo Governance
 
-<!-- DOCMETA:START -->
-> Status: maintained
-> Review: client-input-derived
-> Purpose: Accepted repo model, scope boundaries, and documentation rules.
-> Source: .specify/doc-registry.json
-<!-- DOCMETA:END -->
 
 ## Purpose
 
@@ -33,6 +35,8 @@ tradeoffs.
 - Project-local docs should exist only when they help operators or maintainers directly.
 - Managed doc metadata comes from `.specify/doc-registry.json`, not from free-form claims in
   Markdown files.
+- Review labels in the registry are additive: provenance labels may coexist with terminal review or
+  approval labels, and queue state must be derived from the combination.
 
 ## Accepted Repo Decisions
 
@@ -51,7 +55,9 @@ tradeoffs.
 - The required sequence is `spec.md`, then `plan.md`, then `tasks.md`, then implementation, then
   the explicit docs gate.
 - The explicit docs gate is `make docs`, `python3 tools/doc_workflow.py all`, or the repo-local
-  Spec Kit command `/speckit.docs.docs`.
+  Spec Kit command `/speckit.docs`.
+- When a feature needs direct human approval, comment, or answer, record that need in feature-local
+  docs such as `questions.md` or `review-queue.md` instead of relying only on chat state.
 - Spec Kit provides the structure. Codex or other LLM tools may draft and implement inside that
   structure, but they do not define the client vision by themselves.
 - Repo policy belongs in the constitution and this governance stack, not spread across many
@@ -102,6 +108,10 @@ tradeoffs.
 - Docs must distinguish current behavior from future direction explicitly.
 - Open matters that still need a decision belong in [`research.md`](research.md), not mixed into
   accepted decisions.
+- Feature-local unresolved questions and requested comments belong in the active feature directory,
+  not only in chat history.
+- Feature-local workflow docs should use an explicit local schema instead of pretending they are
+  registry-managed docs.
 - Git history is the default archive. Finished feature specs should not be kept only for archival
   completeness once their durable lessons have been captured elsewhere.
 - If a feature revealed important pitfalls or costly mistakes, preserve that experience in code

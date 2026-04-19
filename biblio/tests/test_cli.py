@@ -7,7 +7,7 @@ import pytest
 from biblio.cli import main
 from biblio.models import BulkRunStatus, ReplacementResult, RunStats
 from biblio.specs import discover_source_specs, load_source_spec
-from biblio.ui import AppUI, ChecklistOption
+from biblio.ui import AppUI, ChecklistOption, format_bulk_status_line, format_queue_status_line
 from rich.console import Console
 
 
@@ -504,9 +504,33 @@ def test_bulk_status_prints_plain_status_lines():
 
     output = stream.getvalue()
     normalized_output = " ".join(output.split())
-    assert output.count("[bulk-status]") == 2
-    assert "| 2/5 | save | Page title | Publishing edit to the wiki |" in normalized_output
-    assert "| 2/5 | retry | Page title | Retrying save in 2.00s |" in normalized_output
+    assert output.count("[bst]") == 2
+    assert 'page=2/5 ph=save title="Page title" detail="Publishing edit to the wiki"' in normalized_output
+    assert 'page=2/5 ph=retry title="Page title" detail="Retrying save in 2.00s"' in normalized_output
+
+
+def test_compact_status_helpers_keep_identifiers() -> None:
+    status = BulkRunStatus(
+        source_label="demo (Demo) [1/1]",
+        total_pages=3,
+        current_index=1,
+        current_title="Page title",
+        phase="scan",
+        detail="Collecting candidate pages",
+        processed=0,
+        matched=0,
+        saved=0,
+        skipped=0,
+        failed=0,
+        retries=0,
+    )
+
+    assert format_queue_status_line(index=1, total=3, title="Page title") == '[q] 1/3 title="Page title"'
+    assert (
+        format_bulk_status_line(status)
+        == '[bst] src="demo (Demo) [1/1]" page=1/3 ph=scan title="Page title" '
+        'detail="Collecting candidate pages" p=0 m=0 s=0 sk=0 f=0 r=0'
+    )
 
 
 def test_prompt_csv_without_default_does_not_pass_empty_default(monkeypatch):

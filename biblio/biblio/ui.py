@@ -34,6 +34,28 @@ class ChecklistOption:
     detail: str = ""
 
 
+def _compact_value(value: str) -> str:
+    if not value or any(char.isspace() for char in value):
+        return f'"{value}"'
+    return value
+
+
+def format_queue_status_line(*, index: int, total: int, title: str) -> str:
+    return f"[q] {index}/{total} title={_compact_value(title)}"
+
+
+def format_bulk_status_line(status: BulkRunStatus) -> str:
+    return (
+        f"[bst] src={_compact_value(status.source_label)} "
+        f"page={status.current_index}/{status.total_pages} "
+        f"ph={_compact_value(status.phase)} "
+        f"title={_compact_value(status.current_title or 'n/a')} "
+        f"detail={_compact_value(status.detail or 'running')} "
+        f"p={status.processed} m={status.matched} s={status.saved} "
+        f"sk={status.skipped} f={status.failed} r={status.retries}"
+    )
+
+
 class AppUI:
     def __init__(self, *, no_color: bool = False, console: Console | None = None) -> None:
         self.no_color = no_color
@@ -284,7 +306,7 @@ class AppUI:
         self.print(Panel(table, title="Interactive guidance", border_style="magenta"))
 
     def print_processing_page(self, *, index: int, total: int, title: str) -> None:
-        self.info(f"[queue] {index}/{total}: {title}")
+        self.info(format_queue_status_line(index=index, total=total, title=title))
 
     def print_state_counts(
         self,
@@ -341,15 +363,7 @@ class AppUI:
         return Panel(table, title="Bulk apply status", border_style="cyan")
 
     def _bulk_status_line(self, status: BulkRunStatus) -> str:
-        return (
-            f"[bulk-status] {status.source_label} | "
-            f"{status.current_index}/{status.total_pages} | "
-            f"{status.phase} | "
-            f"{status.current_title or 'n/a'} | "
-            f"{status.detail or 'running'} | "
-            f"processed={status.processed} matched={status.matched} saved={status.saved} "
-            f"skipped={status.skipped} failed={status.failed} retries={status.retries}"
-        )
+        return format_bulk_status_line(status)
 
     def _decision_label(self, result: ReplacementResult) -> str:
         if result.review_reasons:

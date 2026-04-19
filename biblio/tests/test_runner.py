@@ -215,7 +215,7 @@ def test_interactive_run_does_not_use_live_progress(monkeypatch, tmp_path):
     )
 
     assert exit_code == 0
-    assert "[queue] 1/1: Test page" in stream.getvalue()
+    assert '[q] 1/1 title="Test page"' in stream.getvalue()
 
 
 def test_multi_source_apply_accept_all_carries_across_sources(monkeypatch, tmp_path):
@@ -546,8 +546,8 @@ def test_run_source_stops_after_first_non_retryable_save_failure(monkeypatch, tm
     assert exit_code == 1
     assert saved_attempts == ["One"]
     output = stream.getvalue()
-    assert "[queue] 1/2: One" in output
-    assert "[queue] 2/2: Two" not in output
+    assert "[q] 1/2 title=One" in output
+    assert "[q] 2/2 title=Two" not in output
     assert "[error] One: connection reset" in output
     assert "Stopped after save failure." in output
 
@@ -631,9 +631,9 @@ def test_run_source_continues_after_retryable_save_failure(monkeypatch, tmp_path
     assert exit_code == 1
     assert saved_attempts == ["One", "One", "One", "One", "Two"]
     output = stream.getvalue()
-    assert "[queue] 1/2: One" in output
+    assert "[q] 1/2 title=One" in output
     assert "[failed] One: save failed after retries (connection reset)" in output
-    assert "[queue] 2/2: Two" in output
+    assert "[q] 2/2 title=Two" in output
     assert "[saved] Two: edit published in " in output
     assert "Failed" in output
     assert "One" in output
@@ -719,9 +719,9 @@ def test_run_source_stops_cleanly_after_page_load_failure_post_skip(monkeypatch,
 
     assert exit_code == 1
     output = stream.getvalue()
-    assert "[queue] 1/2: One" in output
+    assert "[q] 1/2 title=One" in output
     assert "[dry-run] No changes saved" in output
-    assert "[queue] 2/2: Two" in output
+    assert "[q] 2/2 title=Two" in output
     assert "[failed] Two: page load failed after retries (connection reset)" in output
 
 
@@ -898,8 +898,8 @@ def test_accept_all_still_prompts_review_required_matches(monkeypatch, tmp_path)
     assert exit_code == 0
     assert prompts == [True, True]
     assert saved == ["One", "Two"]
-    assert "[queue] 1/2: One" in stream.getvalue()
-    assert "[queue] 2/2: Two" in stream.getvalue()
+    assert "[q] 1/2 title=One" in stream.getvalue()
+    assert "[q] 2/2 title=Two" in stream.getvalue()
 
 
 def test_multi_source_apply_supports_summary_edit_for_remaining_sources(monkeypatch, tmp_path):

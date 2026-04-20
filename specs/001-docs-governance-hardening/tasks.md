@@ -29,6 +29,7 @@ review and close-out blockers. The feature is implemented in the tree but still 
 - [X] T004 [P] Update conservative workflow guardrails in `.specify/templates/spec-template.md`, `.specify/templates/plan-template.md`, `.specify/templates/tasks-template.md`, `README.md`, `AGENTS.md`, and `specs/000-repo-governance/spec.md`
 - [X] T005 [P] Add baseline docs-workflow regression coverage for tracked Markdown scanning, no-active-feature fallback, registry precedence, closure suppression, and canonical frontmatter linting in `tools/tests/test_doc_workflow.py`
 - [X] T006 [P] Add baseline compact-surface regression coverage in `biblio/tests/test_cli.py`, `biblio/tests/test_runner.py`, `suppressor/src/commands.rs`, and `suppressor/src/tui_status.rs`
+- [X] T006A [P] Encode the follow-on roadmap explicitly in `specs/000-repo-governance/tasks.md`, `specs/000-repo-governance/research.md`, and `specs/README.md` so `FR-003` and `FR-013` remain directly traceable from this feature backlog
 
 ---
 

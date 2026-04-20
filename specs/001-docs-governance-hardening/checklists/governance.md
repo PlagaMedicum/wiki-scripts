@@ -87,4 +87,4 @@ docmeta:
 
 ## Traceability Residuals
 
-- [ ] CHK037 Do roadmap requirements such as `FR-003` and `FR-013` still have explicit traceability in `tasks.md`, rather than relying only on implication from `plan.md`, `spec.md`, or repo history? [Coverage, Traceability, Spec §FR-003, Spec §FR-013, Tasks §Phase 1-3]
+- [X] CHK037 Do roadmap requirements such as `FR-003` and `FR-013` still have explicit traceability in `tasks.md`, rather than relying only on implication from `plan.md`, `spec.md`, or repo history? [Coverage, Traceability, Spec §FR-003, Spec §FR-013, Tasks §Phase 1-3]

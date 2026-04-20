@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +14,9 @@ from tools import doc_workflow
 
 
 class DocStatusTests(unittest.TestCase):
+    def repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
     def write_registry(self, root: Path, documents: list[dict], managed_roots: list[str] | None = None) -> Path:
         registry = {
             "version": 1,
@@ -34,6 +39,34 @@ class DocStatusTests(unittest.TestCase):
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
         return registry_path
+
+    def create_setup_plan_fixture(self, root: Path, existing_plan: str) -> Path:
+        source_root = self.repo_root()
+        for rel in (
+            ".specify/scripts/bash/common.sh",
+            ".specify/scripts/bash/setup-plan.sh",
+        ):
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text((source_root / rel).read_text(encoding="utf-8"), encoding="utf-8")
+
+        template = root / ".specify" / "templates" / "plan-template.md"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text("# Template Plan\n\nTemplate body.\n", encoding="utf-8")
+
+        feature_dir = root / "specs" / "001-example"
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        (feature_dir / "spec.md").write_text("# Spec\n\nBody.\n", encoding="utf-8")
+        plan = feature_dir / "plan.md"
+        plan.write_text(existing_plan, encoding="utf-8")
+
+        feature_json = root / ".specify" / "feature.json"
+        feature_json.parent.mkdir(parents=True, exist_ok=True)
+        feature_json.write_text(json.dumps({"feature_directory": "specs/001-example"}), encoding="utf-8")
+
+        subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "checkout", "-b", "001-example"], cwd=root, check=True, capture_output=True, text=True)
+        return plan
 
     def test_sync_writes_registry_backed_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,6 +104,30 @@ class DocStatusTests(unittest.TestCase):
             self.assertNotIn(doc_status.DOCMETA_START, text)
             self.assertIn("Body.\n", text)
 
+    def test_sync_dry_run_reports_changes_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "docs" / "example.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            original = "# Example\n\nBody.\n"
+            path.write_text(original, encoding="utf-8")
+            registry = self.write_registry(
+                root,
+                [
+                    {
+                        "path": "docs/example.md",
+                        "status": "maintained",
+                        "review": ["unreviewed"],
+                        "purpose": "Example purpose.",
+                    }
+                ],
+            )
+
+            changed = doc_status.sync(root, registry, dry_run=True)
+
+            self.assertEqual(changed, ["docs/example.md"])
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def test_sync_uses_registry_frontmatter_for_root_readme(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -96,6 +153,92 @@ class DocStatusTests(unittest.TestCase):
             self.assertIn("source: .specify/doc-registry.json", text)
             self.assertTrue(text.startswith("---\ndocmeta:\n"))
             self.assertNotIn(doc_status.DOCMETA_START, text)
+
+    def test_sync_managed_scope_does_not_rewrite_feature_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracked = root / "README.md"
+            feature = root / "specs" / "001-example" / "spec.md"
+            tracked.write_text("# Repo\n\nBody.\n", encoding="utf-8")
+            feature.parent.mkdir(parents=True, exist_ok=True)
+            feature_text = (
+                "# Example\n\nBody first.\n\n"
+                "<!-- DOCMETA:START -->\n"
+                "<details class=\"docmeta-block\">\n"
+                "<summary><strong>DOCMETA</strong> | st: draft | rv: workflow-local | src: local</summary>\n"
+                "\n"
+                "**Status**: `draft`  \n"
+                "**Review**: `workflow-local`  \n"
+                "**Purpose**: Example feature doc.  \n"
+                "**Source**: `document-local metadata`\n"
+                "</details>\n"
+                "<!-- DOCMETA:END -->\n"
+            )
+            feature.write_text(feature_text, encoding="utf-8")
+            registry = self.write_registry(
+                root,
+                [
+                    {
+                        "path": "README.md",
+                        "status": "maintained",
+                        "review": ["reviewed"],
+                        "purpose": "Repo overview.",
+                    }
+                ],
+                managed_roots=["README.md"],
+            )
+
+            changed = doc_status.sync(root, registry, scope="managed")
+
+            self.assertEqual(changed, ["README.md"])
+            self.assertEqual(feature.read_text(encoding="utf-8"), feature_text)
+
+    def test_sync_active_feature_scope_rewrites_only_feature_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            managed = root / "README.md"
+            feature = root / "specs" / "001-example" / "spec.md"
+            managed.write_text("# Repo\n\nBody.\n", encoding="utf-8")
+            feature.parent.mkdir(parents=True, exist_ok=True)
+            feature.write_text(
+                "# Example\n\nBody first.\n\n"
+                "<!-- DOCMETA:START -->\n"
+                "<details class=\"docmeta-block\">\n"
+                "<summary><strong>DOCMETA</strong> | st: working | rv: feature-local | src: local</summary>\n"
+                "\n"
+                "**Status**: `working`  \n"
+                "**Review**: `feature-local`  \n"
+                "**Purpose**: Example feature doc.  \n"
+                "**Source**: `document-local metadata`\n"
+                "</details>\n"
+                "<!-- DOCMETA:END -->\n",
+                encoding="utf-8",
+            )
+            (root / ".specify").mkdir(parents=True, exist_ok=True)
+            (root / ".specify" / "feature.json").write_text(
+                json.dumps({"feature_directory": "specs/001-example"}),
+                encoding="utf-8",
+            )
+            registry = self.write_registry(
+                root,
+                [
+                    {
+                        "path": "README.md",
+                        "status": "maintained",
+                        "review": ["reviewed"],
+                        "purpose": "Repo overview.",
+                    }
+                ],
+                managed_roots=["README.md"],
+            )
+
+            changed = doc_status.sync(root, registry, scope="active-feature")
+
+            self.assertEqual(changed, ["specs/001-example/spec.md"])
+            self.assertEqual(managed.read_text(encoding="utf-8"), "# Repo\n\nBody.\n")
+            feature_text = feature.read_text(encoding="utf-8")
+            self.assertIn("docmeta:", feature_text)
+            self.assertNotIn(doc_status.DOCMETA_START, feature_text)
 
     def test_lint_fails_for_untracked_managed_doc(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -342,6 +485,49 @@ class DocStatusTests(unittest.TestCase):
             errors = doc_status.lint(root, registry)
 
             self.assertEqual(errors, [])
+
+    def test_setup_plan_preserves_existing_plan_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            existing_plan = "# Existing Plan\n\nKeep me.\n"
+            plan = self.create_setup_plan_fixture(root, existing_plan)
+            env = os.environ.copy()
+            env["SPECIFY_FEATURE"] = "001-example"
+
+            result = subprocess.run(
+                ["bash", ".specify/scripts/bash/setup-plan.sh", "--json"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["PLAN_ACTION"], "preserved")
+            self.assertEqual(plan.read_text(encoding="utf-8"), existing_plan)
+            self.assertIn("Preserved existing plan", result.stderr)
+
+    def test_setup_plan_force_overwrites_existing_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = self.create_setup_plan_fixture(root, "# Existing Plan\n\nKeep me.\n")
+            env = os.environ.copy()
+            env["SPECIFY_FEATURE"] = "001-example"
+
+            result = subprocess.run(
+                ["bash", ".specify/scripts/bash/setup-plan.sh", "--json", "--force"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["PLAN_ACTION"], "copied-template")
+            self.assertEqual(plan.read_text(encoding="utf-8"), "# Template Plan\n\nTemplate body.\n")
+            self.assertIn("Copied plan template", result.stderr)
 
     def test_status_reports_review_backlog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

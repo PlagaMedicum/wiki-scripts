@@ -11,6 +11,8 @@ docmeta:
 
 
 This queue is the current human action surface for the active feature and the related standing docs.
+Core implementation is already in the tree; the remaining items here are review and approval
+blockers that keep the feature review-open.
 
 ## Status Legend
 

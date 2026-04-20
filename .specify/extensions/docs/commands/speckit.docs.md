@@ -28,6 +28,8 @@ This command runs the same final gate as `make docs`:
 
 - This command is explicit. It is not auto-executed as a mutating hook.
 - Use it at the end of non-trivial work after `spec.md`, `plan.md`, `tasks.md`, and implementation.
+- Use `python3 tools/doc_workflow.py sync --dry-run --scope managed` or `--scope active-feature`
+  when you need to preview metadata rewrites before running the full gate.
 - The text status output uses stable compact section labels:
   `APP`, `REV`, `ANS`, `COM`, `UPD`, `CLS`, `ERR`.
 - The status output is a review/closure queue, not an automatic approval system.

@@ -230,12 +230,15 @@ named, ordered, and justified without relying on inline TODOs.
   without falsely claiming registry-managed review state.
 - **FR-018**: Docs metadata sync MUST augment existing docs conservatively, preserving non-metadata
   document content and existing type-specific frontmatter keys while migrating legacy metadata into
-  the canonical frontmatter schema.
+  the canonical frontmatter schema. Legacy `DOCMETA` MAY remain accepted as migration input, but a
+  tracked workflow doc is not compliant if it remains `DOCMETA`-only after frontmatter sync/lint.
 - **FR-019**: Feature-generation and setup workflows MUST NOT overwrite an existing filled artifact
-  such as `plan.md` without an explicit maintainer-approved overwrite action.
+  such as `plan.md` unless the maintainer explicitly requests that overwrite through a dedicated
+  action such as `--force` or an equivalent explicit confirmation path.
 - **FR-020**: Docs-maintenance tooling MUST provide a safe way to inspect or narrow metadata
-  rewrites before applying broad Markdown mutations, so maintainers can distinguish managed-doc sync
-  from repo-wide migration behavior.
+  rewrites before applying broad Markdown mutations. At minimum, maintainers must have a preview
+  path and distinct scope controls for repo-wide, managed-doc-only, and active-feature-only sync so
+  they can distinguish managed-doc sync from broader migration behavior.
 - **FR-021**: The spec-driven workflow MUST treat token economy as an explicit design goal for
   repeated technical surfaces such as headers, queues, status output, logs, and recurring command or
   notation patterns.
@@ -298,15 +301,20 @@ named, ordered, and justified without relying on inline TODOs.
 - **SC-007**: Existing top-level frontmatter keys already used by skill and command docs remain
   intact after migration, while managed docs still derive authoritative review state from
   `.specify/doc-registry.json`.
-- **SC-008**: Running the metadata-maintenance workflow on representative existing docs and running
-  planning setup against a representative filled feature preserves non-metadata prose and does not
-  silently replace an existing `plan.md`.
-- **SC-009**: Representative workflow surfaces that were previously verbose become materially more
+- **SC-008**: Running the metadata-maintenance workflow on representative existing docs preserves
+  non-metadata prose, existing type-specific frontmatter keys, and truthful frontmatter provenance
+  while eliminating `DOCMETA`-only workflow docs from the maintained set.
+- **SC-009**: Running planning setup against a representative filled feature preserves the existing
+  `plan.md` by default and only replaces it when an explicit overwrite action such as `--force` is
+  requested.
+- **SC-010**: Maintainers can preview representative metadata rewrites without mutating files and
+  can narrow representative rewrites to managed docs or the active feature before any write occurs.
+- **SC-011**: Representative workflow surfaces that were previously verbose become materially more
   compact while preserving the required identifiers, links, and review distinctions needed for safe
   use.
-- **SC-010**: Maintainers can resolve representative compact notations or status codes back to their
+- **SC-012**: Maintainers can resolve representative compact notations or status codes back to their
   full meaning in one documented step, without relying on chat memory.
-- **SC-011**: Token-economy improvements do not reduce docs-gate coverage or remove the information
+- **SC-013**: Token-economy improvements do not reduce docs-gate coverage or remove the information
   needed to distinguish approval, manual review, comment, answer, update, and closure states.
 
 ## Assumptions
@@ -342,12 +350,14 @@ named, ordered, and justified without relying on inline TODOs.
   current workflow, the user's recorded answers, and the explicit follow-on feature order.
 - Update `README.md` and `.specify/doc-registry.json` so the docs gate and human review states stay
   aligned with the intended workflow.
-- Update `.specify/extensions/docs/README.md` and
-  `.specify/extensions/docs/commands/speckit.docs.md` to document the stricter status queue.
+- Update `.specify/extensions/docs/README.md`,
+  `.specify/extensions/docs/commands/speckit.docs.md`, and
+  `specs/001-docs-governance-hardening/quickstart.md` to document the stricter status queue plus
+  safe metadata preview and scope controls.
 - Update managed docs, feature-local workflow docs, and any emitting templates or sync tooling so
   they all use the shared frontmatter metadata schema.
-- Update planning setup guidance and the plan-generation workflow so existing filled artifacts are
-  not overwritten silently.
+- Update planning setup guidance and `.specify/scripts/bash/setup-plan.sh` so existing filled
+  artifacts are not overwritten silently and explicit overwrite behavior is inspectable.
 - Update workflow docs, status/report contracts, and any related tooling surfaces so token-economy
   conventions are explicit, grounded, and recoverable.
 - Update `.specify/templates/spec-template.md` and `.specify/templates/plan-template.md` to direct

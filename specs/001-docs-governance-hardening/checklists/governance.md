@@ -70,17 +70,21 @@ docmeta:
 
 ## Frontmatter Authority & Migration
 
-- [ ] CHK029 Does the spec define YAML frontmatter as the canonical metadata authority and legacy `DOCMETA` as compatibility-only input rather than as the long-term rendered header system? [Consistency, Gap]
-- [ ] CHK030 Are migration requirements specific about how `DOCMETA`-only files are automatically augmented without dropping existing frontmatter keys, skill metadata, or document body content? [Completeness, Gap]
-- [ ] CHK031 Are lean-by-type rules defined clearly enough that skill and command docs can reuse `description` and `metadata.source` without being forced into duplicate `purpose` or `source` fields? [Clarity, Gap]
-- [ ] CHK032 Does the requirements set distinguish exact registry sync for managed docs from schema-only lint for non-managed Markdown under the frontmatter-first model? [Consistency, Gap]
+- [X] CHK029 Does the spec define YAML frontmatter as the canonical metadata authority and legacy `DOCMETA` as compatibility-only input rather than as the long-term rendered header system? [Consistency, Gap]
+- [X] CHK030 Are migration requirements specific about how `DOCMETA`-only files are automatically augmented without dropping existing frontmatter keys, skill metadata, or document body content? [Completeness, Gap]
+- [X] CHK031 Are lean-by-type rules defined clearly enough that skill and command docs can reuse `description` and `metadata.source` without being forced into duplicate `purpose` or `source` fields? [Clarity, Gap]
+- [X] CHK032 Does the requirements set distinguish exact registry sync for managed docs from schema-only lint for non-managed Markdown under the frontmatter-first model? [Consistency, Gap]
 
 ## Presentation Contract
 
-- [ ] CHK033 Do the requirements avoid depending on collapsed HTML/CSS header rendering now that the intended metadata format is frontmatter-first and conventional Markdown-first? [Conflict, Spec §FR-018, Spec §FR-020, Spec §SC-006, Spec §SC-008]
-- [ ] CHK034 Are acceptance criteria written so preview success is judged by truthful frontmatter metadata and provenance clarity rather than by the presence of a rendered shared header block? [Acceptance Criteria, Gap]
+- [X] CHK033 Do the requirements avoid depending on collapsed HTML/CSS header rendering now that the intended metadata format is frontmatter-first and conventional Markdown-first? [Conflict, Spec §FR-018, Spec §FR-020, Spec §SC-006, Spec §SC-008]
+- [X] CHK034 Are acceptance criteria written so preview success is judged by truthful frontmatter metadata and provenance clarity rather than by the presence of a rendered shared header block? [Acceptance Criteria, Gap]
 
 ## Cross-Artifact Alignment
 
-- [ ] CHK035 Do `plan.md` and `tasks.md` describe the same frontmatter-first scope as the feature intent, rather than an older closure-remediation slice or the removed DOCMETA/CSS design? [Consistency, Plan §Summary, Tasks §Phase 1-4]
-- [ ] CHK036 Is the close-out language across spec, plan, and tasks explicit enough to distinguish implemented work, review-open state, and readiness to clear `.specify/feature.json`? [Clarity, Plan §Delivery Priorities, Tasks §Phase 7]
+- [X] CHK035 Do `plan.md` and `tasks.md` describe the same frontmatter-first scope as the feature intent, rather than an older closure-remediation slice or the removed DOCMETA/CSS design? [Consistency, Plan §Summary, Tasks §Phase 1-4]
+- [X] CHK036 Is the close-out language across spec, plan, and tasks explicit enough to distinguish implemented work, review-open state, and readiness to clear `.specify/feature.json`? [Clarity, Plan §Delivery Priorities, Tasks §Phase 7]
+
+## Traceability Residuals
+
+- [ ] CHK037 Do roadmap requirements such as `FR-003` and `FR-013` still have explicit traceability in `tasks.md`, rather than relying only on implication from `plan.md`, `spec.md`, or repo history? [Coverage, Traceability, Spec §FR-003, Spec §FR-013, Tasks §Phase 1-3]

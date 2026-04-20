@@ -106,6 +106,31 @@ Action-needed rows in `review-queue.md` may be surfaced by the status tool for:
 - A feature may therefore be implemented and still remain review-open. In that state, the status
   report should show the open review queues and suppress `closure_needed`.
 
+## Metadata Maintenance Contract
+
+`python3 tools/doc_workflow.py sync` and `python3 tools/doc_status.py sync` are the explicit
+metadata-maintenance entrypoints.
+
+- `--dry-run` previews pending rewrites without mutating files.
+- `--scope managed` limits sync to registry-managed docs.
+- `--scope active-feature` limits sync to Markdown under the active feature directory.
+- `--scope all` is the broad repo-wide rewrite path.
+- YAML frontmatter is authoritative whenever both frontmatter and legacy `DOCMETA` are present.
+- Legacy `DOCMETA` may still be parsed during migration, but `DOCMETA`-only workflow docs are not
+  compliant with the maintained frontmatter contract.
+
+These controls exist so maintainers can inspect or narrow rewrites before a broad mutation run.
+
+## Plan Setup Guardrail
+
+`.specify/scripts/bash/setup-plan.sh` is a feature-artifact generation step, not a generic
+docs-maintenance command.
+
+- If the target `plan.md` already exists and is non-empty, the script preserves it by default.
+- Overwrite requires an explicit action such as `--force`.
+- Script output includes `PLAN_ACTION` so callers can tell whether the plan was preserved or the
+  template was copied.
+
 ## Delivery-State Language
 
 - Passing `python3 tools/doc_workflow.py all` proves the current docs workflow passes in the working

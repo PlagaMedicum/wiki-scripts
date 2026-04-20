@@ -60,6 +60,47 @@ Equivalent repo-local command:
 /speckit.docs
 ```
 
+## Preview Or Narrow Metadata Rewrites
+
+Preview managed-doc metadata rewrites without mutating files:
+
+```bash
+rtk python3 tools/doc_workflow.py sync --dry-run --scope managed
+```
+
+Preview only active-feature metadata rewrites:
+
+```bash
+rtk python3 tools/doc_workflow.py sync --dry-run --scope active-feature
+```
+
+Apply a broader repo-wide metadata sync only when you actually intend to mutate the selected
+surface:
+
+```bash
+rtk python3 tools/doc_workflow.py sync --scope all
+```
+
+Use these modes to distinguish durable managed-doc sync from broader frontmatter migration.
+
+## Preserve Existing Plans By Default
+
+Planning setup now preserves an existing non-empty `plan.md` unless overwrite is requested
+explicitly:
+
+```bash
+rtk bash .specify/scripts/bash/setup-plan.sh --json
+```
+
+Only use `--force` when you deliberately want to replace the current plan with the template:
+
+```bash
+rtk bash .specify/scripts/bash/setup-plan.sh --json --force
+```
+
+The script reports `PLAN_ACTION` so wrappers and tests can tell whether the run preserved the
+current plan or copied the template.
+
 ## Close Out The Feature Carefully
 
 A passing docs gate means the current tree is coherent. It does not automatically mean the feature

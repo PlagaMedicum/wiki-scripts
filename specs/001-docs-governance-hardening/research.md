@@ -49,18 +49,21 @@ docmeta:
   - Move all guardrails into AGENTS instructions only: rejected because template users and repo docs
     also need to see the guardrails.
 
-## Decision 4: Give feature-local workflow docs a stable metadata and schema shape
+## Decision 4: Use frontmatter-first metadata with lean-by-type rules
 
-- **Decision**: Feature-local workflow docs should carry lightweight local metadata lines stating
-  their purpose, current status, connected docs, and review handling. `questions.md` and
-  `review-queue.md` should also use a stable field schema rather than ad hoc comments.
-- **Rationale**: This answers the review concern that these docs currently look unstable or
-  disconnected from repo policy, even though they are not managed by `.specify/doc-registry.json`.
+- **Decision**: Workflow docs should use YAML frontmatter as the canonical metadata surface.
+  Feature-local docs, managed docs, skill docs, and command docs share one `docmeta` model, but
+  skills and command docs keep their existing top-level keys such as `name`, `description`,
+  `compatibility`, and `metadata`.
+- **Rationale**: This keeps metadata conventional, machine-readable, and truthful without forcing
+  upstream-style skill and command docs into duplicated fields or custom rendered header systems.
 - **Alternatives considered**:
+  - Keep rendered `DOCMETA` headers as the long-term contract: rejected because they are less
+    conventional and depend on repo-specific presentation choices.
   - Reuse registry-managed frontmatter values for feature-local docs: rejected because feature-local
     docs are not tracked by the registry and should not claim registry-managed review state.
-  - Leave feature-local docs as free-form Markdown: rejected because the workflow becomes too easy to
-    misread or mutate inconsistently.
+  - Leave feature-local docs as free-form Markdown: rejected because the workflow becomes too easy
+    to misread or mutate inconsistently.
 
 ## Decision 5: Name the next big backlog items as separate planned features, with `suppressor` next
 
@@ -159,3 +162,30 @@ docmeta:
   - Auto-promote the feature spec status when tasks complete: rejected because task completion alone
     does not prove review completion.
   - Leave the lifecycle undocumented: rejected because it keeps the same ambiguity in place.
+
+## Decision 12: Keep docs metadata sync and feature generation as separate write surfaces
+
+- **Decision**: Broad metadata migration and feature-artifact generation remain separate workflows.
+  Docs sync may rewrite frontmatter, but it must support preview and explicit scope selection;
+  feature-generation scripts must not be treated as generic docs-maintenance commands.
+- **Rationale**: The repo has already demonstrated that broad metadata rewrites and plan generation
+  can both touch `plan.md`, but they fail in different ways and need different guardrails.
+- **Alternatives considered**:
+  - Treat all Markdown-writing workflows as one undifferentiated write surface: rejected because
+    maintainers then cannot tell which command is allowed to touch which artifact family.
+  - Keep repo-wide sync but hide scope from operators: rejected because it removes the inspectable
+    path needed before large mutations.
+
+## Decision 13: Preserve existing `plan.md` by default and require `--force` for overwrite
+
+- **Decision**: `.specify/scripts/bash/setup-plan.sh` should preserve an existing non-empty
+  `plan.md` unless the maintainer explicitly passes `--force`. The script should also surface which
+  action it took so wrappers and tests can inspect the outcome.
+- **Rationale**: The repo already hit a real failure mode where a filled plan was replaced with the
+  raw template. Default-preserve plus explicit force matches the documented guardrail and keeps the
+  workflow honest.
+- **Alternatives considered**:
+  - Always copy the template and rely on the same run to refill it: rejected because interruptions
+    leave the template overwrite behind.
+  - Block all future overwrite paths entirely: rejected because maintainers still need a deliberate
+    way to reset a plan when they truly intend to do so.

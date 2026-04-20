@@ -68,6 +68,59 @@ docmeta:
   - this entity remains authoritative for durable `approval_needed` and `manual_review_needed`
     status even when feature-local queue files exist
 
+### Unified Doc Metadata
+
+- **Purpose**: Represents the frontmatter-first metadata contract shared by managed docs,
+  feature-local docs, skills, and command docs.
+- **Fields**:
+  - `docmeta.status`: lifecycle state such as `maintained`, `working`, or `draft`
+  - `docmeta.review`: truthful review provenance such as `reviewed`, `feature-local`, or
+    `workflow-local`
+  - `docmeta.purpose`: short human-oriented purpose statement unless the doc type already has an
+    equivalent field such as `description`
+  - `docmeta.source`: authority for the metadata such as `.specify/doc-registry.json` or
+    `document-local metadata`
+  - `docmeta.feature`: optional feature link
+  - `docmeta.connected_docs`: optional related-doc list
+  - `docmeta.branch`: optional branch identifier
+  - `docmeta.created`: optional creation date
+  - `docmeta.input`: optional input provenance
+- **Validation rules**:
+  - YAML frontmatter is authoritative when both frontmatter and legacy `DOCMETA` exist
+  - managed docs must match registry-backed values exactly
+  - non-managed docs are schema-linted without falsely claiming registry-backed review state
+  - skill and command docs may satisfy `purpose` and `source` through existing top-level fields such
+    as `description` and `metadata.source`
+
+### Metadata Rewrite Scope
+
+- **Purpose**: Represents the set of Markdown files a metadata-maintenance run may inspect or
+  rewrite.
+- **Fields**:
+  - `scope`: `all`, `managed`, or `active-feature`
+  - `dry_run`: boolean indicating preview-without-mutation
+  - `targets`: derived list of Markdown paths selected by the scope
+- **Validation rules**:
+  - `managed` includes only registry-managed docs
+  - `active-feature` includes only Markdown under the directory pointed to by `.specify/feature.json`
+  - `dry_run` reports pending rewrites without mutating files
+  - a rewrite run must not silently widen beyond the requested scope
+
+### Artifact Overwrite Guardrail
+
+- **Purpose**: Represents the policy that protects filled feature artifacts such as `plan.md` from
+  silent replacement.
+- **Fields**:
+  - `target_path`: artifact path such as `specs/001-example/plan.md`
+  - `exists`: whether the artifact already exists
+  - `non_empty`: whether the artifact already has substantive content
+  - `force_requested`: whether an explicit overwrite flag such as `--force` was passed
+  - `action`: derived outcome such as `preserved`, `copied-template`, or `touched-empty`
+- **Validation rules**:
+  - non-empty artifacts must be preserved by default
+  - overwrite requires an explicit force path
+  - the workflow should surface the chosen action so it is inspectable in logs and tests
+
 ### Active Feature Context
 
 - **Purpose**: Represents whether the status workflow currently has an active feature directory for

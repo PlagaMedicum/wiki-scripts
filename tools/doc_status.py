@@ -83,6 +83,18 @@ class RegistryError(RuntimeError):
     """Registry validation failed."""
 
 
+def load_active_feature(root: Path) -> str | None:
+    feature_path = root / ".specify" / "feature.json"
+    if not feature_path.is_file():
+        return None
+    try:
+        data = json.loads(feature_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    value = data.get("feature_directory")
+    return value if isinstance(value, str) and value else None
+
+
 def needs_explicit_client_approval(review_labels: Iterable[str]) -> bool:
     labels = set(review_labels)
     return bool(labels & APPROVAL_SOURCE_LABELS) and not bool(labels & APPROVAL_TERMINAL_LABELS)
@@ -538,7 +550,27 @@ def is_excluded(rel_path: str, exclude_globs: Iterable[str]) -> bool:
     return any(pure.match(pattern) for pattern in exclude_globs)
 
 
-def sync(root: Path, registry_path: Path) -> list[str]:
+def sync_targets(
+    root: Path,
+    docs_by_path: dict[str, ManagedDoc],
+    scope: str,
+) -> list[Path]:
+    if scope == "managed":
+        return sorted(root / rel for rel in docs_by_path)
+
+    if scope == "active-feature":
+        active_feature = load_active_feature(root)
+        if not active_feature:
+            return []
+        feature_dir = root / active_feature
+        if not feature_dir.is_dir():
+            raise RegistryError(f"active feature directory is missing: {active_feature}")
+        return sorted(feature_dir.rglob("*.md"))
+
+    return repo_markdown_paths(root)
+
+
+def sync(root: Path, registry_path: Path, *, scope: str = "all", dry_run: bool = False) -> list[str]:
     registry = load_registry(registry_path)
     docs = registry_documents(registry)
     docs_by_path = {doc.path: doc for doc in docs}
@@ -548,12 +580,13 @@ def sync(root: Path, registry_path: Path) -> list[str]:
         if not (root / doc.path).is_file():
             raise RegistryError(f"tracked doc is missing: {doc.path}")
 
-    for path in repo_markdown_paths(root):
+    for path in sync_targets(root, docs_by_path, scope):
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8")
         updated = migrate_text(text, rel, docs_by_path.get(rel))
         if updated != text:
-            path.write_text(updated, encoding="utf-8")
+            if not dry_run:
+                path.write_text(updated, encoding="utf-8")
             changed.append(rel)
     return changed
 
@@ -589,7 +622,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("sync", help="Rewrite managed and local Markdown metadata into frontmatter")
+    sync_parser = subparsers.add_parser("sync", help="Rewrite Markdown metadata into frontmatter")
+    sync_parser.add_argument(
+        "--scope",
+        choices=("all", "managed", "active-feature"),
+        default="all",
+        help="Limit metadata rewrites to the full repo, managed docs only, or the active feature",
+    )
+    sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview which files would be rewritten without mutating them",
+    )
     subparsers.add_parser("lint", help="Check that repo Markdown metadata matches the frontmatter rules")
 
     return parser.parse_args(argv)
@@ -602,13 +646,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "sync":
-            changed = sync(root, registry_path)
+            changed = sync(root, registry_path, scope=args.scope, dry_run=args.dry_run)
             if changed:
-                print(f"Synced {len(changed)} doc(s):")
+                verb = "Would sync" if args.dry_run else "Synced"
+                print(f"{verb} {len(changed)} doc(s):")
                 for rel in changed:
                     print(f"  {rel}")
             else:
-                print("Doc metadata already in sync.")
+                if args.dry_run:
+                    print("Doc metadata preview found no pending rewrites.")
+                else:
+                    print("Doc metadata already in sync.")
             return 0
 
         errors = lint(root, registry_path)

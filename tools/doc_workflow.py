@@ -57,7 +57,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("sync", help="Rewrite and augment repo Markdown frontmatter metadata")
+    sync_parser = subparsers.add_parser("sync", help="Rewrite and augment repo Markdown frontmatter metadata")
+    sync_parser.add_argument(
+        "--scope",
+        choices=("all", "managed", "active-feature"),
+        default="all",
+        help="Limit sync rewrites to the full repo, managed docs only, or the active feature",
+    )
+    sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview pending metadata rewrites without mutating files",
+    )
     subparsers.add_parser("lint", help="Check that repo Markdown metadata matches the frontmatter rules")
     subparsers.add_parser("test", help="Run docs-tool unit tests")
     status_parser = subparsers.add_parser("status", help="Report deterministic docs status categories")
@@ -319,19 +330,23 @@ def print_status(report: dict[str, list[str]]) -> None:
             print(f"  - {item}")
 
 
-def run_sync(root: Path, registry_file: Path) -> int:
+def run_sync(root: Path, registry_file: Path, *, scope: str = "all", dry_run: bool = False) -> int:
     try:
-        changed = doc_status.sync(root, registry_file)
+        changed = doc_status.sync(root, registry_file, scope=scope, dry_run=dry_run)
     except doc_status.RegistryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     if changed:
-        print(f"Synced {len(changed)} doc(s):")
+        verb = "Would sync" if dry_run else "Synced"
+        print(f"{verb} {len(changed)} doc(s):")
         for rel in changed:
             print(f"  {rel}")
     else:
-        print("Doc metadata already in sync.")
+        if dry_run:
+            print("Doc metadata preview found no pending rewrites.")
+        else:
+            print("Doc metadata already in sync.")
     return 0
 
 
@@ -371,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     registry_file = registry_path(root)
 
     if args.command == "sync":
-        return run_sync(root, registry_file)
+        return run_sync(root, registry_file, scope=args.scope, dry_run=args.dry_run)
     if args.command == "lint":
         return run_lint(root, registry_file)
     if args.command == "test":
@@ -384,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
             print_status(report)
         return 1 if has_blocking_status(report) else 0
 
-    if run_sync(root, registry_file) != 0:
+    if run_sync(root, registry_file, scope="all", dry_run=False) != 0:
         return 1
     if run_lint(root, registry_file) != 0:
         return 1

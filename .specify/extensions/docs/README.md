@@ -21,6 +21,11 @@ The docs gate is frontmatter-first. Managed docs sync registry-backed metadata i
 frontmatter, while local docs are schema-linted against the same frontmatter contract without
 claiming registry-backed review state.
 
+The gate command and the maintenance command are different surfaces:
+
+- `python3 tools/doc_workflow.py all` or `/speckit.docs` runs the full docs gate
+- `python3 tools/doc_workflow.py sync ...` is the explicit metadata-maintenance entrypoint
+
 The final status report is deterministic and grouped into:
 
 - `approval_needed`
@@ -41,3 +46,28 @@ updates from those files.
 
 Unresolved-marker detection is case-insensitive, but marker syntax shown inside inline code or
 fenced code examples is treated as documentation, not as live unresolved work.
+
+## Safe Metadata Maintenance
+
+Preview pending metadata rewrites without mutating files:
+
+```bash
+python3 tools/doc_workflow.py sync --dry-run --scope managed
+python3 tools/doc_workflow.py sync --dry-run --scope active-feature
+```
+
+Apply a broad rewrite only when you intend to mutate the selected scope:
+
+```bash
+python3 tools/doc_workflow.py sync --scope all
+```
+
+Scope meanings:
+
+- `managed`: registry-managed docs only
+- `active-feature`: Markdown under the feature pointed to by `.specify/feature.json`
+- `all`: repo-wide Markdown sync
+
+Frontmatter is authoritative when both frontmatter and legacy `DOCMETA` are present. Legacy
+`DOCMETA` may still be parsed during migration, but `DOCMETA`-only workflow docs are no longer the
+maintained contract.

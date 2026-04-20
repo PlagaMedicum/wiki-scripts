@@ -17,9 +17,15 @@ docmeta:
 - Q: How should `.specify` template and workflow overrides be handled? → A: Conservatively. Repo-local workflow defaults should stay close to upstream Spec Kit guidance unless the user explicitly approves a deviation, and policy-bearing changes should land with matching docs or tests.
 - Q: Should feature-local workflow docs use a stable local schema and metadata header? → A: Yes. `questions.md`, `review-queue.md`, and related workflow docs should state their purpose, status, connected docs, and review handling consistently.
 - Q: Which planned feature area should come next after `001-docs-governance-hardening`? → A: `suppressor` work should be prioritized next, ahead of the `biblio` follow-ons.
-- Q: Should managed docs and feature-local docs share one rendered technical header shape even though their metadata does not come from the same source? → A: Yes. Use one broad technical header schema across Markdown docs, remove the `[!NOTE]` callout style, and keep provenance truthful instead of pretending every header is registry-managed.
-- Q: Should the shared technical header stay collapsed by default in preview? → A: Yes. It should be expandable on demand, avoid taking excessive preview space, and rely on one common repo-wide disclosure/styling pattern instead of per-document variations.
+- Q: Should managed docs and feature-local docs share one common metadata shape even though their metadata does not come from the same source? → A: Yes. Use one broad technical metadata schema across Markdown docs and keep provenance truthful instead of pretending every doc is registry-managed.
+- Q: Should preview-specific compactness drive the canonical metadata contract? → A: No. Compact presentation may be useful, but the authoritative contract must stay conventional, frontmatter-first, and independent of custom preview behavior.
 - Q: Should token economy be an explicit aim of this spec-driven workflow even when it affects technical notation and status surfaces? → A: Yes. The workflow should become materially more compact, but only through stable, documented shorthand and expandable full-fidelity detail so quality and grounding do not drop.
+
+### Session 2026-04-20
+
+- Q: Is the real safety problem the same as the docs metadata rewrite? → A: No. Repo-wide docs metadata sync is one broad write surface, but the destructive replacement of `plan.md` came from the planning setup workflow copying the template over the existing file. The spec must address both without conflating them.
+- Q: Should the canonical docs metadata contract now be frontmatter-first instead of a rendered collapsible header system? → A: Yes. YAML frontmatter is the authoritative metadata surface; legacy `DOCMETA` remains compatibility input only, and conventional Markdown behavior is preferred over custom preview-only rendering tricks.
+- Q: Should workflow generation and metadata migration be allowed to overwrite filled artifacts silently? → A: No. Existing filled artifacts such as `plan.md` must be preserved unless a maintainer explicitly requests an overwrite, and broad metadata rewrites must offer an inspectable or narrower execution path.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -49,35 +55,36 @@ longer silently drops real states that are already present in repo files.
 
 ---
 
-### User Story 2 - Unified Technical Headers And Guardrails (Priority: P2)
+### User Story 2 - Safe Frontmatter Metadata And Guardrails (Priority: P2)
 
-As the repo owner, I need all maintained Markdown docs and feature-local workflow docs to use one
-consistent technical metadata header so the repo does not drift into ad hoc header styles, broken
-preview rendering, unstable status semantics, or hidden policy changes.
+As the repo owner, I need maintained Markdown docs and feature-generation workflows to use one
+conservative frontmatter-first metadata contract with explicit overwrite guardrails so metadata
+migration does not silently replace filled artifacts or drift into ad hoc schemas.
 
-**Why this priority**: The current docs and schemas are inconsistent enough that they create
-confusion about what is managed, what is reviewable, which fields are shared, and what the status
-tool is supposed to parse.
+**Why this priority**: The current safety problem is not just inconsistent formatting. The repo now
+has two separate write surfaces that can be confused with each other: broad metadata migration and
+feature-artifact generation. Without explicit guardrails, maintainers can lose real plan content or
+misread what a docs command is allowed to rewrite.
 
-**Independent Test**: Read the feature-local workflow docs, `.specify` templates, and governance
-workflow docs in Markdown preview; their headers use one readable schema, optional fields render
-cleanly, and the override policy remains explicit and truthful.
+**Independent Test**: Run the metadata sync path and the planning setup path against representative
+existing docs; frontmatter is augmented truthfully, legacy metadata is tolerated as migration input,
+and an existing filled `plan.md` is not silently replaced.
 
 **Acceptance Scenarios**:
 
-1. **Given** a maintainer opens `questions.md`, `review-queue.md`, or the status-report contract,
-   **When** they inspect the file, **Then** they see the same technical header shape used elsewhere
-   in the repo, including what the file is for, how it is reviewed, and how it connects to the
-   feature.
-2. **Given** `.specify` templates or repo-local workflow docs are changed, **When** the new text is
-   reviewed, **Then** the conservative override policy and explicit-review expectations are visible.
-3. **Given** a managed doc and a feature-local doc need different metadata fields, **When** both are
-   rendered in Markdown preview, **Then** they still share one clear header format while remaining
-   honest about whether their metadata comes from `.specify/doc-registry.json` or a feature-local
-   source.
-4. **Given** a document has a long technical metadata header, **When** it is opened in Markdown
-   preview, **Then** the header starts collapsed to save space and can be expanded without losing
-   readability or hiding the provenance/source information permanently.
+1. **Given** a repo doc still uses legacy `DOCMETA` or partial frontmatter, **When** a maintainer
+   runs the metadata sync workflow, **Then** the doc is augmented into the canonical frontmatter
+   schema without losing its substantive body content or type-specific frontmatter keys.
+2. **Given** a managed doc and a feature-local doc need different metadata authorities, **When**
+   both are migrated or linted, **Then** they share one frontmatter-based schema while remaining
+   honest about whether durable review state comes from `.specify/doc-registry.json` or from local
+   feature context.
+3. **Given** a maintainer runs the planning setup workflow against an existing feature with a filled
+   `plan.md`, **When** no explicit overwrite was requested, **Then** the current plan content is
+   preserved instead of being replaced by the template.
+4. **Given** a maintainer wants to inspect or limit a broad metadata rewrite, **When** they invoke
+   the docs-maintenance workflow, **Then** they have a safe way to preview or narrow the write scope
+   instead of being forced into an unbounded repo-wide rewrite.
 
 ### User Story 3 - Token-Efficient Grounded Workflow Surfaces (Priority: P3)
 
@@ -143,16 +150,20 @@ named, ordered, and justified without relying on inline TODOs.
   source of truth for durable approval/manual-review status and the feature queue can only request
   follow-up review or alignment work.
 - If a document does not need fields such as `Feature`, `Connected Docs`, `Branch`, or `Input`, the
-  shared header still renders cleanly without placeholder lines or misleading empty values.
+  shared frontmatter schema still stays concise without placeholder keys or misleading empty values.
 - If a document needs extra context such as `Feature`, `Connected Docs`, `Branch`, `Created`, or
-  `Input`, those optional fields fit inside the same header format without breaking Markdown preview
-  layout or implying false registry management.
-- The shared header must remain visually obvious as technical metadata even without `[!NOTE]`
-  callout syntax.
-- If a preview surface does not expand technical metadata automatically, the collapsed header still
-  exposes a clear summary line and an obvious affordance for opening the full metadata block.
-- If the repo uses shared styling for the header, that styling must be common across docs rather
-  than requiring document-specific tweaks to keep the header readable.
+  `Input`, those optional fields fit inside the same frontmatter schema without implying false
+  registry management.
+- If a skill or command doc already uses upstream-style top-level frontmatter such as `name`,
+  `description`, `compatibility`, or `metadata`, migration preserves those keys and augments only
+  the missing repo-governance metadata semantics.
+- If a document contains both frontmatter and legacy `DOCMETA`, frontmatter remains authoritative
+  and legacy metadata is treated as compatibility-only input during migration.
+- If a maintainer runs plan setup against a feature that already has a filled `plan.md`, the
+  workflow must stop, warn, or require an explicit overwrite action instead of silently replacing
+  the artifact.
+- If a docs-maintenance command would rewrite a broad set of Markdown files, the maintainer must be
+  able to inspect or constrain the rewrite scope before the tool mutates files.
 - If the workflow introduces shorthand, codes, wrappers, or compact notation for token economy, the
   meaning must stay stable and documented rather than becoming repo folklore.
 - If compact logs omit repeated wording, they must still preserve the identifiers and references
@@ -206,22 +217,25 @@ named, ordered, and justified without relying on inline TODOs.
 - **FR-013**: The updated governance roadmap MUST encode that `suppressor` follow-on work is the
   next planned feature area after `001-docs-governance-hardening`.
 - **FR-014**: Managed docs and feature-local docs that participate in this workflow MUST share one
-  common technical metadata-header format at the top of the Markdown file instead of using two
-  unrelated header styles.
-- **FR-015**: The shared metadata-header schema MUST support a core field set for document identity
-  and review context, plus optional fields such as feature link, connected docs, branch/date, and
-  input provenance, without requiring irrelevant fields on every document.
-- **FR-016**: The shared metadata-header schema MUST render correctly in Markdown preview as a clear
-  technical header block and MUST not rely on `[!NOTE]` callout syntax.
-- **FR-017**: The shared metadata-header schema MUST keep provenance explicit, so managed docs can
-  point at `.specify/doc-registry.json` while feature-local docs can point at their local feature
-  context without falsely claiming registry-managed review state.
-- **FR-018**: The shared metadata header MUST be collapsed by default in Markdown preview and MUST
-  remain expandable on demand so technical metadata does not dominate the visible page layout.
-- **FR-019**: The collapsed header MUST still expose enough summary information to make the document
-  identity and metadata provenance obvious before expansion.
-- **FR-020**: The repo MUST use one common disclosure-and-styling pattern for the shared header
-  instead of per-document collapse implementations.
+  common frontmatter-based metadata schema at the top of the Markdown file instead of separate
+  rendered header systems.
+- **FR-015**: The shared frontmatter schema MUST support a core field set for document identity and
+  review context, plus optional fields such as feature link, connected docs, branch/date, and input
+  provenance, without requiring irrelevant fields on every document.
+- **FR-016**: The shared frontmatter schema MUST remain readable and truthful in conventional
+  Markdown tooling and MUST not depend on custom HTML callouts, disclosure widgets, or repo-local
+  CSS for correctness.
+- **FR-017**: The shared metadata schema MUST keep provenance explicit, so managed docs can point at
+  `.specify/doc-registry.json` while feature-local docs can point at their local feature context
+  without falsely claiming registry-managed review state.
+- **FR-018**: Docs metadata sync MUST augment existing docs conservatively, preserving non-metadata
+  document content and existing type-specific frontmatter keys while migrating legacy metadata into
+  the canonical frontmatter schema.
+- **FR-019**: Feature-generation and setup workflows MUST NOT overwrite an existing filled artifact
+  such as `plan.md` without an explicit maintainer-approved overwrite action.
+- **FR-020**: Docs-maintenance tooling MUST provide a safe way to inspect or narrow metadata
+  rewrites before applying broad Markdown mutations, so maintainers can distinguish managed-doc sync
+  from repo-wide migration behavior.
 - **FR-021**: The spec-driven workflow MUST treat token economy as an explicit design goal for
   repeated technical surfaces such as headers, queues, status output, logs, and recurring command or
   notation patterns.
@@ -251,10 +265,12 @@ named, ordered, and justified without relying on inline TODOs.
   or unintended edits across standing governance docs and active feature docs.
 - **Managed Doc Review State**: The additive set of review labels in `.specify/doc-registry.json`
   that determines whether a managed doc still needs approval or manual review.
-- **Unified Doc Header**: A shared technical metadata block that can describe managed docs and
-  feature-local docs using one visual schema while keeping the source of truth explicit.
-- **Header Presentation State**: The collapsed or expanded preview state of the shared technical
-  header, including the minimum summary information visible before expansion.
+- **Unified Doc Metadata**: A shared frontmatter-based metadata block that can describe managed docs
+  and feature-local docs using one schema while keeping the source of truth explicit.
+- **Metadata Rewrite Scope**: The set of Markdown files a docs-maintenance command is allowed to
+  inspect, lint, preview, or rewrite in one run.
+- **Artifact Overwrite Guardrail**: A workflow rule that blocks or requires explicit approval for
+  replacing an existing filled feature artifact such as `plan.md`.
 - **Compact Workflow Surface**: A deliberately shortened workflow artifact such as a status output,
   header, queue row, or log line that reduces repeated technical wording while preserving meaning.
 - **Shorthand Mapping Rule**: A documented relationship between a compact code, notation, or wrapper
@@ -276,14 +292,15 @@ named, ordered, and justified without relying on inline TODOs.
   follow-on features before the `biblio` follow-ons.
 - **SC-005**: The `.specify` template, registry-review-schema, and docs-workflow changes pass the
   docs-tool unit tests and the explicit docs gate without registry drift or broken queue semantics.
-- **SC-006**: Representative managed docs and feature-local docs render with the same clear
-  multi-line technical header shape in Markdown preview, with no `[!NOTE]` callout formatting and
-  no broken line wrapping for optional metadata fields.
-- **SC-007**: The shared header schema is broad enough to cover registry-managed docs and
-  feature-local docs without any doc falsely claiming that its review state comes from the wrong
-  source.
-- **SC-008**: In representative Markdown previews, the shared technical header starts in a compact
-  collapsed state, expands on demand, and remains readable without per-document styling overrides.
+- **SC-006**: Representative managed docs, feature-local docs, skill docs, and command docs expose
+  the same frontmatter-based metadata semantics with truthful provenance, and no tracked doc
+  participating in the workflow remains legacy-`DOCMETA`-only.
+- **SC-007**: Existing top-level frontmatter keys already used by skill and command docs remain
+  intact after migration, while managed docs still derive authoritative review state from
+  `.specify/doc-registry.json`.
+- **SC-008**: Running the metadata-maintenance workflow on representative existing docs and running
+  planning setup against a representative filled feature preserves non-metadata prose and does not
+  silently replace an existing `plan.md`.
 - **SC-009**: Representative workflow surfaces that were previously verbose become materially more
   compact while preserving the required identifiers, links, and review distinctions needed for safe
   use.
@@ -298,20 +315,24 @@ named, ordered, and justified without relying on inline TODOs.
   status on durable human docs.
 - File-based question and review queues live under feature directories unless the work becomes
   standing repo policy.
-- A shared visual header format does not imply that all docs share the same workflow authority or
+- A shared frontmatter schema does not imply that all docs share the same workflow authority or
   review source of truth.
-- The preview surfaces used by maintainers can render standard collapsible HTML structures and a
-  shared CSS treatment well enough for the compact header pattern to be practical.
+- Conventional Markdown tooling may show YAML frontmatter plainly, and that is acceptable as long as
+  the metadata stays truthful, conventional, and machine-readable.
+- Legacy `DOCMETA` may remain parseable during migration, but YAML frontmatter is the authoritative
+  metadata surface once both are present.
 - The repo can reduce repeated technical wording meaningfully through shared notation, compact
   surfaces, or wrappers without needing to sacrifice explicit source-of-truth rules.
 - The docs workflow remains advisory and review-oriented; it does not auto-approve or auto-close
   human review steps.
 - Repo-local overrides of upstream Spec Kit defaults should stay conservative and require explicit
   user confirmation when they materially shift workflow policy.
+- Safety guardrails may refuse a write or require an explicit overwrite action rather than guessing
+  maintainer intent.
 - The first pass should harden the workflow and documentation surface now, while leaving room for
   deeper architecture work in later scoped features.
-- Optional metadata fields may be omitted when they do not apply, as long as the shared header shape
-  remains recognizable and truthful.
+- Optional metadata fields may be omitted when they do not apply, as long as the shared frontmatter
+  shape remains recognizable and truthful.
 
 ## Documentation Impact
 
@@ -324,12 +345,13 @@ named, ordered, and justified without relying on inline TODOs.
 - Update `.specify/extensions/docs/README.md` and
   `.specify/extensions/docs/commands/speckit.docs.md` to document the stricter status queue.
 - Update managed docs, feature-local workflow docs, and any emitting templates or sync tooling so
-  they all use the shared technical metadata-header format.
-- Update the shared doc-header styling and rendering pattern so the technical header is compact by
-  default in preview and expandable when maintainers need the full metadata.
+  they all use the shared frontmatter metadata schema.
+- Update planning setup guidance and the plan-generation workflow so existing filled artifacts are
+  not overwritten silently.
 - Update workflow docs, status/report contracts, and any related tooling surfaces so token-economy
   conventions are explicit, grounded, and recoverable.
 - Update `.specify/templates/spec-template.md` and `.specify/templates/plan-template.md` to direct
   unresolved human questions into files instead of invented policy.
 - Update `tools/doc_status.py`, `tools/doc_workflow.py`, tests, and the explicit docs gate behavior
-  so header formatting, queue parsing, review-label semantics, and TODO detection work as intended.
+  so frontmatter migration, queue parsing, review-label semantics, TODO detection, rewrite scope,
+  and overwrite guardrails work as intended.

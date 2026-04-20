@@ -37,15 +37,14 @@ docmeta:
 
 ## Notes
 
-- The updated spec now explicitly covers one shared technical metadata-header schema for managed and
-  feature-local Markdown docs.
-- The spec keeps provenance truthful: a shared visual header does not collapse registry-managed and
-  feature-local review semantics into one source of truth.
-- The updated scope also covers compact-by-default preview behavior for the shared header, with one
-  repo-wide expandable presentation pattern instead of per-document variations.
-- The updated scope also covers token economy as a first-class workflow goal, with shorthand or
+- The updated spec now treats YAML frontmatter as the canonical metadata surface for managed docs,
+  feature-local docs, skills, and commands.
+- The spec now distinguishes two different write risks: broad docs metadata migration and destructive
+  feature-artifact generation such as `plan.md` overwrite.
+- The updated scope requires conservative migration that preserves non-metadata prose and existing
+  type-specific frontmatter keys while still making provenance explicit.
+- The updated scope also keeps token economy as a first-class workflow goal, with shorthand or
   compact surfaces required to remain documented, recoverable, and quality-preserving.
-- Current repo direction has since moved to frontmatter-first metadata; use
-  [governance.md](./governance.md) and [alignment.md](./alignment.md) for the active gap list.
-- This file remains a historical specification-quality snapshot and should not be read as proof that
-  `001-docs-governance-hardening` is closure-ready.
+- This checklist validates specification quality only. Use
+  [governance.md](./governance.md) and [alignment.md](./alignment.md) for current closure and
+  cross-artifact gaps.

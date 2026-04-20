@@ -35,6 +35,19 @@ docmeta:
 - [ ] CHK012 Are obsolete assumptions about preview CSS, collapsible headers, or rendered shared metadata blocks explicitly removed or superseded? [Conflict, Gap]
 - [ ] CHK013 Do the docs explain why legacy headers may still parse during migration while frontmatter is the sole authoritative metadata surface? [Clarity, Assumption]
 
+## Write-Surface Safety
+
+- [ ] CHK014 Do the requirements distinguish repo-wide metadata migration from feature-artifact generation clearly enough that maintainers can tell which write surface they are invoking? [Clarity, Spec §User Story 2, Spec §FR-018, Spec §FR-019, Spec §FR-020]
+- [ ] CHK015 Is the phrase “explicit maintainer-approved overwrite action” specific enough to implement without guessing whether the workflow should stop, prompt, force, or require a dedicated flag? [Ambiguity, Spec §FR-019]
+- [ ] CHK016 Do the migration requirements define exactly what content must be preserved during frontmatter sync, including non-metadata prose and existing type-specific frontmatter keys? [Completeness, Spec §FR-018, Spec §SC-007, Spec §SC-008]
+- [ ] CHK017 Are the requirements for inspecting or narrowing metadata rewrites concrete enough to distinguish preview/dry-run behavior from scoped mutation behavior? [Clarity, Spec §FR-020, Gap]
+
+## Implementation Readiness
+
+- [ ] CHK018 Do `plan.md` and `tasks.md` reflect the new write-surface safety scope, rather than only the older closure-semantics slice and shared-header migration wording? [Consistency, Plan §Summary, Tasks §Phase 1-4]
+- [ ] CHK019 Are the success criteria specific enough to verify both migration completion and overwrite protection as separate outcomes, instead of bundling them into one vague “safe rewrite” claim? [Acceptance Criteria, Spec §SC-006, Spec §SC-007, Spec §SC-008]
+- [ ] CHK020 Does the documentation-impact section name the concrete docs, templates, and tooling entrypoints that must change to implement overwrite guardrails and safer rewrite scope? [Coverage, Spec §Documentation Impact]
+
 ## Notes
 
 - This checklist captures the current drift after the frontmatter-first implementation landed.

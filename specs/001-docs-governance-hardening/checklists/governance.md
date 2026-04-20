@@ -67,3 +67,20 @@ docmeta:
 - [X] CHK026 Does the spec state clearly that marker syntax documented in inline code or fenced examples must not be reported as unresolved work? [Clarity, Spec §FR-011, Spec §SC-003]
 - [X] CHK027 Are additive review-label combinations specified clearly enough that provenance and terminal approval/review state can coexist without false backlog items? [Consistency, Spec §FR-012, Spec §SC-001]
 - [X] CHK028 Does the spec encode the post-`001` feature order clearly enough that inline TODO comments are unnecessary? [Completeness, Spec §FR-013, Spec §SC-004]
+
+## Frontmatter Authority & Migration
+
+- [ ] CHK029 Does the spec define YAML frontmatter as the canonical metadata authority and legacy `DOCMETA` as compatibility-only input rather than as the long-term rendered header system? [Consistency, Gap]
+- [ ] CHK030 Are migration requirements specific about how `DOCMETA`-only files are automatically augmented without dropping existing frontmatter keys, skill metadata, or document body content? [Completeness, Gap]
+- [ ] CHK031 Are lean-by-type rules defined clearly enough that skill and command docs can reuse `description` and `metadata.source` without being forced into duplicate `purpose` or `source` fields? [Clarity, Gap]
+- [ ] CHK032 Does the requirements set distinguish exact registry sync for managed docs from schema-only lint for non-managed Markdown under the frontmatter-first model? [Consistency, Gap]
+
+## Presentation Contract
+
+- [ ] CHK033 Do the requirements avoid depending on collapsed HTML/CSS header rendering now that the intended metadata format is frontmatter-first and conventional Markdown-first? [Conflict, Spec §FR-018, Spec §FR-020, Spec §SC-006, Spec §SC-008]
+- [ ] CHK034 Are acceptance criteria written so preview success is judged by truthful frontmatter metadata and provenance clarity rather than by the presence of a rendered shared header block? [Acceptance Criteria, Gap]
+
+## Cross-Artifact Alignment
+
+- [ ] CHK035 Do `plan.md` and `tasks.md` describe the same frontmatter-first scope as the feature intent, rather than an older closure-remediation slice or the removed DOCMETA/CSS design? [Consistency, Plan §Summary, Tasks §Phase 1-4]
+- [ ] CHK036 Is the close-out language across spec, plan, and tasks explicit enough to distinguish implemented work, review-open state, and readiness to clear `.specify/feature.json`? [Clarity, Plan §Delivery Priorities, Tasks §Phase 7]

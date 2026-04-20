@@ -45,3 +45,7 @@ docmeta:
   repo-wide expandable presentation pattern instead of per-document variations.
 - The updated scope also covers token economy as a first-class workflow goal, with shorthand or
   compact surfaces required to remain documented, recoverable, and quality-preserving.
+- Current repo direction has since moved to frontmatter-first metadata; use
+  [governance.md](./governance.md) and [alignment.md](./alignment.md) for the active gap list.
+- This file remains a historical specification-quality snapshot and should not be read as proof that
+  `001-docs-governance-hardening` is closure-ready.

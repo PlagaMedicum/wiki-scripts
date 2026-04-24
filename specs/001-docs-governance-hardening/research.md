@@ -189,3 +189,62 @@ docmeta:
     leave the template overwrite behind.
   - Block all future overwrite paths entirely: rejected because maintainers still need a deliberate
     way to reset a plan when they truly intend to do so.
+
+## Decision 14: Record managed-governance review state through the registry, not Markdown edits
+
+- **Decision**: Review and approval changes for managed governance docs stay durable only when they
+  are recorded in `.specify/doc-registry.json` and synced back into frontmatter. Manual edits to
+  `docmeta.review` inside managed Markdown may reflect real human intent, but they do not count as
+  the authoritative review state.
+- **Rationale**: The constitution already treats registry-backed metadata as the source of truth for
+  managed docs. Allowing Markdown-only review labels to count would make the docs gate lie about
+  what has actually been approved and would weaken the whole frontmatter-sync contract.
+- **Alternatives considered**:
+  - Treat matching Markdown edits as equivalent to registry edits: rejected because two writable
+    sources of truth invite drift and silent disagreement.
+  - Ban human review on managed docs entirely: rejected because the problem is where the review
+    state is recorded, not whether review can happen.
+
+## Decision 15: Move unresolved standing-governance review comments out of maintained docs
+
+- **Decision**: Inline TODO-style review comments must not remain inside maintained standing
+  governance docs after review input has been captured. Unresolved repo-level points move into
+  `specs/000-repo-governance/research.md`, a feature-local review file, or a new scoped feature
+  spec until they are resolved.
+- **Rationale**: Maintained governance docs should describe current accepted policy, not mix policy
+  with unresolved editorial or design debate. Leaving inline TODO comments in accepted docs blurs
+  current behavior and future direction, and it also poisons the unresolved-marker gate.
+- **Alternatives considered**:
+  - Keep inline TODO review comments as a lightweight backlog: rejected because they make accepted
+    governance docs self-contradictory.
+  - Delete unresolved review comments without moving them anywhere: rejected because the feedback is
+    real and should remain inspectable until resolved.
+
+## Decision 16: Keep one authoritative temporary review surface per scope
+
+- **Decision**: Repo-level unresolved governance questions live in
+  `specs/000-repo-governance/research.md`. Feature-scoped human input lives in that feature's
+  `questions.md` or `review-queue.md`. Resolved items should be cleaned out of the temporary
+  surface once durable docs are updated.
+- **Rationale**: The repo now has multiple temporary Markdown surfaces for human input. They are
+  useful only if each one has a clear scope. Otherwise the same unresolved point can sit in several
+  files and nobody can tell which one is authoritative.
+- **Alternatives considered**:
+  - Collapse all temporary review input into one repo-wide file: rejected because feature-scoped
+    review would pollute standing governance.
+  - Allow the same unresolved point to remain in several files for convenience: rejected because it
+    recreates duplication and stale-state drift.
+
+## Decision 17: Preserve traceability when feature review becomes durable governance
+
+- **Decision**: When a feature review or implementation produces a durable governance lesson, the
+  updated maintained doc or supporting evidence should preserve traceability back to the originating
+  feature, decision, or review source when that materially helps later audit or git-history lookup.
+- **Rationale**: Once review feedback is folded into durable docs, the repo should not lose the
+  ability to answer "where did this rule come from?" A light traceability link keeps the workflow
+  auditable without forcing every durable doc to carry excessive historical commentary.
+- **Alternatives considered**:
+  - Strip all review provenance once a decision is folded into governance: rejected because later
+    audits lose the path back to the originating context.
+  - Keep all traceability only in git history: rejected because some future reviewers need a faster,
+    human-facing clue about the origin of a durable rule.

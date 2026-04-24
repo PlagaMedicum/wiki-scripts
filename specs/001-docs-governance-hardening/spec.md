@@ -26,6 +26,10 @@ docmeta:
 - Q: Is the real safety problem the same as the docs metadata rewrite? → A: No. Repo-wide docs metadata sync is one broad write surface, but the destructive replacement of `plan.md` came from the planning setup workflow copying the template over the existing file. The spec must address both without conflating them.
 - Q: Should the canonical docs metadata contract now be frontmatter-first instead of a rendered collapsible header system? → A: Yes. YAML frontmatter is the authoritative metadata surface; legacy `DOCMETA` remains compatibility input only, and conventional Markdown behavior is preferred over custom preview-only rendering tricks.
 - Q: Should workflow generation and metadata migration be allowed to overwrite filled artifacts silently? → A: No. Existing filled artifacts such as `plan.md` must be preserved unless a maintainer explicitly requests an overwrite, and broad metadata rewrites must offer an inspectable or narrower execution path.
+- Q: How should client review on managed governance docs be recorded? → A: Through `.specify/doc-registry.json` and deterministic sync, not by hand-editing `docmeta.review` inside managed Markdown files.
+- Q: Where should unresolved repo-level review comments live once a governance doc is maintained? → A: Not as inline TODO markers inside accepted governance docs. They should move into `research.md`, a feature-local review queue, or a new feature spec until resolved.
+- Q: How should overlapping `research.md` and `questions.md` roles evolve? → A: Reduce duplication. `research.md` should keep unresolved repo-level questions only, resolved items should be folded into durable docs and cleaned up, and feature-local `questions.md` should remain only for scoped human input that is not yet durable repo policy.
+- Q: What should happen to durable lessons that originate in a feature review? → A: They should be lifted into maintained governance or code comments where appropriate, while preserving traceability back to the originating feature or decision history when that materially helps later review.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -170,6 +174,12 @@ named, ordered, and justified without relying on inline TODOs.
   needed to recover full context during review or debugging.
 - If numeric or abbreviated codes are used, maintainers must be able to resolve them quickly without
   guessing.
+- If a client review changes the approval or review state of a managed governance doc, that state
+  must be recorded in `.specify/doc-registry.json` and synced, not left as an unsynced Markdown-only
+  edit.
+- If a managed governance doc receives review comments that are not yet resolved into accepted
+  policy, those comments must move into `research.md`, a feature-local queue, or a follow-on feature
+  instead of remaining as inline TODO markers in the maintained doc.
 - Unresolved TODO-style markers are matched case-insensitively, but marker syntax shown only inside
   inline code or fenced examples is treated as documentation rather than live unresolved work.
 - `specs/000-repo-governance/` remains durable standing guidance, while `specs/NNN-feature-name/`
@@ -255,6 +265,19 @@ named, ordered, and justified without relying on inline TODOs.
 - **FR-026**: The repo MAY use wrappers, shorthands, structured codes, or shorter technical
   notations to achieve token economy, but the spec MUST evaluate them by clarity and recoverability
   rather than by brevity alone.
+- **FR-027**: Managed governance docs MUST record review and approval state changes through
+  `.specify/doc-registry.json` and deterministic metadata sync; manual Markdown edits to
+  `docmeta.review` do not count as durable review evidence.
+- **FR-028**: Maintained standing-governance docs MUST NOT retain unresolved inline TODO-style
+  review comments after review input is captured; unresolved repo-level review points MUST be moved
+  into `research.md`, a feature-local review queue, or a new scoped feature.
+- **FR-029**: The governance documentation model MUST minimize duplicated roles between
+  `research.md`, feature-local `questions.md`, and similar review artifacts by keeping unresolved
+  questions in one authoritative temporary location per scope and cleaning resolved items out once
+  durable docs are updated.
+- **FR-030**: When a feature or review produces durable governance lessons, the maintained docs,
+  code comments, or related evidence SHOULD preserve traceability to the originating feature or
+  decision source when that materially helps later audit or git-history lookup.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -316,6 +339,12 @@ named, ordered, and justified without relying on inline TODOs.
   full meaning in one documented step, without relying on chat memory.
 - **SC-013**: Token-economy improvements do not reduce docs-gate coverage or remove the information
   needed to distinguish approval, manual review, comment, answer, update, and closure states.
+- **SC-014**: Representative managed governance-doc review changes become visible through
+  `.specify/doc-registry.json` plus deterministic sync, with no remaining Markdown-only review-state
+  drift on touched managed docs.
+- **SC-015**: Representative unresolved review comments on standing governance docs are moved out of
+  inline TODO markers into the appropriate temporary review surface or folded into accepted policy
+  before the docs gate is treated as clean.
 
 ## Assumptions
 
@@ -341,6 +370,9 @@ named, ordered, and justified without relying on inline TODOs.
   deeper architecture work in later scoped features.
 - Optional metadata fields may be omitted when they do not apply, as long as the shared frontmatter
   shape remains recognizable and truthful.
+- Review comments can introduce new governance direction, but they do not become accepted policy
+  until they are captured in the proper durable surface and reflected through the documented review
+  workflow.
 
 ## Documentation Impact
 
@@ -356,6 +388,11 @@ named, ordered, and justified without relying on inline TODOs.
   safe metadata preview and scope controls.
 - Update managed docs, feature-local workflow docs, and any emitting templates or sync tooling so
   they all use the shared frontmatter metadata schema.
+- Update `.specify/doc-registry.json` and standing governance docs together whenever managed review
+  or approval state changes as a result of client review.
+- Update `specs/000-repo-governance/research.md` or the relevant feature-local review files when
+  review comments reveal unresolved policy work, instead of leaving those comments embedded as TODO
+  markers in maintained governance docs.
 - Update planning setup guidance and `.specify/scripts/bash/setup-plan.sh` so existing filled
   artifacts are not overwritten silently and explicit overwrite behavior is inspectable.
 - Update workflow docs, status/report contracts, and any related tooling surfaces so token-economy

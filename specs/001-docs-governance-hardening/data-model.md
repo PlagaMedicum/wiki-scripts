@@ -65,8 +65,27 @@ docmeta:
   - labels must come from `.specify/doc-registry.json`
   - queue semantics must be derived from documented label combinations instead of ad hoc string
     matching
+  - manual edits to managed-doc `docmeta.review` are not authoritative durable review evidence
+  - sync regenerates managed-doc frontmatter from the registry rather than treating Markdown as an
+    equal source of truth
   - this entity remains authoritative for durable `approval_needed` and `manual_review_needed`
     status even when feature-local queue files exist
+
+### Managed Review Change
+
+- **Purpose**: Represents a real human review or approval event on a managed governance doc and the
+  durable registry update that records it.
+- **Fields**:
+  - `target_doc`: managed Markdown path
+  - `review_input`: short description of the client or maintainer review event
+  - `labels_before`: previous additive label set from `.specify/doc-registry.json`
+  - `labels_after`: updated additive label set recorded in `.specify/doc-registry.json`
+  - `synced`: derived boolean indicating whether frontmatter has been regenerated from the registry
+- **Validation rules**:
+  - durable review or approval changes are complete only after the registry has been updated
+  - `labels_after` must remain compatible with the documented additive-label semantics
+  - `synced` must become true before the docs gate can treat the managed-doc review change as
+    reconciled
 
 ### Unified Doc Metadata
 
@@ -134,6 +153,23 @@ docmeta:
   - missing active feature context is not an error for managed-doc queue reporting
   - feature-local queue categories remain empty when no active feature is set
 
+### Temporary Review Surface
+
+- **Purpose**: Represents the authoritative temporary file that is allowed to hold unresolved human
+  input before it becomes durable governance or completed feature work.
+- **Fields**:
+  - `scope`: `repo-governance` or `feature-local`
+  - `authoritative_file`: canonical Markdown file for unresolved items in that scope
+  - `item_kind`: `research-question`, `question`, `review-queue-item`, or similar
+  - `subject_refs`: related docs, features, or queue identifiers
+  - `resolved`: derived boolean indicating whether the underlying issue has already been folded into
+    durable docs
+- **Validation rules**:
+  - repo-level unresolved governance points belong in `specs/000-repo-governance/research.md`
+  - feature-scoped human input belongs in that feature's `questions.md` or `review-queue.md`
+  - the same unresolved point should not remain active in several temporary surfaces at once
+  - resolved items should be removed or marked resolved once the durable docs are updated
+
 ### Feature Closure State
 
 - **Purpose**: Represents whether an active feature is merely implemented, still review-open, or
@@ -171,6 +207,23 @@ docmeta:
     `tools/doc_workflow.py`
   - feature-doc `Status` language must not imply review closure merely because `implemented_in_tree`
     is true
+
+### Durable Lesson Trace
+
+- **Purpose**: Represents the audit trail that links a durable governance rule or code comment back
+  to the feature, review, or decision that produced it.
+- **Fields**:
+  - `origin_type`: `feature`, `review`, `question`, or `decision`
+  - `origin_ref`: feature path, queue id, or other stable source reference
+  - `destination_ref`: maintained doc path, code comment location, or contract file
+  - `trace_mode`: `inline-note`, `linked-doc`, `review-queue-ref`, or `git-history-only`
+  - `material`: derived boolean indicating whether the trace is worth preserving in human-facing
+    docs
+- **Validation rules**:
+  - human-facing traceability should be kept when it materially helps later audit or git-history
+    lookup
+  - traceability must not reintroduce unresolved TODO comments into maintained governance docs
+  - `git-history-only` is acceptable only when extra visible traceability would not materially help
 
 ### Unresolved Marker Match
 

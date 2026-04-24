@@ -97,6 +97,8 @@ docmeta:
   clarification note instead of inventing policy.
 - If a direct human answer or approval is still needed, record it in `questions.md` or another
   feature-local file instead of relying only on chat context.
+- If the unresolved point is repo-level governance rather than feature-scoped work, record it in
+  `specs/000-repo-governance/research.md` instead of duplicating it in feature-local question docs.
 - Do not claim registry-managed review or approval state inside feature-local docs; use a local
   metadata header and keep `.specify/doc-registry.json` as the source of truth for managed docs.
 
@@ -133,6 +135,7 @@ docmeta:
 - [Dependency on existing system/service, e.g., "Requires access to the existing user profile API"]
 - [Open human question tracked in `questions.md`, if applicable]
 - [If review or comment is pending, track it in `review-queue.md` instead of inventing closure]
+- [If review-derived governance follow-up is unresolved, move it into `specs/000-repo-governance/research.md` rather than leaving it as inline TODO text in a maintained doc]
 
 ## Documentation Impact
 

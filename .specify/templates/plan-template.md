@@ -34,7 +34,9 @@ docmeta:
 If a direct human answer is still required, write it into `questions.md` or a feature-local review
 file and either resolve it during research or stop instead of inventing policy. Do not rewrite
 managed-doc review labels by hand; change `.specify/doc-registry.json` when durable review state
-changes.
+changes. If standing-governance review produces unresolved follow-up, move it into
+`specs/000-repo-governance/research.md` or another scoped review surface instead of leaving inline
+TODO review comments in maintained docs.
 
 ## Constitution Check
 
@@ -49,6 +51,8 @@ Include document impact in this check:
 - whether `specs/000-repo-governance/research.md` changes
 - whether the constitution or Spec Kit workflow files change
 - whether `.specify/doc-registry.json` changes
+- whether standing-governance review follow-up must move out of maintained docs and into an
+  authoritative temporary surface
 - whether `make docs` / `python3 tools/doc_workflow.py all` must be run
 - whether the feature needs `questions.md` or `review-queue.md` updates to capture pending human
   input explicitly

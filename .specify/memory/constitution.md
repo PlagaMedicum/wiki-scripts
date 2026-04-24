@@ -3,10 +3,35 @@ docmeta:
   status: maintained
   review:
   - client-input-derived
-  - approved
+  - reviewed
   purpose: Repo governance rules and non-negotiable workflow requirements.
   source: .specify/doc-registry.json
 ---
+
+<!--
+Sync Impact Report
+Version change: 1.3.0 -> 1.4.0
+Modified principles:
+- IV. Deterministic Documentation And Honest Status -> IV. Deterministic Documentation, Safe Writes, And Honest Status
+- Workflow And Quality Gates (expanded guidance only)
+Added sections:
+- None
+Removed sections:
+- None
+Templates requiring updates:
+- ✅ .specify/templates/plan-template.md
+- ✅ .specify/templates/spec-template.md
+- ✅ .specify/templates/tasks-template.md
+- ✅ README.md
+- ✅ specs/000-repo-governance/spec.md
+- ✅ specs/000-repo-governance/plan.md
+- ✅ specs/000-repo-governance/quickstart.md
+- ✅ .specify/extensions/docs/README.md
+- ✅ .specify/extensions/docs/commands/speckit.docs.md
+- ⚠ `.specify/templates/commands/*.md` is not present in this repo; repo-local command guidance was checked in `.specify/extensions/docs/commands/` instead
+Follow-up TODOs:
+- None
+-->
 
 # Wiki Scripts Constitution
 
@@ -32,13 +57,21 @@ Each tool MUST keep a clear mission. `biblio` is bibliography-first. `suppressor
 speed-sensitive, and safety-sensitive. Broadening a tool beyond its current mission requires an
 approved spec.
 
-### IV. Deterministic Documentation And Honest Status
+### IV. Deterministic Documentation, Safe Writes, And Honest Status
 
 Managed human docs MUST get their metadata from `.specify/doc-registry.json` through deterministic
 tooling. No doc may claim review or approval state unless that label is present in the registry.
-Accepted repo direction belongs in `specs/000-repo-governance/spec.md`. Unresolved repo-level
-questions belong in `specs/000-repo-governance/research.md`. Docs MUST distinguish current
-behavior from future direction.
+Managed-doc review or approval changes become durable only when the registry is updated and synced;
+Markdown-only metadata edits do not count as durable review evidence. Accepted repo direction
+belongs in `specs/000-repo-governance/spec.md`. Unresolved repo-level governance questions or
+standing-governance review follow-up belong in `specs/000-repo-governance/research.md`.
+<!-- todo: If research documents are fixing the current decisions, then it should be repo-wide practice, not only in the 001, but also in 000. So, also in the 000 we need to have questions doc then. I need all naming to be consistent. If some doc is named some way, it should have the same logic everywhere, so it will not confuse the reader. The answer to questions should be structured to other documents and be cleaned up from the questions document.  -->
+Feature-scoped unresolved human input belongs in feature-local `questions.md` or `review-queue.md`.
+Maintained standing-governance docs MUST NOT retain inline TODO-style review comments once that
+feedback has been captured in an authoritative temporary surface. Broad docs-maintenance rewrites
+MUST offer an inspectable or narrowed execution path before mutation, and feature-generation steps
+MUST NOT overwrite filled artifacts unless an explicit overwrite action is requested. Docs MUST
+distinguish current behavior from future direction.
 
 ### V. Spec Kit First For Non-Trivial Work
 
@@ -67,12 +100,21 @@ then `tasks.md`, then implementation, then the explicit docs gate.
 - Managed docs MUST be covered by `.specify/doc-registry.json`.
 - Managed-doc frontmatter is machine-controlled. If review state or purpose changes, update the
   registry instead of hand-editing the Markdown metadata.
+- Docs-maintenance runs and feature-generation runs are separate write surfaces. Use preview/scope
+  controls for broad metadata sync, and require an explicit overwrite action before replacing a
+  filled artifact such as `plan.md`.
+- When standing-governance review produces unresolved follow-up, move it into
+  `specs/000-repo-governance/research.md` or a new scoped feature instead of leaving inline TODO
+  markers in maintained governance docs.
 - Repo policy changes MUST update `README.md`, this constitution, and the standing governance spec
   where relevant.
 - When vision, acceptance criteria, or review requirements are unclear enough to risk wrong work,
   the human owner MUST be asked directly instead of letting the docs drift on assumption.
 - Generated text is proposal text until human-reviewed. Stable decisions MUST be fixed in code,
   tests, governance docs, or explicit comments that preserve lessons learned.
+- When durable lessons are lifted from a feature or review, maintainers SHOULD preserve a light
+  trace to the originating feature or decision when that materially helps later audit or git
+  history lookup.
 - Production-readiness claims MUST be backed by strong automated coverage plus manual verification.
 - Tooling, logging, and metrics MUST avoid secrets and sensitive payloads.
 - Operator surfaces, CLIs, and Makefiles SHOULD stay small, well-described, and layered. Prefer a
@@ -100,4 +142,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.3.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-19
+**Version**: 1.4.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-20

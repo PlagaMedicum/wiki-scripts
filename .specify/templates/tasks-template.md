@@ -151,7 +151,8 @@ Examples of foundational tasks (adjust based on your project):
 **Purpose**: Improvements that affect multiple user stories
 
 - [ ] TXXX [P] Documentation updates in README.md, `specs/000-repo-governance/`, and affected project-local docs
-- [ ] TXXX Update `.specify/doc-registry.json` if a managed doc was added, renamed, or reclassified
+- [ ] TXXX Reconcile `.specify/doc-registry.json` if a managed doc was added, renamed, reclassified, or had durable review state changed
+- [ ] TXXX Move unresolved standing-governance review follow-up into `specs/000-repo-governance/research.md` instead of leaving inline TODO markers in maintained docs
 - [ ] TXXX Run `make docs` or `python3 tools/doc_workflow.py all`
 - [ ] TXXX Update `specs/000-repo-governance/spec.md` or `research.md` if the change affects repo policy
 - [ ] TXXX Code cleanup and refactoring

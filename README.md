@@ -31,9 +31,13 @@ and deterministic checks so important assumptions do not stay buried in generate
 
 ## Working Style
 
+<!-- this section looks like instructions for llm, not human oriented. Keep this file-human-only. Remove this section, keep only valuable info. I ask you really seriously. -->
+
 - treat this repo as a multi-project workspace, not one shared application
 - start non-trivial changes in `specs/NNN-feature-name/` and keep the active feature pointer honest
 - use file-backed review state (`questions.md`, `review-queue.md`, registry-backed frontmatter) instead of relying on chat memory
+- record managed-doc review changes through `.specify/doc-registry.json` plus sync, not by hand-editing managed frontmatter
+- move unresolved repo-level governance follow-up into `specs/000-repo-governance/research.md` instead of inline TODO comments in maintained governance docs
 - keep durable policy in `.specify/memory/constitution.md` and `specs/000-repo-governance/`
 - expect LLM output to need verification; reviewed docs, tests, and the explicit docs gate are the control surface
 

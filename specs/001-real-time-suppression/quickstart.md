@@ -18,21 +18,19 @@ Prove that a running daemon hides new eligible watched-page edits automatically,
 Run from the repository root unless noted.
 
 ```bash
-cd suppressor
-cargo test -- --test-threads=1
+rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1
 ```
 
 If the known parallel test instability is resolved during implementation, also run:
 
 ```bash
-cd suppressor
-cargo test
+rtk cargo test --manifest-path suppressor/Cargo.toml
 ```
 
 Run the repo docs gate before close-out:
 
 ```bash
-python3 tools/doc_workflow.py all
+rtk python3 tools/doc_workflow.py all
 ```
 
 ## Controlled Functional Checks

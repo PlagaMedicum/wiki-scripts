@@ -45,6 +45,10 @@ docmeta:
   type-specific frontmatter keys while still making provenance explicit.
 - The updated scope also keeps token economy as a first-class workflow goal, with shorthand or
   compact surfaces required to remain documented, recoverable, and quality-preserving.
+- The updated spec now also encodes review-derived governance rules: managed review state must stay
+  registry-backed, unresolved review comments must not remain as inline TODO markers in maintained
+  governance docs, and overlapping temporary question surfaces should be rationalized rather than
+  duplicated indefinitely.
 - This checklist validates specification quality only. Use
   [governance.md](./governance.md) and [alignment.md](./alignment.md) for current closure and
   cross-artifact gaps.

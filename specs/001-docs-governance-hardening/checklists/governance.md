@@ -88,3 +88,10 @@ docmeta:
 ## Traceability Residuals
 
 - [X] CHK037 Do roadmap requirements such as `FR-003` and `FR-013` still have explicit traceability in `tasks.md`, rather than relying only on implication from `plan.md`, `spec.md`, or repo history? [Coverage, Traceability, Spec §FR-003, Spec §FR-013, Tasks §Phase 1-3]
+
+## Review-Derived Governance Rules
+
+- [X] CHK038 Are the requirements explicit that managed-governance review and approval changes become durable only through `.specify/doc-registry.json` plus sync, rather than through hand-edited Markdown review labels? [Clarity, Spec §FR-027]
+- [X] CHK039 Do the requirements state clearly that unresolved review comments must leave maintained standing-governance docs and move into an authoritative temporary surface instead of remaining as inline TODO markers? [Completeness, Spec §FR-028]
+- [X] CHK040 Is the temporary-surface split defined clearly enough that repo-level unresolved governance points live in `research.md` while feature-scoped human input stays in `questions.md` or `review-queue.md`? [Consistency, Spec §FR-029]
+- [X] CHK041 Are the traceability expectations for durable lessons specific enough to preserve later audit value without requiring every maintained doc to carry excessive historical commentary? [Acceptance Criteria, Spec §FR-030]

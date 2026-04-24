@@ -1,7 +1,7 @@
 ---
 docmeta:
   status: maintained
-  review: client-input-derived
+  review: client-input-derived,reviewed and commented
   purpose: Practical Spec Kit workflow for this repo, including the explicit docs gate.
   source: .specify/doc-registry.json
 ---
@@ -25,6 +25,9 @@ specify check
 2. Create or update a feature directory under `specs/NNN-feature-name/`.
 3. Write `spec.md`, then `plan.md`, then `tasks.md`. If direct human answers or comments are still
    needed, keep them in feature-local files such as `questions.md` or `review-queue.md`.
+   <!-- todo: to not duplicate document logic and use only the research docs.  -->
+   If the unresolved point is repo-level governance rather than feature-scoped work, move it into
+   `specs/000-repo-governance/research.md`.
 4. Implement the change.
 5. Check the current docs queue when you need to see pending approval, manual review, answer, or
    update work:
@@ -67,8 +70,12 @@ python3 tools/doc_workflow.py all
   only in chat history.
 - Do not hand-edit managed review labels in Markdown frontmatter. Change
   `.specify/doc-registry.json` and run the docs gate instead.
+- Do not leave unresolved inline TODO-style review comments inside maintained governance docs once
+  that follow-up has been captured in `research.md` or a scoped feature surface.
 - Feature-local workflow docs are not registry-managed; keep their local metadata/status schema
   consistent instead of inventing a second header system for them.
+- When durable lessons from a feature or review are folded into maintained docs, keep a light trace
+  to the originating feature or decision when it will materially help later audit or git history.
 
 ## Repo-Local Refresh
 

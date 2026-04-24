@@ -1,7 +1,7 @@
 ---
 docmeta:
   status: maintained
-  review: client-input-derived
+  review: client-input-derived, approved
   purpose: Current documentation structure contract for the repo.
   source: .specify/doc-registry.json
 ---
@@ -50,12 +50,16 @@ Feature specs are not part of the managed human-doc registry.
 
 - Managed docs are listed in `.specify/doc-registry.json`.
 - `tools/doc_workflow.py sync` rewrites their metadata blocks deterministically.
+- Managed review or approval changes become durable only when `.specify/doc-registry.json` is
+  updated and synced back into the docs.
 - `tools/doc_workflow.py lint` fails if registry state and Markdown drift apart.
 - `tools/doc_workflow.py status` reports additive review backlog semantics from the registry,
   feature-local answer/comment queues, update backlog, stale feature specs, and registry/link
   problems.
 - Feature-local workflow docs use local metadata headers and queue schemas; they are not part of
   the managed-doc registry.
+- Unresolved standing-governance review follow-up belongs in `research.md` or a scoped feature
+  surface, not as inline TODO markers inside maintained governance docs.
 
 ## Explicit Final Gate
 

@@ -54,6 +54,8 @@ pub async fn run_daemon(config_path: PathBuf, dry_run: bool, verbose: bool) -> R
     runtime
         .update_runtime_status(|status| {
             status.daemon_state = "stopping".to_string();
+            status.realtime.state = "stopped".to_string();
+            status.realtime.last_state_changed_at = Some(Utc::now());
             status.last_notice = Some("daemon stopping".to_string());
             status.last_notice_at = Some(Utc::now());
         })
@@ -65,6 +67,8 @@ pub async fn run_daemon(config_path: PathBuf, dry_run: bool, verbose: bool) -> R
     runtime
         .update_runtime_status(|status| {
             status.daemon_state = "stopped".to_string();
+            status.realtime.state = "stopped".to_string();
+            status.realtime.last_state_changed_at = Some(Utc::now());
             status.reconciliation.active = false;
             status.reconciliation.current_title = None;
             status.last_notice = Some("daemon stopped".to_string());

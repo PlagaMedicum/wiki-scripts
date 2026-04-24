@@ -21,7 +21,7 @@ exact_title_match = true
 [revdel]
 hide = ["user", "comment"]
 suppress = false
-reason = "Emergency public RevDel on sensitive-list page; hide username and comment pending oversight resolution"
+reason = "Мяккае схаванне публічных правак са спісу [[Вікіпедыя:Запыты да схавальнікаў]] і старонак-перасылак; хаваецца імя карыстальніка і каментарый."
 
 [queue]
 capacity = 100
@@ -39,6 +39,16 @@ stream_backoff_initial_ms = 1000
 stream_backoff_max_ms = 30000
 api_max_retries = 3
 since_recovery_seconds = 60
+
+[realtime]
+stale_threshold_seconds = 10
+stream_read_timeout_seconds = 10
+freshness_probe_seconds = 30
+
+[catchup]
+default_window_seconds = 1800
+max_window_seconds = 7200
+max_revisions_per_run = 5000
 
 [nightly_sweep]
 enabled = true

@@ -9,6 +9,8 @@ fn loads_tracked_config() {
     let config = AppConfig::load(std::path::Path::new("config.toml")).unwrap();
     assert_eq!(config.wiki.wiki_code, "bewiki");
     assert_eq!(config.queue.capacity, 100);
+    assert_eq!(config.realtime.stale_threshold_seconds, 10);
+    assert_eq!(config.catchup.default_window_seconds, 1800);
 }
 
 #[test]

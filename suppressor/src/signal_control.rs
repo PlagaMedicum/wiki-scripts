@@ -28,7 +28,7 @@ pub fn spawn_signal_control_loop(runtime: Arc<AppRuntime>) {
             tokio::select! {
                 _ = reload_signal.recv() => {
                     info!("received manual cache reload signal");
-                    runtime.reconcile.record_notice("received manual cache reload signal").await;
+                    runtime.reconcile.record_notice("received manual cache reload signal; realtime stream is unchanged").await;
                     if let Err(error) = refresh_cache(
                         &runtime.cache,
                         &runtime.client,
@@ -43,14 +43,14 @@ pub fn spawn_signal_control_loop(runtime: Arc<AppRuntime>) {
                             .await;
                         warn!("manual cache reload failed: {error:#}");
                     } else {
-                        runtime.reconcile.record_notice("manual cache reload completed").await;
+                        runtime.reconcile.record_notice("manual cache reload completed; realtime health is reported separately").await;
                     }
                 }
                 _ = sweep_signal.recv() => {
                     info!("received manual reconciliation signal");
                     runtime
                         .reconcile
-                        .record_notice("received manual nightly reconciliation signal")
+                        .record_notice("received manual nightly reconciliation signal; this is a fallback, not realtime recovery")
                         .await;
                     runtime.reconcile.request_run(ReconcileMode::Full).await;
                 }

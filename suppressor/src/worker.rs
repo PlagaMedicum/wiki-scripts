@@ -11,8 +11,12 @@ use crate::runtime::{AppRuntime, RevDelAction};
 use crate::state::{ProcessedRevidsState, save_json_atomic};
 
 pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelAction>) {
-    while let Some(action) = rx.recv().await {
+    while let Some(mut action) = rx.recv().await {
         let start = std::time::Instant::now();
+        if let Some(observed_at) = action.observed_at {
+            let elapsed_ms = (chrono::Utc::now() - observed_at).num_milliseconds().max(0) as f64;
+            histogram!("event_observed_to_api_submit_latency_ms").record(elapsed_ms);
+        }
         histogram!("event_to_api_submit_latency_ms")
             .record(action.enqueued_at.elapsed().as_millis() as f64);
         runtime
@@ -85,6 +89,11 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
             Ok(()) => {
                 counter!("revdel_success_total").increment(action.revids.len() as u64);
                 histogram!("immediate_hide_latency_ms").record(start.elapsed().as_millis() as f64);
+                if let Some(observed_at) = action.observed_at {
+                    let elapsed_ms =
+                        (chrono::Utc::now() - observed_at).num_milliseconds().max(0) as f64;
+                    histogram!("event_observed_to_hide_latency_ms").record(elapsed_ms);
+                }
                 info!(
                     title = %action.title,
                     revids = ?action.revids,
@@ -102,9 +111,16 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
                     )
                     .ok();
                 }
+                runtime
+                    .record_action_completed(&action, "hidden", None, 1)
+                    .await;
+                if let Some(completion_tx) = action.completion_tx.take() {
+                    let _ = completion_tx.send(Ok(()));
+                }
             }
             Err(error) => {
                 counter!("revdel_failure_total").increment(action.revids.len() as u64);
+                let fatal = is_fatal_auth_or_permission_error(&error);
                 error!(
                     title = %action.title,
                     revids = ?action.revids,
@@ -114,9 +130,32 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
                     error = %error,
                     "revisiondelete failed"
                 );
-                if is_fatal_auth_or_permission_error(&error) {
+                if fatal {
+                    runtime
+                        .record_action_completed(
+                            &action,
+                            "blocked",
+                            Some("auth-or-permission".to_string()),
+                            1,
+                        )
+                        .await;
+                    if let Some(completion_tx) = action.completion_tx.take() {
+                        let _ = completion_tx.send(Err(error.to_string()));
+                    }
                     error!("fatal auth/permission failure during revisiondelete; exiting");
                     std::process::exit(1);
+                } else {
+                    runtime
+                        .record_action_completed(
+                            &action,
+                            "failed",
+                            Some("api-error".to_string()),
+                            1,
+                        )
+                        .await;
+                    if let Some(completion_tx) = action.completion_tx.take() {
+                        let _ = completion_tx.send(Err(error.to_string()));
+                    }
                 }
             }
         }

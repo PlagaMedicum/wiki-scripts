@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub queue: QueueConfig,
     pub state: StateConfig,
     pub retry: RetryConfig,
+    pub realtime: RealtimeConfig,
+    pub catchup: CatchupConfig,
     pub nightly_sweep: NightlySweepConfig,
     pub current_day_recheck: CurrentDayRecheckConfig,
     pub logging: LoggingConfig,
@@ -78,6 +80,20 @@ pub struct RetryConfig {
     pub stream_backoff_max_ms: u64,
     pub api_max_retries: u32,
     pub since_recovery_seconds: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RealtimeConfig {
+    pub stale_threshold_seconds: u64,
+    pub stream_read_timeout_seconds: u64,
+    pub freshness_probe_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CatchupConfig {
+    pub default_window_seconds: i64,
+    pub max_window_seconds: i64,
+    pub max_revisions_per_run: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -153,6 +169,21 @@ impl AppConfig {
             > config.current_day_recheck.max_delay_seconds
         {
             bail!("current_day_recheck min_delay_seconds must be <= max_delay_seconds");
+        }
+        if config.realtime.stale_threshold_seconds == 0 {
+            bail!("realtime.stale_threshold_seconds must be greater than zero");
+        }
+        if config.realtime.stream_read_timeout_seconds == 0 {
+            bail!("realtime.stream_read_timeout_seconds must be greater than zero");
+        }
+        if config.catchup.default_window_seconds <= 0 {
+            bail!("catchup.default_window_seconds must be greater than zero");
+        }
+        if config.catchup.max_window_seconds < config.catchup.default_window_seconds {
+            bail!("catchup.max_window_seconds must be >= catchup.default_window_seconds");
+        }
+        if config.catchup.max_revisions_per_run == 0 {
+            bail!("catchup.max_revisions_per_run must be greater than zero");
         }
         Ok(config)
     }

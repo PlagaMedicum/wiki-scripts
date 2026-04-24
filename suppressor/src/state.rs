@@ -27,7 +27,108 @@ pub struct RuntimeStatus {
     pub dry_run: bool,
     pub last_notice: Option<String>,
     pub last_notice_at: Option<DateTime<Utc>>,
+    pub realtime: RealtimeRuntimeStatus,
     pub reconciliation: ReconciliationRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RealtimeRuntimeStatus {
+    pub state: String,
+    pub last_state_changed_at: Option<DateTime<Utc>>,
+    pub stale_threshold_seconds: u64,
+    pub stream_read_timeout_seconds: u64,
+    pub last_stream_opened_at: Option<DateTime<Utc>>,
+    pub last_event_observed_at: Option<DateTime<Utc>>,
+    pub last_matching_edit_at: Option<DateTime<Utc>>,
+    pub last_matching_title: Option<String>,
+    pub last_matching_revid: Option<u64>,
+    pub last_action_queued_at: Option<DateTime<Utc>>,
+    pub last_action_completed_at: Option<DateTime<Utc>>,
+    pub last_successful_hide_at: Option<DateTime<Utc>>,
+    pub last_event_id: Option<String>,
+    pub current_lag_seconds: Option<i64>,
+    pub queue_depth: usize,
+    pub last_recovery_trigger: Option<String>,
+    pub last_recovery_started_at: Option<DateTime<Utc>>,
+    pub last_recovery_completed_at: Option<DateTime<Utc>>,
+    pub last_reconnect_reason: Option<String>,
+    pub catchup_active: bool,
+    pub latest_error_code: Option<String>,
+    pub latest_notice: Option<String>,
+    pub latest_outcome: Option<SuppressionOutcomeSnapshot>,
+    pub latest_recovery_summary: Option<CoverageSummary>,
+}
+
+impl Default for RealtimeRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            state: "unknown".to_string(),
+            last_state_changed_at: None,
+            stale_threshold_seconds: 10,
+            stream_read_timeout_seconds: 10,
+            last_stream_opened_at: None,
+            last_event_observed_at: None,
+            last_matching_edit_at: None,
+            last_matching_title: None,
+            last_matching_revid: None,
+            last_action_queued_at: None,
+            last_action_completed_at: None,
+            last_successful_hide_at: None,
+            last_event_id: None,
+            current_lag_seconds: None,
+            queue_depth: 0,
+            last_recovery_trigger: None,
+            last_recovery_started_at: None,
+            last_recovery_completed_at: None,
+            last_reconnect_reason: None,
+            catchup_active: false,
+            latest_error_code: None,
+            latest_notice: None,
+            latest_outcome: None,
+            latest_recovery_summary: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SuppressionOutcomeSnapshot {
+    pub title: String,
+    pub revid: u64,
+    pub outcome: String,
+    pub reason_code: Option<String>,
+    pub mode: String,
+    pub observed_at: Option<DateTime<Utc>>,
+    pub queued_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub attempt_count: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CoverageSummary {
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub requested_by: String,
+    pub pages_checked: usize,
+    pub edits_checked: usize,
+    pub hidden_count: usize,
+    pub already_hidden_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+    pub unresolved_count: usize,
+    pub unresolved_items: Vec<UnresolvedExposureItem>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct UnresolvedExposureItem {
+    pub title: String,
+    pub revid: u64,
+    pub age_seconds: Option<i64>,
+    pub reason: String,
+    pub next_action: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -180,5 +281,41 @@ mod tests {
         assert_eq!(loaded.reconciliation.phase_total, 0);
         assert_eq!(loaded.reconciliation.phase_completed, 0);
         assert_eq!(loaded.reconciliation.phase, None);
+        assert_eq!(loaded.realtime.state, "unknown");
+        assert_eq!(loaded.realtime.stale_threshold_seconds, 10);
+    }
+
+    #[test]
+    fn runtime_status_round_trips_realtime_fields() {
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            dry_run: false,
+            last_notice: Some("ok".to_string()),
+            last_notice_at: Some(Utc::now()),
+            realtime: RealtimeRuntimeStatus {
+                state: "healthy".to_string(),
+                queue_depth: 3,
+                latest_notice: Some("hidden revid 42".to_string()),
+                latest_outcome: Some(SuppressionOutcomeSnapshot {
+                    title: "Title".to_string(),
+                    revid: 42,
+                    outcome: "hidden".to_string(),
+                    mode: "live".to_string(),
+                    ..SuppressionOutcomeSnapshot::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            reconciliation: ReconciliationRuntimeStatus::default(),
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(loaded.realtime.state, "healthy");
+        assert_eq!(loaded.realtime.queue_depth, 3);
+        assert_eq!(
+            loaded.realtime.latest_outcome.unwrap().outcome.as_str(),
+            "hidden"
+        );
     }
 }

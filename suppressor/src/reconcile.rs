@@ -143,7 +143,7 @@ pub async fn reconciliation_loop(ctx: Arc<ReconcilePassContext>) -> Result<()> {
     })
     .await;
 
-    futures_util::stream::iter(listed_titles.into_iter())
+    futures_util::stream::iter(listed_titles)
         .for_each_concurrent(ctx.page_concurrency, |title| {
             let ctx = Arc::clone(&ctx);
             let shared_progress = Arc::clone(&shared_progress);

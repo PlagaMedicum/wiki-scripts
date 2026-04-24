@@ -193,6 +193,40 @@ async fn retries_revisiondelete_after_badtoken_once() {
     assert_eq!(csrf, "NEW_TOKEN");
 }
 
+#[tokio::test]
+async fn revisiondelete_hides_only_public_user_and_comment_fields() {
+    let server = MockServer::start().await;
+    let env = EnvConfig {
+        api_url: format!("{}/w/api.php", server.uri()),
+        stream_url: "https://stream.wikimedia.org/v2/stream/recentchange".to_string(),
+        bot_username: "Bot@password".to_string(),
+        bot_password: "secret".to_string(),
+        user_agent: "test-agent".to_string(),
+        env_file: std::path::PathBuf::from(".env"),
+    };
+    let client = MediaWikiClient::new(&env).unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/w/api.php"))
+        .and(body_string_contains("action=revisiondelete"))
+        .and(body_string_contains("type=revision"))
+        .and(body_string_contains("ids=123"))
+        .and(body_string_contains("hide=user%7Ccomment"))
+        .and(body_string_contains("suppress=no"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"revisiondelete":{"status":"Success"}}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    client
+        .revision_delete(&[123], "reason", "CSRF_TOKEN")
+        .await
+        .unwrap();
+}
+
 #[test]
 fn classifies_fatal_permission_errors() {
     let error = anyhow::anyhow!("Permission failure during revisiondelete: denied");

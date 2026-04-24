@@ -1,6 +1,7 @@
 pub mod app;
 pub mod auth;
 pub mod cache;
+pub mod catchup;
 pub mod cli;
 mod commands;
 pub mod config;

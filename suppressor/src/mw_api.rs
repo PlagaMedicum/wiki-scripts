@@ -240,6 +240,19 @@ impl MediaWikiClient {
         Ok(result)
     }
 
+    pub async fn fetch_revisions_in_window(
+        &self,
+        title: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<RevisionRecord>> {
+        let revisions = self.fetch_revisions(title, Some(start)).await?;
+        Ok(revisions
+            .into_iter()
+            .filter(|revision| revision.timestamp >= start && revision.timestamp <= end)
+            .collect())
+    }
+
     pub async fn resolve_redirect_target(&self, title: &str) -> Result<Option<String>> {
         let value = self
             .get_json(&[("action", "query"), ("titles", title), ("redirects", "1")])

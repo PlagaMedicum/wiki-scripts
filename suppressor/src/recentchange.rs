@@ -92,12 +92,17 @@ impl RecentChangeEvent {
 mod tests {
     use super::*;
 
+    fn watched_edit_event_json(title: &str, revid: u64) -> String {
+        format!(
+            r#"{{"meta":{{"domain":"be.wikipedia.org","id":"abc"}},"wiki":"bewiki","server_name":"be.wikipedia.org","type":"edit","title":"{}","user":"Alice","comment":"Test","revision":{{"old":1,"new":{}}}}}"#,
+            title, revid
+        )
+    }
+
     #[test]
     fn accepts_edit_event_with_revision_new() {
-        let event = RecentChangeEvent::parse(
-            r#"{"meta":{"domain":"be.wikipedia.org","id":"abc"},"wiki":"bewiki","server_name":"be.wikipedia.org","type":"edit","title":"Foo_bar","user":"Alice","comment":"Test","revision":{"old":1,"new":2}}"#,
-        )
-        .unwrap();
+        let raw = watched_edit_event_json("Foo_bar", 2);
+        let event = RecentChangeEvent::parse(&raw).unwrap();
         let candidate = event.to_candidate(Some("stream-1")).unwrap();
         assert_eq!(candidate.revid, 2);
         assert_eq!(candidate.normalized_title, "Foo bar");

@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use metrics::gauge;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::auth::{AuthState, authenticate};
@@ -19,14 +19,29 @@ use crate::reconcile::{
     ReconcileCoordinator, ReconcileMode, reconciliation_loop, revisiondelete_batch_limit,
 };
 use crate::state::{
-    NightlySweepProgress, ProcessedRevidsState, RuntimeStatus, load_json, save_json_atomic,
+    CoverageSummary, NightlySweepProgress, ProcessedRevidsState, RuntimeStatus,
+    SuppressionOutcomeSnapshot, load_json, save_json_atomic,
 };
 
 #[derive(Clone, Copy, Debug)]
 pub enum RevDelMode {
     Live,
+    Catchup,
+    Coverage,
     Reconciliation,
     Manual,
+}
+
+impl RevDelMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            RevDelMode::Live => "live",
+            RevDelMode::Catchup => "catchup",
+            RevDelMode::Coverage => "coverage",
+            RevDelMode::Reconciliation => "reconciliation",
+            RevDelMode::Manual => "manual",
+        }
+    }
 }
 
 pub struct RevDelAction {
@@ -37,7 +52,23 @@ pub struct RevDelAction {
     pub comment: Option<String>,
     pub mode: RevDelMode,
     pub enqueued_at: Instant,
+    pub observed_at: Option<DateTime<Utc>>,
+    pub queued_at: DateTime<Utc>,
+    pub recovery_trigger: Option<String>,
+    pub completion_tx: Option<oneshot::Sender<Result<(), String>>>,
     pub _revision_guards: Vec<KeyLockGuard<u64>>,
+}
+
+pub struct RevDelDispatch {
+    pub title: String,
+    pub revids: Vec<u64>,
+    pub event_id: Option<String>,
+    pub user: Option<String>,
+    pub comment: Option<String>,
+    pub mode: RevDelMode,
+    pub observed_at: Option<DateTime<Utc>>,
+    pub recovery_trigger: Option<String>,
+    pub completion_tx: Option<oneshot::Sender<Result<(), String>>>,
 }
 
 pub struct ActionDispatcher {
@@ -45,6 +76,8 @@ pub struct ActionDispatcher {
     processed: Arc<RwLock<ProcessedRevidsState>>,
     queue_depth: Arc<AtomicUsize>,
     work_tx: mpsc::Sender<RevDelAction>,
+    runtime_status: Arc<tokio::sync::Mutex<RuntimeStatus>>,
+    runtime_status_file: PathBuf,
 }
 
 impl ActionDispatcher {
@@ -53,12 +86,16 @@ impl ActionDispatcher {
         processed: Arc<RwLock<ProcessedRevidsState>>,
         queue_depth: Arc<AtomicUsize>,
         work_tx: mpsc::Sender<RevDelAction>,
+        runtime_status: Arc<tokio::sync::Mutex<RuntimeStatus>>,
+        runtime_status_file: PathBuf,
     ) -> Self {
         Self {
             revision_locks,
             processed,
             queue_depth,
             work_tx,
+            runtime_status,
+            runtime_status_file,
         }
     }
 
@@ -75,6 +112,32 @@ impl ActionDispatcher {
         comment: Option<String>,
         mode: RevDelMode,
     ) -> Result<()> {
+        self.dispatch_action(RevDelDispatch {
+            title,
+            revids,
+            event_id,
+            user,
+            comment,
+            mode,
+            observed_at: None,
+            recovery_trigger: None,
+            completion_tx: None,
+        })
+        .await
+    }
+
+    pub async fn dispatch_action(&self, dispatch: RevDelDispatch) -> Result<()> {
+        let RevDelDispatch {
+            title,
+            revids,
+            event_id,
+            user,
+            comment,
+            mode,
+            observed_at,
+            recovery_trigger,
+            mut completion_tx,
+        } = dispatch;
         let mut guards = Vec::new();
         for revid in &revids {
             let Some(guard) = self.revision_locks.try_lock(*revid) else {
@@ -83,6 +146,21 @@ impl ActionDispatcher {
                     title = %title,
                     "skipping action because revision lock is already held"
                 );
+                self.record_latest_outcome(SuppressionOutcomeSnapshot {
+                    title: title.clone(),
+                    revid: *revid,
+                    outcome: "skipped".to_string(),
+                    reason_code: Some("duplicate-queued".to_string()),
+                    mode: mode.label().to_string(),
+                    observed_at,
+                    queued_at: None,
+                    completed_at: None,
+                    attempt_count: 0,
+                })
+                .await;
+                if let Some(completion_tx) = completion_tx.take() {
+                    let _ = completion_tx.send(Ok(()));
+                }
                 return Ok(());
             };
             if self.processed.read().await.contains(*revid) {
@@ -91,20 +169,51 @@ impl ActionDispatcher {
                     title = %title,
                     "skipping action because revision is already processed"
                 );
+                self.record_latest_outcome(SuppressionOutcomeSnapshot {
+                    title: title.clone(),
+                    revid: *revid,
+                    outcome: "already-hidden".to_string(),
+                    reason_code: Some("already-processed".to_string()),
+                    mode: mode.label().to_string(),
+                    observed_at,
+                    queued_at: None,
+                    completed_at: None,
+                    attempt_count: 0,
+                })
+                .await;
+                if let Some(completion_tx) = completion_tx.take() {
+                    let _ = completion_tx.send(Ok(()));
+                }
                 return Ok(());
             }
             guards.push(guard);
         }
         self.queue_depth.fetch_add(1, Ordering::SeqCst);
-        gauge!("queue_depth").set(self.queue_depth.load(Ordering::SeqCst) as f64);
+        let depth = self.queue_depth.load(Ordering::SeqCst);
+        gauge!("queue_depth").set(depth as f64);
+        let queued_at = Utc::now();
         tracing::debug!(
             title = %title,
             revids = ?revids,
             event_id = ?event_id,
             mode = ?mode,
-            queue_depth = self.queue_depth.load(Ordering::SeqCst),
+            queue_depth = depth,
             "queueing revisiondelete action"
         );
+        if let Some(revid) = revids.first().copied() {
+            self.record_latest_outcome(SuppressionOutcomeSnapshot {
+                title: title.clone(),
+                revid,
+                outcome: "queued".to_string(),
+                reason_code: recovery_trigger.clone(),
+                mode: mode.label().to_string(),
+                observed_at,
+                queued_at: Some(queued_at),
+                completed_at: None,
+                attempt_count: 0,
+            })
+            .await;
+        }
         self.work_tx
             .send(RevDelAction {
                 title,
@@ -114,10 +223,32 @@ impl ActionDispatcher {
                 comment,
                 mode,
                 enqueued_at: Instant::now(),
+                observed_at,
+                queued_at,
+                recovery_trigger,
+                completion_tx,
                 _revision_guards: guards,
             })
             .await
             .context("Failed to queue revisiondelete action")
+    }
+
+    async fn record_latest_outcome(&self, outcome: SuppressionOutcomeSnapshot) {
+        let queue_depth = self.queue_depth.load(Ordering::SeqCst);
+        let mut status = self.runtime_status.lock().await;
+        status.realtime.queue_depth = queue_depth;
+        status.realtime.last_action_queued_at =
+            outcome.queued_at.or(status.realtime.last_action_queued_at);
+        status.realtime.latest_notice =
+            Some(format!("{} revid {}", outcome.outcome, outcome.revid));
+        status.realtime.latest_outcome = Some(outcome);
+        if let Err(error) = save_json_atomic(&self.runtime_status_file, &*status) {
+            warn!(
+                path = %self.runtime_status_file.display(),
+                error = %error,
+                "failed to persist runtime status"
+            );
+        }
     }
 }
 
@@ -401,6 +532,8 @@ impl AppRuntime {
             Arc::clone(&processed),
             Arc::clone(&queue_depth),
             work_tx.clone(),
+            Arc::clone(&runtime_status),
+            paths.runtime_status_file.clone(),
         ));
         let reconcile = Arc::new(ReconciliationRuntime::new(ReconciliationRuntimeInit {
             config: config.clone(),
@@ -440,6 +573,14 @@ impl AppRuntime {
                 status.dry_run = dry_run;
                 status.last_notice = Some("bootstrap completed".to_string());
                 status.last_notice_at = Some(Utc::now());
+                status.realtime.state = "starting".to_string();
+                status.realtime.last_state_changed_at = Some(Utc::now());
+                status.realtime.stale_threshold_seconds =
+                    runtime.config.realtime.stale_threshold_seconds;
+                status.realtime.stream_read_timeout_seconds =
+                    runtime.config.realtime.stream_read_timeout_seconds;
+                status.realtime.queue_depth = 0;
+                status.realtime.latest_notice = Some("bootstrap completed".to_string());
             })
             .await;
         let cache_snapshot = runtime.cache.read().await.snapshot.clone();
@@ -469,6 +610,146 @@ impl AppRuntime {
         self.reconcile.record_notice(notice).await;
     }
 
+    pub async fn mark_realtime_stream_open(&self) {
+        self.update_runtime_status(|status| {
+            let now = Utc::now();
+            status.realtime.state = "healthy".to_string();
+            status.realtime.last_state_changed_at = Some(now);
+            status.realtime.last_stream_opened_at = Some(now);
+            status.realtime.stale_threshold_seconds = self.config.realtime.stale_threshold_seconds;
+            status.realtime.stream_read_timeout_seconds =
+                self.config.realtime.stream_read_timeout_seconds;
+            status.realtime.latest_error_code = None;
+            status.realtime.latest_notice = Some("real-time stream opened".to_string());
+            status.last_notice = Some("real-time stream opened".to_string());
+            status.last_notice_at = Some(now);
+        })
+        .await;
+    }
+
+    pub async fn mark_realtime_event(&self, event_id: Option<String>) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            status.realtime.last_event_observed_at = Some(now);
+            status.realtime.current_lag_seconds = Some(0);
+            if let Some(event_id) = event_id {
+                status.realtime.last_event_id = Some(event_id);
+            }
+            if status.realtime.state == "stale" || status.realtime.state == "reconnecting" {
+                status.realtime.state = "healthy".to_string();
+                status.realtime.last_state_changed_at = Some(now);
+            }
+            status.realtime.latest_notice = Some("observed target-wiki event".to_string());
+        })
+        .await;
+    }
+
+    pub async fn mark_realtime_match(&self, title: String, revid: u64) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            status.realtime.last_matching_edit_at = Some(now);
+            status.realtime.last_matching_title = Some(title);
+            status.realtime.last_matching_revid = Some(revid);
+            status.realtime.latest_notice = Some(format!("matched watched revid {}", revid));
+        })
+        .await;
+    }
+
+    pub async fn mark_realtime_state(
+        &self,
+        state: &'static str,
+        trigger: Option<String>,
+        reconnect_reason: Option<String>,
+        error_code: Option<String>,
+        notice: String,
+    ) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            status.realtime.state = state.to_string();
+            status.realtime.last_state_changed_at = Some(now);
+            status.realtime.last_recovery_trigger = trigger;
+            status.realtime.last_reconnect_reason = reconnect_reason;
+            status.realtime.latest_error_code = error_code;
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
+            status.last_notice_at = Some(now);
+        })
+        .await;
+    }
+
+    pub async fn mark_recovery_started(&self, trigger: String) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            status.realtime.state = "catching-up".to_string();
+            status.realtime.last_state_changed_at = Some(now);
+            status.realtime.catchup_active = true;
+            status.realtime.last_recovery_trigger = Some(trigger.clone());
+            status.realtime.last_recovery_started_at = Some(now);
+            status.realtime.latest_notice = Some(format!("{} catch-up started", trigger));
+        })
+        .await;
+    }
+
+    pub async fn mark_recovery_completed(&self, summary: CoverageSummary) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            status.realtime.state = if summary.unresolved_count == 0 {
+                "healthy".to_string()
+            } else {
+                "unhealthy".to_string()
+            };
+            status.realtime.last_state_changed_at = Some(now);
+            status.realtime.catchup_active = false;
+            status.realtime.last_recovery_completed_at = Some(now);
+            status.realtime.latest_notice = Some(format!(
+                "catch-up completed checked={} unresolved={}",
+                summary.edits_checked, summary.unresolved_count
+            ));
+            status.realtime.latest_recovery_summary = Some(summary);
+        })
+        .await;
+    }
+
+    pub async fn record_action_completed(
+        &self,
+        action: &RevDelAction,
+        outcome: &'static str,
+        reason_code: Option<String>,
+        attempt_count: u32,
+    ) {
+        let completed_at = Utc::now();
+        let queue_depth = self.queue_depth.load(Ordering::SeqCst);
+        let title = action.title.clone();
+        let revid = action.revids.first().copied().unwrap_or_default();
+        let mode = action.mode.label().to_string();
+        let observed_at = action.observed_at;
+        let queued_at = action.queued_at;
+        self.update_runtime_status(move |status| {
+            status.realtime.queue_depth = queue_depth;
+            status.realtime.last_action_completed_at = Some(completed_at);
+            if outcome == "hidden" || outcome == "already-hidden" {
+                status.realtime.last_successful_hide_at = Some(completed_at);
+            }
+            if outcome == "blocked" {
+                status.realtime.state = "blocked".to_string();
+                status.realtime.last_state_changed_at = Some(completed_at);
+            }
+            status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
+                title,
+                revid,
+                outcome: outcome.to_string(),
+                reason_code,
+                mode,
+                observed_at,
+                queued_at: Some(queued_at),
+                completed_at: Some(completed_at),
+                attempt_count,
+            });
+            status.realtime.latest_notice = Some(format!("{} revid {}", outcome, revid));
+        })
+        .await;
+    }
+
     pub async fn dispatch_action_batch(
         &self,
         title: String,
@@ -482,6 +763,10 @@ impl AppRuntime {
             .actions
             .dispatch_action_batch(title, revids, event_id, user, comment, mode)
             .await
+    }
+
+    pub async fn dispatch_action(&self, dispatch: RevDelDispatch) -> Result<()> {
+        self.reconcile.actions.dispatch_action(dispatch).await
     }
     pub async fn run_reconciliation_pass(self: &Arc<Self>, mode: ReconcileMode) -> Result<()> {
         self.reconcile.run_reconciliation_pass(mode).await
@@ -499,9 +784,9 @@ mod tests {
     use crate::cache::RuntimeCache;
     use crate::cache::SuppressionListCache;
     use crate::config::{
-        AppConfig, AuthConfig, CurrentDayRecheckConfig, LoggingConfig, MatchingConfig,
-        MetricsConfig, NightlySweepConfig, QueueConfig, RetryConfig, RevDelConfig, StateConfig,
-        SuppressionListConfig, WikiConfig,
+        AppConfig, AuthConfig, CatchupConfig, CurrentDayRecheckConfig, LoggingConfig,
+        MatchingConfig, MetricsConfig, NightlySweepConfig, QueueConfig, RealtimeConfig,
+        RetryConfig, RevDelConfig, StateConfig, SuppressionListConfig, WikiConfig,
     };
     use crate::state::RuntimeStatus;
 
@@ -546,6 +831,16 @@ mod tests {
                 stream_backoff_max_ms: 10000,
                 api_max_retries: 3,
                 since_recovery_seconds: 60,
+            },
+            realtime: RealtimeConfig {
+                stale_threshold_seconds: 10,
+                stream_read_timeout_seconds: 10,
+                freshness_probe_seconds: 30,
+            },
+            catchup: CatchupConfig {
+                default_window_seconds: 1800,
+                max_window_seconds: 7200,
+                max_revisions_per_run: 1000,
             },
             nightly_sweep: NightlySweepConfig {
                 enabled: true,
@@ -593,8 +888,16 @@ mod tests {
         let revision_locks = Arc::new(KeyLockSet::new());
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let (work_tx, mut work_rx) = mpsc::channel(1);
-        let dispatcher =
-            ActionDispatcher::new(revision_locks, processed, queue_depth.clone(), work_tx);
+        let temp = tempdir().unwrap();
+        let runtime_status = Arc::new(tokio::sync::Mutex::new(RuntimeStatus::default()));
+        let dispatcher = ActionDispatcher::new(
+            revision_locks,
+            processed,
+            queue_depth.clone(),
+            work_tx,
+            runtime_status,
+            temp.path().join("status.json"),
+        );
 
         dispatcher
             .dispatch_action_batch(
@@ -650,11 +953,14 @@ mod tests {
         let revision_locks = Arc::new(KeyLockSet::new());
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let (work_tx, _work_rx) = mpsc::channel(config.queue.capacity);
+        let runtime_status_for_actions = Arc::clone(&runtime_status);
         let actions = Arc::new(ActionDispatcher::new(
             revision_locks,
             Arc::new(RwLock::new(ProcessedRevidsState::default())),
             queue_depth,
             work_tx,
+            runtime_status_for_actions,
+            temp.path().join("status.json"),
         ));
         let runtime = Arc::new(ReconciliationRuntime::new(ReconciliationRuntimeInit {
             config: config.clone(),

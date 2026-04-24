@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::Utc;
 use futures_util::StreamExt;
 use metrics::{counter, histogram};
 use reqwest_eventsource::{Event, EventSource};
@@ -9,7 +10,7 @@ use tracing::{debug, info, warn};
 
 use crate::cache::{CachePersistence, CacheRefreshMode, refresh_cache};
 use crate::recentchange::LiveRevisionCandidate;
-use crate::runtime::{AppRuntime, RevDelMode};
+use crate::runtime::{AppRuntime, RevDelDispatch, RevDelMode};
 use crate::state::{load_text, save_text_atomic};
 
 pub fn spawn_stream_loop(runtime: Arc<AppRuntime>) {
@@ -68,6 +69,19 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
             Err(error) => {
                 counter!("event_reconnect_total").increment(1);
                 use_since_recovery = should_use_since_recovery(resume_event_id.as_deref(), &error);
+                runtime
+                    .mark_realtime_state(
+                        "reconnecting",
+                        Some(if use_since_recovery {
+                            "invalid-resume".to_string()
+                        } else {
+                            "reconnect-error".to_string()
+                        }),
+                        Some(error.to_string()),
+                        Some("stream-open-failed".to_string()),
+                        "real-time stream failed to open".to_string(),
+                    )
+                    .await;
                 warn!(
                     use_since_recovery,
                     error = %error,
@@ -83,12 +97,48 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                 continue;
             }
         };
-        while let Some(item) = stream.next().await {
+        let read_timeout =
+            Duration::from_secs(runtime.config.realtime.stream_read_timeout_seconds.max(1));
+        loop {
+            let item = match tokio::time::timeout(read_timeout, stream.next()).await {
+                Ok(Some(item)) => item,
+                Ok(None) => {
+                    counter!("event_reconnect_total").increment(1);
+                    runtime
+                        .mark_realtime_state(
+                            "reconnecting",
+                            Some("stream-closed".to_string()),
+                            Some("event stream ended".to_string()),
+                            None,
+                            "real-time stream closed; reconnecting".to_string(),
+                        )
+                        .await;
+                    break;
+                }
+                Err(_) => {
+                    counter!("event_stream_starvation_total").increment(1);
+                    let trigger = "silent-starvation".to_string();
+                    runtime
+                        .mark_realtime_state(
+                            "stale",
+                            Some(trigger.clone()),
+                            Some(format!("no stream item for {}s", read_timeout.as_secs())),
+                            Some("stream-silent".to_string()),
+                            stream_silence_notice(read_timeout.as_secs()),
+                        )
+                        .await;
+                    spawn_bounded_catchup(Arc::clone(&runtime), trigger.clone());
+                    use_since_recovery = true;
+                    break;
+                }
+            };
             match item {
                 Ok(Event::Open) => {
                     use_since_recovery = false;
                     backoff_ms = initial_backoff;
                     info!("recentchange stream opened");
+                    runtime.mark_realtime_stream_open().await;
+                    spawn_bounded_catchup(Arc::clone(&runtime), "startup".to_string());
                     continue;
                 }
                 Ok(Event::Message(message)) => {
@@ -102,79 +152,34 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                             continue;
                         }
                     };
-                    if runtime.config.matching.drop_canary && event.is_canary() {
-                        continue;
-                    }
-                    if !event.matches_wiki(
-                        &runtime.config.wiki.wiki_code,
-                        &runtime.config.wiki.server_name,
-                    ) {
-                        continue;
-                    }
-                    counter!("events_bewiki_total").increment(1);
-                    let event_id = event.event_id(Some(&message.id));
-                    if let Some(ref event_id) = event_id {
+                    if let Some(event_id) =
+                        handle_recentchange_event(&runtime, event, Some(&message.id)).await?
+                    {
                         last_event_id = Some(event_id.clone());
                         if !runtime.dry_run {
-                            save_text_atomic(&runtime.paths.last_event_id_file, event_id)?;
+                            save_text_atomic(&runtime.paths.last_event_id_file, &event_id)?;
                         }
                     }
-                    if let Some(title) = event.title.as_deref() {
-                        let normalized_title = crate::titles::normalize_title(title);
-                        let source_title =
-                            runtime.cache.read().await.source_title_normalized.clone();
-                        if normalized_title == source_title {
-                            info!(title = %title, "source suppression list page changed; refreshing cache");
-                            let _ = refresh_cache(
-                                &runtime.cache,
-                                &runtime.client,
-                                &runtime.config,
-                                &runtime.paths,
-                                CacheRefreshMode::Forced,
-                                if runtime.dry_run {
-                                    CachePersistence::Ephemeral
-                                } else {
-                                    CachePersistence::Persist
-                                },
-                            )
-                            .await;
-                            continue;
-                        }
-                    }
-                    if !event.is_revision_event() {
-                        continue;
-                    }
-                    let Some(candidate) = event.to_candidate(Some(&message.id)) else {
-                        continue;
-                    };
-                    if !runtime
-                        .cache
-                        .read()
-                        .await
-                        .watched_set
-                        .contains(&candidate.normalized_title)
-                    {
-                        debug!(
-                            title = %candidate.title,
-                            normalized_title = %candidate.normalized_title,
-                            "ignoring revision event because title is not in watched set"
-                        );
-                        continue;
-                    }
-                    counter!("events_matched_total").increment(1);
-                    info!(
-                        title = %candidate.title,
-                        revid = candidate.revid,
-                        old_revid = ?candidate.old_revid,
-                        event_id = ?candidate.event_id,
-                        "matched live watched revision"
-                    );
-                    handle_live_candidate(&runtime, candidate).await?;
                 }
                 Err(error) => {
                     counter!("event_reconnect_total").increment(1);
                     use_since_recovery =
                         should_use_since_recovery(resume_event_id.as_deref(), &error);
+                    let trigger = if use_since_recovery {
+                        "invalid-resume"
+                    } else {
+                        "reconnect-error"
+                    };
+                    runtime
+                        .mark_realtime_state(
+                            "reconnecting",
+                            Some(trigger.to_string()),
+                            Some(error.to_string()),
+                            Some("stream-error".to_string()),
+                            "real-time stream reconnecting after error".to_string(),
+                        )
+                        .await;
+                    spawn_bounded_catchup(Arc::clone(&runtime), trigger.to_string());
                     warn!(
                         use_since_recovery,
                         error = %error,
@@ -194,9 +199,100 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
     }
 }
 
+fn spawn_bounded_catchup(runtime: Arc<AppRuntime>, trigger: String) {
+    tokio::spawn(async move {
+        if let Err(error) = crate::catchup::run_default_catchup(&runtime, trigger.clone()).await {
+            warn!(error = %error, trigger = %trigger, "bounded catch-up failed");
+            runtime
+                .mark_realtime_state(
+                    "unhealthy",
+                    Some(trigger),
+                    Some("catch-up failed".to_string()),
+                    Some("catchup-failed".to_string()),
+                    format!("bounded catch-up failed: {error}"),
+                )
+                .await;
+        }
+    });
+}
+
+pub async fn handle_recentchange_event(
+    runtime: &Arc<AppRuntime>,
+    event: crate::recentchange::RecentChangeEvent,
+    sse_id: Option<&str>,
+) -> Result<Option<String>> {
+    if runtime.config.matching.drop_canary && event.is_canary() {
+        return Ok(None);
+    }
+    if !event.matches_wiki(
+        &runtime.config.wiki.wiki_code,
+        &runtime.config.wiki.server_name,
+    ) {
+        return Ok(None);
+    }
+    counter!("events_bewiki_total").increment(1);
+    let event_id = event.event_id(sse_id);
+    runtime.mark_realtime_event(event_id.clone()).await;
+    if let Some(title) = event.title.as_deref() {
+        let normalized_title = crate::titles::normalize_title(title);
+        let source_title = runtime.cache.read().await.source_title_normalized.clone();
+        if normalized_title == source_title {
+            info!(title = %title, "source suppression list page changed; refreshing cache");
+            let _ = refresh_cache(
+                &runtime.cache,
+                &runtime.client,
+                &runtime.config,
+                &runtime.paths,
+                CacheRefreshMode::Forced,
+                if runtime.dry_run {
+                    CachePersistence::Ephemeral
+                } else {
+                    CachePersistence::Persist
+                },
+            )
+            .await;
+            return Ok(event_id);
+        }
+    }
+    if !event.is_revision_event() {
+        return Ok(event_id);
+    }
+    let Some(candidate) = event.to_candidate(sse_id) else {
+        return Ok(event_id);
+    };
+    if !runtime
+        .cache
+        .read()
+        .await
+        .watched_set
+        .contains(&candidate.normalized_title)
+    {
+        debug!(
+            title = %candidate.title,
+            normalized_title = %candidate.normalized_title,
+            "ignoring revision event because title is not in watched set"
+        );
+        return Ok(event_id);
+    }
+    counter!("events_matched_total").increment(1);
+    info!(
+        title = %candidate.title,
+        revid = candidate.revid,
+        old_revid = ?candidate.old_revid,
+        event_id = ?candidate.event_id,
+        "matched live watched revision"
+    );
+    runtime
+        .mark_realtime_match(candidate.title.clone(), candidate.revid)
+        .await;
+    handle_live_candidate(runtime, candidate, Some(Utc::now())).await?;
+    Ok(event_id)
+}
+
 async fn handle_live_candidate(
     runtime: &Arc<AppRuntime>,
     candidate: LiveRevisionCandidate,
+    observed_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<()> {
     if runtime
         .reconcile
@@ -209,14 +305,17 @@ async fn handle_live_candidate(
     runtime
         .reconcile
         .actions
-        .dispatch_action_batch(
-            candidate.title,
-            vec![candidate.revid],
-            candidate.event_id,
-            candidate.user,
-            candidate.comment,
-            RevDelMode::Live,
-        )
+        .dispatch_action(RevDelDispatch {
+            title: candidate.title,
+            revids: vec![candidate.revid],
+            event_id: candidate.event_id,
+            user: candidate.user,
+            comment: candidate.comment,
+            mode: RevDelMode::Live,
+            observed_at,
+            recovery_trigger: None,
+            completion_tx: None,
+        })
         .await
 }
 
@@ -233,6 +332,10 @@ pub fn should_use_since_recovery(
         || rendered.contains("gone")
         || rendered.contains("last-event-id")
         || rendered.contains("invalid")
+}
+
+pub fn stream_silence_notice(seconds: u64) -> String {
+    format!("real-time stream silent for {seconds}s")
 }
 
 #[cfg(test)]
@@ -259,5 +362,10 @@ mod tests {
             Some("abc"),
             &"temporary network timeout"
         ));
+    }
+
+    #[test]
+    fn stream_starvation_notice_is_actionable() {
+        assert_eq!(stream_silence_notice(10), "real-time stream silent for 10s");
     }
 }

@@ -3,7 +3,8 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::commands::{
-    run_check_auth, run_hide_revid, run_manual_sweep, run_print_effective_config, run_reload_cache,
+    run_check_auth, run_coverage_report, run_emergency_catchup, run_hide_revid, run_manual_sweep,
+    run_print_effective_config, run_reload_cache,
 };
 use crate::daemon::run_daemon;
 
@@ -15,6 +16,18 @@ pub async fn run() -> Result<()> {
         Command::DryRun => run_daemon(cli.config, true, cli.verbose).await,
         Command::CheckAuth => run_check_auth(cli.config, cli.verbose).await,
         Command::HideRevid { id } => run_hide_revid(cli.config, id, cli.verbose).await,
+        Command::EmergencyCatchup {
+            start,
+            end,
+            dry_run,
+            report_only,
+        } => run_emergency_catchup(cli.config, start, end, dry_run, report_only, cli.verbose).await,
+        Command::CoverageReport {
+            start,
+            end,
+            dry_run,
+            report_only,
+        } => run_coverage_report(cli.config, start, end, dry_run, report_only, cli.verbose).await,
         Command::ReloadCache => run_reload_cache(cli.config),
         Command::NightlySweepNow => run_manual_sweep(cli.config),
         Command::PrintEffectiveConfig => run_print_effective_config(cli.config, cli.verbose),

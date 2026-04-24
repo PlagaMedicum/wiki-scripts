@@ -10,7 +10,7 @@ LOG_FORMAT ?= text
 
 RUN_ENV = RUST_LOG=$(LOG_LEVEL) BEWIKI_LOG_FORMAT=$(LOG_FORMAT) BEWIKI_ENV_FILE=$(ENV_FILE)
 
-.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid nightly-sweep-now print-effective-config build release test fmt lint check
+.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid emergency-catchup coverage-report nightly-sweep-now print-effective-config build release test fmt lint check
 
 define REQUIRE_CONFIG
 	@if [ -f "$(CONFIG)" ]; then :; else \
@@ -39,6 +39,8 @@ help:
 		'  make check-auth [CONFIG=./config.toml]' \
 		'  make reload-cache [CONFIG=./config.toml]' \
 		'  make hide-revid REVID=<revision_id> [CONFIG=./config.toml] [ARGS="..."]' \
+		'  make emergency-catchup [CONFIG=./config.toml] [ARGS="--dry-run"]' \
+		'  make coverage-report [CONFIG=./config.toml] [ARGS="--start 2026-04-24T00:00:00Z --report-only"]' \
 		'  make nightly-sweep-now [CONFIG=./config.toml]' \
 		'  make print-effective-config [CONFIG=./config.toml]' \
 		'' \
@@ -98,6 +100,16 @@ hide-revid:
 nightly-sweep-now:
 	$(call REQUIRE_CONFIG)
 	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" nightly-sweep-now $(ARGS)
+
+emergency-catchup:
+	$(call REQUIRE_CONFIG)
+	$(call REQUIRE_ENV)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" emergency-catchup $(ARGS)
+
+coverage-report:
+	$(call REQUIRE_CONFIG)
+	$(call REQUIRE_ENV)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" coverage-report $(ARGS)
 
 print-effective-config:
 	$(call REQUIRE_CONFIG)

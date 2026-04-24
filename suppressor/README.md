@@ -50,6 +50,8 @@ BEWIKI_BOT_PASSWORD=REDACTED
 - `make run`
 - `make tui`
 - `make reload-cache`
+- `make emergency-catchup ARGS="--dry-run"`
+- `make coverage-report ARGS="--start 2026-04-24T00:00:00Z --report-only"`
 - `make nightly-sweep-now`
 - `make build`
 - `make release`
@@ -64,6 +66,8 @@ Current scope:
 - immediate public RevDel for `user|comment`
 - reconciliation and backfill
 - local TUI supervision
+- realtime health reporting
+- bounded emergency catch-up and coverage reporting
 
 Not current scope:
 
@@ -75,6 +79,21 @@ Not current scope:
 
 The checked-in config is the current working be.wiki production baseline. It is a real baseline,
 not a promise that every other wiki is already supported.
+
+## Realtime Health
+
+The daemon now persists a dedicated realtime section in `runtime_status.json`. The TUI shows realtime
+state separately from daemon process state and reconciliation state so "running" is not treated as
+"hiding". Important states are:
+
+- `healthy`: the stream is fresh and no catch-up is active
+- `catching-up`: bounded recovery is checking recent watched-page edits
+- `stale` or `reconnecting`: the stream is delayed or being reopened
+- `unhealthy`: the realtime path could not prove protection
+- `blocked`: rights, session, or wiki-side failures prevent hiding
+
+Manual cache reload and nightly/current-day reconciliation remain diagnostic or fallback actions.
+They are not the normal path for newly published sensitive edits.
 
 ## Further Reading
 

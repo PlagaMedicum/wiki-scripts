@@ -74,13 +74,32 @@ These are local machine files, not source-of-truth docs.
 
 - use `make tui` for local supervision
 - keep logs free of secrets and suppressed payloads
-- use `make reload-cache` and `make nightly-sweep-now` against a running daemon
+- use `make reload-cache` only for watched-list cache diagnostics
+- use `make emergency-catchup ARGS="--dry-run"` for a bounded recent recovery check
+- use `make coverage-report ARGS="--start <RFC3339> --report-only"` for accident-window accounting
+- use `make nightly-sweep-now` as a slower safety-net reconciliation action
 - treat auth or rights loss as a stop-condition, not a soft warning
 
 ## Operational Targets
 
-- target hide latency under one second when possible
+- target 95% of controlled realtime hides under one second and 99% under five seconds
+- report p95 and p99 from controlled runs before claiming release readiness
 - prioritize newer edits first during recovery after disconnect or restart
-- treat recovery within a few minutes as the working target
+- treat a stale realtime stream as unhealthy after the configured 10-second threshold
+- catch up the default 30-minute window within the configured recovery target where wiki/API health allows it
 - stop the service on missing rights, broken auth, persistent API failure, or malformed
   suppression-list input
+
+## Incident Response Flow
+
+1. Open `make tui` and check `Realtime`, lag, latest outcome, recovery trigger, and latest error.
+2. If realtime is stale, reconnecting, unhealthy, or blocked, do not rely on the daemon process line
+   alone.
+3. Run `make emergency-catchup ARGS="--dry-run"` to inspect the recent default window without hiding.
+4. If the report is correct and auth is healthy, run `make emergency-catchup` to queue unresolved
+   eligible edits for hiding.
+5. For a known accident window, run `make coverage-report ARGS="--start <RFC3339> --end <RFC3339> --report-only"`.
+6. Treat unresolved items as open exposure until each one has a reason, owner, and next action.
+
+Reports include page title, revision ID, age, reason, and next action. They must not include hidden
+text, raw comments, credentials, tokens, or session material.

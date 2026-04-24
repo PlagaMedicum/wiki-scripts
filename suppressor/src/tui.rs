@@ -40,6 +40,8 @@ pub(crate) enum UiAction {
     CheckAuth,
     PrintConfig,
     ReloadCache,
+    EmergencyCatchup,
+    CoverageReport,
     SweepNow,
     RefreshStatus,
     Quit,
@@ -54,6 +56,8 @@ impl UiAction {
             UiAction::CheckAuth,
             UiAction::PrintConfig,
             UiAction::ReloadCache,
+            UiAction::EmergencyCatchup,
+            UiAction::CoverageReport,
             UiAction::SweepNow,
             UiAction::RefreshStatus,
             UiAction::Quit,
@@ -68,6 +72,8 @@ impl UiAction {
             UiAction::CheckAuth => "Check auth",
             UiAction::PrintConfig => "Print config",
             UiAction::ReloadCache => "Post reload signal",
+            UiAction::EmergencyCatchup => "Emergency catch-up",
+            UiAction::CoverageReport => "Coverage report",
             UiAction::SweepNow => "Queue nightly reconciliation",
             UiAction::RefreshStatus => "Refresh status",
             UiAction::Quit => "Quit",
@@ -82,6 +88,12 @@ impl UiAction {
             UiAction::CheckAuth => "Checks login and rights without starting the daemon.",
             UiAction::PrintConfig => "Shows the effective config with secrets redacted.",
             UiAction::ReloadCache => "Signals the running daemon to reload the source list cache.",
+            UiAction::EmergencyCatchup => {
+                "Checks the recent watched-page window and queues unresolved eligible edits."
+            }
+            UiAction::CoverageReport => {
+                "Reports the recent watched-page window without hiding so unresolved exposure is visible."
+            }
             UiAction::SweepNow => {
                 "Signals the running daemon to queue the same reconciliation family used by the nightly job."
             }
@@ -468,6 +480,18 @@ impl ControlApp {
                 vec!["print-effective-config".to_string()],
             ),
             UiAction::ReloadCache => self.post_reload_signal(),
+            UiAction::EmergencyCatchup => self.spawn_background_command(
+                "emergency-catchup",
+                vec!["emergency-catchup".to_string()],
+            ),
+            UiAction::CoverageReport => self.spawn_background_command(
+                "coverage-report",
+                vec![
+                    "emergency-catchup".to_string(),
+                    "--report-only".to_string(),
+                    "--dry-run".to_string(),
+                ],
+            ),
             UiAction::SweepNow => self.post_sweep_signal(),
             UiAction::RefreshStatus => {
                 self.refresh_status();

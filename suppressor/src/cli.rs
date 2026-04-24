@@ -24,7 +24,29 @@ pub enum Command {
     CheckAuth,
     ReloadCache,
     DryRun,
-    HideRevid { id: u64 },
+    HideRevid {
+        id: u64,
+    },
+    EmergencyCatchup {
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        end: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        report_only: bool,
+    },
+    CoverageReport {
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        end: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        report_only: bool,
+    },
     NightlySweepNow,
     PrintEffectiveConfig,
 }
@@ -70,6 +92,60 @@ mod tests {
         let cli = Cli::try_parse_from(["suppressor", "tui"]).unwrap();
         match cli.command {
             Command::Tui => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_emergency_catchup_command() {
+        let cli = Cli::try_parse_from([
+            "suppressor",
+            "emergency-catchup",
+            "--start",
+            "2026-04-24T16:00:00Z",
+            "--end",
+            "2026-04-24T16:30:00Z",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::EmergencyCatchup {
+                start,
+                end,
+                dry_run,
+                report_only,
+            } => {
+                assert_eq!(start.as_deref(), Some("2026-04-24T16:00:00Z"));
+                assert_eq!(end.as_deref(), Some("2026-04-24T16:30:00Z"));
+                assert!(dry_run);
+                assert!(!report_only);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_coverage_report_command() {
+        let cli = Cli::try_parse_from([
+            "suppressor",
+            "coverage-report",
+            "--start",
+            "2026-04-24T16:00:00Z",
+            "--report-only",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::CoverageReport {
+                start,
+                end,
+                dry_run,
+                report_only,
+            } => {
+                assert_eq!(start, "2026-04-24T16:00:00Z");
+                assert!(end.is_none());
+                assert!(!dry_run);
+                assert!(report_only);
+            }
             other => panic!("unexpected command: {other:?}"),
         }
     }

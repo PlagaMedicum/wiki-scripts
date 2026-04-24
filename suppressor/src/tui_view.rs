@@ -169,6 +169,47 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &ControlApp) {
     ];
 
     if let Some(runtime_status) = &app.status.runtime_status {
+        lines.push(render_realtime_line(&runtime_status.realtime));
+        lines.push(Line::from(format!(
+            "Realtime lag: {}s   Queue: {}",
+            runtime_status
+                .realtime
+                .current_lag_seconds
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            runtime_status.realtime.queue_depth
+        )));
+        lines.push(Line::from(format!(
+            "Last observed: {}",
+            runtime_status
+                .realtime
+                .last_event_observed_at
+                .map(|at| at.format("%H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "not recorded yet".to_string())
+        )));
+        if let Some(revid) = runtime_status.realtime.last_matching_revid {
+            lines.push(Line::from(format!(
+                "Last matched: {} revid {}",
+                runtime_status
+                    .realtime
+                    .last_matching_title
+                    .as_deref()
+                    .unwrap_or("unknown title"),
+                revid
+            )));
+        }
+        if let Some(latest) = runtime_status.realtime.latest_outcome.as_ref() {
+            lines.push(Line::from(format!(
+                "Latest outcome: {} revid {} [{}]",
+                latest.outcome, latest.revid, latest.mode
+            )));
+        }
+        if let Some(trigger) = runtime_status.realtime.last_recovery_trigger.as_deref() {
+            lines.push(Line::from(format!("Recovery trigger: {}", trigger)));
+        }
+        if let Some(error) = runtime_status.realtime.latest_error_code.as_deref() {
+            lines.push(Line::from(format!("Realtime error: {}", error)));
+        }
         lines.push(Line::from(render_reconcile_line(
             &runtime_status.reconciliation,
         )));
@@ -292,6 +333,34 @@ fn render_reconcile_line(status: &crate::state::ReconciliationRuntimeStatus) -> 
     }
 }
 
+fn render_realtime_line(status: &crate::state::RealtimeRuntimeStatus) -> Line<'static> {
+    let state = if status.state.is_empty() {
+        "unknown"
+    } else {
+        status.state.as_str()
+    };
+    let style = match state {
+        "healthy" => Style::default().fg(Color::Green),
+        "catching-up" | "reconnecting" => Style::default().fg(Color::Yellow),
+        "stale" | "unhealthy" | "blocked" => {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        }
+        _ => Style::default().fg(Color::Gray),
+    };
+    let notice = status
+        .latest_notice
+        .clone()
+        .unwrap_or_else(|| "no realtime notice".to_string());
+    Line::from(vec![
+        Span::styled("Realtime: ", Style::default().fg(Color::Gray)),
+        Span::styled(state.to_string(), style),
+        Span::raw(format!(
+            " (stale>{}s) {}",
+            status.stale_threshold_seconds, notice
+        )),
+    ])
+}
+
 fn render_progress_bar(done: usize, total: usize, width: usize) -> String {
     if total == 0 || width == 0 {
         return "[no work]".to_string();
@@ -302,4 +371,28 @@ fn render_progress_bar(done: usize, total: usize, width: usize) -> String {
         "#".repeat(filled),
         ".".repeat(width.saturating_sub(filled))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::RealtimeRuntimeStatus;
+
+    #[test]
+    fn realtime_line_renders_unhealthy_state_and_notice() {
+        let line = render_realtime_line(&RealtimeRuntimeStatus {
+            state: "stale".to_string(),
+            stale_threshold_seconds: 10,
+            latest_notice: Some("real-time stream silent for 10s".to_string()),
+            ..RealtimeRuntimeStatus::default()
+        });
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("stale"));
+        assert!(rendered.contains("silent"));
+    }
 }

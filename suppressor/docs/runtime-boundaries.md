@@ -25,6 +25,7 @@ That shape is intentional:
 - `daemon.rs` / `runtime.rs`: daemon lifecycle and runtime assembly
 - `auth.rs` / `mw_api.rs`: auth and MediaWiki transport
 - `stream.rs`: EventStreams ingestion
+- `catchup.rs`: bounded recovery and accident-window accounting
 - `scheduler.rs` / `reconcile.rs`: scheduling and reconciliation
 - `worker.rs`: queued RevDel execution
 - `cache/`: watched-title cache loading and persistence
@@ -47,7 +48,7 @@ Durable operational state:
 - `last_event_id.txt`
 - `processed_revids.json`
 - `nightly_sweep_progress.json`
-- `runtime_status.json`
+- `runtime_status.json`, including daemon, realtime, latest outcome, catch-up summary, and reconciliation status
 
 Derived cache state:
 
@@ -65,6 +66,8 @@ Ephemeral coordination:
 - keep current deployment local-first
 - keep the daemon and the TUI separate
 - keep logs and metrics at the edges
+- keep realtime health separate from daemon process health and reconciliation progress
+- keep emergency catch-up bounded by configured windows and revision limits
 - do not broaden the service unless there is a strong operational reason
 
 ## Future Direction

@@ -50,7 +50,9 @@ pub(crate) fn collect_status(
             }
         },
         Ok(None) => {}
-        Err(error) => snapshot.status_error = Some(compact_status_error("pid", format!("{error:#}"))),
+        Err(error) => {
+            snapshot.status_error = Some(compact_status_error("pid", format!("{error:#}")))
+        }
     }
 
     if let Ok(last_event_id) = load_text(&paths.last_event_id_file) {
@@ -60,7 +62,9 @@ pub(crate) fn collect_status(
     match load_json::<ProcessedRevidsState>(&paths.processed_revids_file) {
         Ok(Some(state)) => snapshot.processed_revids = state.revids.len(),
         Ok(None) => {}
-        Err(error) => snapshot.status_error = Some(compact_status_error("processed", format!("{error:#}"))),
+        Err(error) => {
+            snapshot.status_error = Some(compact_status_error("processed", format!("{error:#}")))
+        }
     }
 
     match load_json::<SuppressionListCache>(&paths.cache_file) {
@@ -70,19 +74,25 @@ pub(crate) fn collect_status(
             snapshot.watched_titles = cache.watched_titles_normalized.len();
         }
         Ok(None) => {}
-        Err(error) => snapshot.status_error = Some(compact_status_error("cache", format!("{error:#}"))),
+        Err(error) => {
+            snapshot.status_error = Some(compact_status_error("cache", format!("{error:#}")))
+        }
     }
 
     match load_json::<NightlySweepProgress>(&paths.nightly_sweep_progress_file) {
         Ok(Some(progress)) => snapshot.checkpoint_pages = progress.pages.len(),
         Ok(None) => {}
-        Err(error) => snapshot.status_error = Some(compact_status_error("checkpoints", format!("{error:#}"))),
+        Err(error) => {
+            snapshot.status_error = Some(compact_status_error("checkpoints", format!("{error:#}")))
+        }
     }
 
     match load_json::<RuntimeStatus>(&paths.runtime_status_file) {
         Ok(Some(runtime_status)) => snapshot.runtime_status = Some(runtime_status),
         Ok(None) => {}
-        Err(error) => snapshot.status_error = Some(compact_status_error("runtime", format!("{error:#}"))),
+        Err(error) => {
+            snapshot.status_error = Some(compact_status_error("runtime", format!("{error:#}")))
+        }
     }
 
     snapshot
@@ -149,6 +159,7 @@ mod tests {
                 dry_run: false,
                 last_notice: Some("ok".to_string()),
                 last_notice_at: Some(Utc::now()),
+                realtime: crate::state::RealtimeRuntimeStatus::default(),
                 reconciliation: ReconciliationRuntimeStatus::default(),
             },
         )
@@ -184,6 +195,9 @@ mod tests {
 
         let snapshot = collect_status(&paths, None);
 
-        assert_eq!(snapshot.status_error.as_deref(), Some("st.err pid: non-positive pid"));
+        assert_eq!(
+            snapshot.status_error.as_deref(),
+            Some("st.err pid: non-positive pid")
+        );
     }
 }

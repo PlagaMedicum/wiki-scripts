@@ -2,13 +2,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, TimeDelta, Utc};
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::auth::{AuthState, authenticate, refresh_csrf_token};
+use crate::catchup::{CatchupRequest, format_summary_lines, run_catchup_window};
 use crate::config::{AppConfig, EnvConfig, RuntimePaths, init_logging, load_env};
 use crate::effective_config::render_effective_config;
 use crate::mw_api::MediaWikiClient;
+use crate::runtime::AppRuntime;
 use crate::signals;
 
 pub struct CommandContext {
@@ -90,6 +93,62 @@ pub async fn run_hide_revid(config_path: PathBuf, revid: u64, verbose: bool) -> 
     Ok(())
 }
 
+pub async fn run_emergency_catchup(
+    config_path: PathBuf,
+    start: Option<String>,
+    end: Option<String>,
+    dry_run: bool,
+    report_only: bool,
+    verbose: bool,
+) -> Result<()> {
+    let runtime = AppRuntime::bootstrap(config_path, dry_run, verbose).await?;
+    let (start, end) = resolve_optional_window(&runtime, start, end)?;
+    let summary = run_catchup_window(
+        &runtime,
+        CatchupRequest {
+            start,
+            end,
+            trigger: "operator-manual".to_string(),
+            report_only,
+        },
+    )
+    .await?;
+    for line in format_summary_lines(&summary) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+pub async fn run_coverage_report(
+    config_path: PathBuf,
+    start: String,
+    end: Option<String>,
+    dry_run: bool,
+    report_only: bool,
+    verbose: bool,
+) -> Result<()> {
+    let runtime = AppRuntime::bootstrap(config_path, dry_run, verbose).await?;
+    let start = parse_rfc3339_utc(&start)?;
+    let end = match end {
+        Some(value) => parse_rfc3339_utc(&value)?,
+        None => Utc::now(),
+    };
+    let summary = run_catchup_window(
+        &runtime,
+        CatchupRequest {
+            start,
+            end,
+            trigger: "coverage".to_string(),
+            report_only: report_only || dry_run,
+        },
+    )
+    .await?;
+    for line in format_summary_lines(&summary) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 pub fn run_reload_cache(config_path: PathBuf) -> Result<()> {
     let command = CommandContext::load(&config_path)?;
     signals::send_reload(&command.paths.pid_file)
@@ -164,6 +223,28 @@ async fn revision_delete_with_auth_context(
         .await
 }
 
+fn resolve_optional_window(
+    runtime: &AppRuntime,
+    start: Option<String>,
+    end: Option<String>,
+) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    let end = match end {
+        Some(value) => parse_rfc3339_utc(&value)?,
+        None => Utc::now(),
+    };
+    let start = match start {
+        Some(value) => parse_rfc3339_utc(&value)?,
+        None => end - TimeDelta::seconds(runtime.config.catchup.default_window_seconds),
+    };
+    Ok((start, end))
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("invalid RFC3339 timestamp {value}"))?
+        .with_timezone(&Utc))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -205,5 +286,11 @@ mod tests {
     #[test]
     fn formats_compact_hide_revid_result() {
         assert_eq!(format_hide_revid_result(42), "revdel.ok revid=42");
+    }
+
+    #[test]
+    fn parses_rfc3339_utc_timestamp() {
+        let parsed = parse_rfc3339_utc("2026-04-24T16:00:00Z").unwrap();
+        assert_eq!(parsed.to_rfc3339(), "2026-04-24T16:00:00+00:00");
     }
 }

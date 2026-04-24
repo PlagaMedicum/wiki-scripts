@@ -31,6 +31,8 @@ Inputs:
 
 - Optional bounded duration or start/end window.
 - Optional dry-run mode.
+- Default window is the preceding 30 minutes ending at now unless the operator supplies explicit bounds.
+- Maximum automatic scope is configuration-driven; windows above the configured limit require an explicit operator override or report-only mode.
 
 Output:
 
@@ -53,9 +55,10 @@ Purpose: Verify that edits in a known incident window are accounted for after su
 
 Inputs:
 
-- Required start timestamp.
-- Required end timestamp or default "now".
+- Required start timestamp in RFC 3339 format with timezone.
+- Required end timestamp in RFC 3339 format with timezone, or default `now`.
 - Optional dry-run/report-only mode.
+- Invalid, inverted, timezone-less, or over-limit windows must fail before API calls and explain the accepted input shape.
 
 Output:
 
@@ -67,6 +70,7 @@ Output:
 Success:
 
 - 100% of checked eligible edits are counted as hidden, already-hidden, skipped, failed, or unresolved.
+- Any unresolved eligible edit keeps the report actionable and prevents treating the accident window as fully closed unless an operator explicitly records the exception.
 
 ### Realtime Health Refresh
 

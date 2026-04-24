@@ -63,9 +63,10 @@ python3 tools/doc_workflow.py all
 
 1. Collect the existing `event_to_api_submit_latency_ms` and `immediate_hide_latency_ms` metrics during controlled runs.
 2. Add or record an end-to-end event-observed-to-hide timing for each controlled eligible edit.
-3. Summarize p50 and p95 for normal live handling and for recovery-driven handling.
+3. Summarize p50, p95, and p99 for normal live handling and for recovery-driven handling.
 4. During a production-safe manual check, record publish-to-hide wall clock from the wiki timestamp or recent-changes observation to confirmed hidden state.
-5. Compare the collected evidence with the feature targets for normal hiding, stale detection, and recovery completion.
+5. Use at least 100 controlled observations before claiming percentile compliance; smaller production-safe manual checks are smoke evidence, not SLO proof.
+6. Compare the collected evidence with the feature targets for normal hiding, stale detection, and recovery completion.
 
 ## Production Readiness Gate
 
@@ -75,6 +76,14 @@ Do not call the fix production-ready until:
 - silent-starvation and reconnect recovery verification passes;
 - accident-window coverage verification passes for the chosen window;
 - latency evidence shows the target path and recovery path are within the documented thresholds, or the remaining gap is explicitly documented before release;
+- unresolved accident-window items are zero, or each remaining item has a documented owner, reason, next action, and explicit release decision;
+- rights/session loss, blocked state, unrecoverable API errors, or stale realtime state after deployment are treated as release stop conditions until resolved or explicitly accepted for a dry-run/report-only release;
+- unavailable external wiki conditions are documented with the exact checks that could not run and the narrower confidence claim that remains;
 - suppressor tests pass with the documented command;
 - repo docs workflow passes;
 - operator docs describe realtime health, emergency catch-up, and coverage reports.
+
+## Feature Close-Out Notes
+
+- Durable operational lessons belong in `suppressor/README.md`, `suppressor/docs/operations.md`, `suppressor/docs/implementation.md`, `suppressor/docs/runtime-boundaries.md`, and `suppressor/docs/testing-strategy.md`.
+- Temporary feature-local planning notes under `specs/001-real-time-suppression/` may be removed only after durable lessons and release evidence are copied into maintained suppressor docs and the branch history preserves the full feature trail.

@@ -28,6 +28,9 @@ docmeta:
 - [ ] T002 [P] Run the current suppressor test baseline and record any pre-existing failures in `suppressor/docs/testing-strategy.md`
 - [ ] T003 [P] Run the current docs workflow baseline and record the expected gate command in `specs/001-real-time-suppression/quickstart.md`
 - [ ] T004 [P] Review existing production defaults that affect realtime recovery in `suppressor/config.toml`
+- [ ] T061 [P] Diagnose silent EventStreams starvation with a controlled harness and record the suspected-fault result in `suppressor/docs/testing-strategy.md`
+- [ ] T062 [P] Diagnose Last-Event-ID resume, reconnect, and replay behavior before changing recovery logic in `suppressor/src/stream.rs`
+- [ ] T063 [P] Diagnose title matching, cache state, queue dispatch, worker health, and rights/session state as alternate active-incident causes in `suppressor/src/recentchange.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/worker.rs`
 
 ---
 
@@ -62,6 +65,8 @@ docmeta:
 - [ ] T016 [P] [US1] Add unit tests for target-wiki recent-change classification and watched-title matching in `suppressor/src/stream.rs`
 - [ ] T017 [P] [US1] Add dispatcher tests for live candidate queueing, processed-revision duplicate skips, and source metadata in `suppressor/src/runtime.rs`
 - [ ] T018 [P] [US1] Add worker tests for successful live-hide outcomes and observed-to-hide timing in `suppressor/src/worker.rs`
+- [ ] T064 [P] [US1] Add safety-boundary tests proving live and catch-up RevDel requests hide only public `user|comment` fields in `suppressor/src/worker.rs` and `suppressor/src/mw_api.rs`
+- [ ] T065 [P] [US1] Add refusal tests for non-watched, malformed, missing-metadata, and policy-skipped revisions in `suppressor/src/runtime.rs`
 
 ### Implementation for User Story 1
 
@@ -148,6 +153,8 @@ docmeta:
 - [ ] T058 Run the repository docs workflow gate and record the result in `specs/001-real-time-suppression/quickstart.md`
 - [ ] T059 Run a controlled dry-run or live verification benchmark for the realtime path and record latency evidence in `suppressor/docs/operations.md`
 - [ ] T060 Remove obsolete feature-local notes that should remain only in git history after durable lessons are copied into `suppressor/docs/implementation.md`
+- [ ] T066 Record p95 and p99 latency evidence with the controlled sample size and any smaller smoke-check limits in `suppressor/docs/operations.md`
+- [ ] T067 Copy durable close-out lessons from `specs/001-real-time-suppression/` into maintained suppressor docs before removing obsolete feature-local planning notes from `specs/001-real-time-suppression/`
 
 ---
 

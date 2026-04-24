@@ -70,9 +70,13 @@ The daemon persists local runtime status for the TUI and operator diagnostics in
 - Show the active recovery trigger and latest reconnect reason when realtime state is not healthy.
 - Color or label `stale`, `unhealthy`, and `blocked` as operator-action states.
 - Do not display sensitive hidden content, raw comments, credentials, or tokens.
+- Define `current_lag_seconds` as wall-clock seconds since the latest target-wiki event observed by the stream, or since the newest target-wiki change discovered by a bounded API freshness probe when the stream is silent.
+- Define an actionable notice as a compact non-sensitive message that includes state, reason code or recovery trigger, affected revision identifier when safe, and the next operator action when manual review is required.
+- In compact terminals, preserve daemon state, realtime state, lag, latest actionable notice, and blocked/error indicators before lower-priority reconciliation details.
 
 ## Compatibility
 
 - Missing `realtime` in older state files must load as an unknown/stale-safe default.
 - Existing reconciliation fields remain readable.
 - Existing `last_event_id.txt` may remain as a legacy resume file, but the TUI should prefer the richer runtime status when available.
+- Missing runtime status, stale PID files, and unreadable older status files must produce a non-healthy diagnostic state instead of a false healthy state.

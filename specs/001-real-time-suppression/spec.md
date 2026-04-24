@@ -67,6 +67,9 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - An edit is already hidden manually or by another operator before the suppressor acts.
 - The operator console is open but not refreshed while background hiding continues.
 - Logs, notices, and reports must avoid storing sensitive article content or hidden text.
+- A recent-change event or API result is missing expected metadata such as title, revision ID, actor, timestamp, or comment flags.
+- A catch-up window includes pages that moved, disappeared, or left the watched set during the window.
+- Retry exhaustion leaves unresolved items after catch-up and requires operator escalation or documented release blocking.
 
 ## Requirements *(mandatory)*
 
@@ -99,12 +102,12 @@ As the suppressor operator, I need confidence that edits made after the suppress
 
 ### Measurable Outcomes
 
-- **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds.
-- **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, the operator console shows an unhealthy state and current lag.
+- **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds; release evidence must report p95 and p99 for the controlled realtime path.
+- **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, the operator console shows an unhealthy state and current lag measured against the latest observed target-wiki event or a bounded API freshness probe when the stream is silent.
 - **SC-003**: After daemon restart or real-time recovery, eligible watched-page edits missed in the preceding 30 minutes are either hidden or reported unresolved within 2 minutes.
 - **SC-004**: Accident-window verification accounts for 100% of eligible watched-page edits in the selected window as hidden, already hidden, skipped, failed, or unresolved.
 - **SC-005**: The operator can distinguish "running and hiding", "running but catching up", "running but unhealthy", and "blocked by rights/session/wiki error" from the console without inspecting raw logs.
-- **SC-006**: Automated or controlled verification covers immediate hiding, feed stall recovery, missed-edit catch-up, duplicate event handling, and rights/session failure reporting.
+- **SC-006**: Automated or controlled verification covers immediate hiding, feed stall recovery, missed-edit catch-up, duplicate event handling, a burst of at least 10 controlled eligible events across watched pages, public `user|comment` RevDel safety boundaries, and rights/session failure reporting.
 
 ## Assumptions
 

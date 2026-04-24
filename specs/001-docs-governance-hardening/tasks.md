@@ -72,9 +72,9 @@ now focused on managed-governance review capture, temporary-surface cleanup, and
 - [X] T011 [US2] Implement frontmatter-first metadata migration and lean-by-type schema rules in `tools/doc_status.py`, `.specify/doc-registry.json`, and tracked Markdown workflow docs
 - [X] T012 [US2] Add `--dry-run` and `--scope {all, managed, active-feature}` controls in `tools/doc_status.py` and `tools/doc_workflow.py`, and add guarded overwrite behavior in `.specify/scripts/bash/setup-plan.sh`
 - [X] T013 [P] [US2] Add regression coverage for scoped sync, dry-run preview, preserved plan setup, and explicit forced overwrite in `tools/tests/test_doc_workflow.py`
-- [ ] T014 [US2] Move unresolved inline review comments out of `specs/000-repo-governance/spec.md` and `specs/000-repo-governance/quickstart.md` into `specs/000-repo-governance/research.md` or another authoritative temporary review surface, then remove the inline TODO markers from the maintained docs
-- [ ] T015 [US2] Record the durable review and approval outcomes for `specs/000-repo-governance/spec.md`, `specs/000-repo-governance/plan.md`, and `specs/000-repo-governance/quickstart.md` in `.specify/doc-registry.json`, then sync those docs so frontmatter matches the registry again
-- [ ] T016 [US2] Preserve traceability for migrated review-derived governance lessons in `specs/000-repo-governance/research.md` and any touched maintained governance docs where that materially helps later audit or git-history lookup
+- [X] T014 [US2] Move unresolved inline review comments out of `specs/000-repo-governance/spec.md` and `specs/000-repo-governance/quickstart.md` into `specs/000-repo-governance/research.md` or another authoritative temporary review surface, then remove the inline TODO markers from the maintained docs
+- [X] T015 [US2] Record the durable review and approval outcomes for `specs/000-repo-governance/spec.md`, `specs/000-repo-governance/plan.md`, and `specs/000-repo-governance/quickstart.md` in `.specify/doc-registry.json`, then sync those docs so frontmatter matches the registry again
+- [X] T016 [US2] Preserve traceability for migrated review-derived governance lessons in `specs/000-repo-governance/research.md` and any touched maintained governance docs where that materially helps later audit or git-history lookup
 
 **Checkpoint**: Managed-governance review state is registry-backed, inline TODO review drift is gone, and write-surface guardrails remain explicit
 
@@ -115,8 +115,8 @@ now focused on managed-governance review capture, temporary-surface cleanup, and
 
 **Purpose**: Fold current review input into the feature artifacts, rerun the gate, and only then close the feature
 
-- [ ] T022 [P] Fold current client review comments into `specs/001-docs-governance-hardening/spec.md`, `specs/001-docs-governance-hardening/plan.md`, `specs/001-docs-governance-hardening/tasks.md`, `specs/001-docs-governance-hardening/contracts/status-report.md`, and `specs/001-docs-governance-hardening/checklists/governance.md`, then mark `RQ004` through `RQ008` resolved in `specs/001-docs-governance-hardening/review-queue.md`
-- [ ] T023 Run `python3 -m unittest discover -s tools/tests -p 'test_*.py'`, `python3 tools/doc_status.py lint`, `python3 tools/doc_workflow.py status --json`, and `python3 tools/doc_workflow.py all`; confirm no pending feature-local items remain, then clear `.specify/feature.json`
+- [X] T022 [P] Fold current client review comments into `specs/001-docs-governance-hardening/spec.md`, `specs/001-docs-governance-hardening/plan.md`, `specs/001-docs-governance-hardening/tasks.md`, `specs/001-docs-governance-hardening/contracts/status-report.md`, and `specs/001-docs-governance-hardening/checklists/governance.md`, then mark `RQ004` through `RQ008` resolved in `specs/001-docs-governance-hardening/review-queue.md`
+- [X] T023 Run `python3 -m unittest discover -s tools/tests -p 'test_*.py'`, `python3 tools/doc_status.py lint`, `python3 tools/doc_workflow.py status --json`, and `python3 tools/doc_workflow.py all`; confirm no pending feature-local items remain, then clear `.specify/feature.json`
 
 ---
 

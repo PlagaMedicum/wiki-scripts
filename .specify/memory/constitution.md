@@ -3,7 +3,7 @@ docmeta:
   status: maintained
   review:
   - client-input-derived
-  - reviewed
+  - approved
   purpose: Repo governance rules and non-negotiable workflow requirements.
   source: .specify/doc-registry.json
 ---
@@ -65,13 +65,14 @@ Managed-doc review or approval changes become durable only when the registry is 
 Markdown-only metadata edits do not count as durable review evidence. Accepted repo direction
 belongs in `specs/000-repo-governance/spec.md`. Unresolved repo-level governance questions or
 standing-governance review follow-up belong in `specs/000-repo-governance/research.md`.
-<!-- todo: If research documents are fixing the current decisions, then it should be repo-wide practice, not only in the 001, but also in 000. So, also in the 000 we need to have questions doc then. I need all naming to be consistent. If some doc is named some way, it should have the same logic everywhere, so it will not confuse the reader. The answer to questions should be structured to other documents and be cleaned up from the questions document.  -->
-Feature-scoped unresolved human input belongs in feature-local `questions.md` or `review-queue.md`.
-Maintained standing-governance docs MUST NOT retain inline TODO-style review comments once that
-feedback has been captured in an authoritative temporary surface. Broad docs-maintenance rewrites
-MUST offer an inspectable or narrowed execution path before mutation, and feature-generation steps
-MUST NOT overwrite filled artifacts unless an explicit overwrite action is requested. Docs MUST
-distinguish current behavior from future direction.
+Feature-scoped unresolved human input belongs in feature-local `questions.md` or `review-queue.md`
+while that feature is active. Resolved temporary-surface items SHOULD be folded into durable docs and
+cleaned out of temporary files instead of kept as a second archive. Maintained standing-governance
+docs MUST NOT retain inline TODO-style review comments once that feedback has been captured in an
+authoritative temporary surface. Broad docs-maintenance rewrites MUST offer an inspectable or
+narrowed execution path before mutation, and feature-generation steps MUST NOT overwrite filled
+artifacts unless an explicit overwrite action is requested. Docs MUST distinguish current behavior
+from future direction.
 
 ### V. Spec Kit First For Non-Trivial Work
 

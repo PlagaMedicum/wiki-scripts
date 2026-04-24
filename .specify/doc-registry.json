@@ -61,7 +61,8 @@
       "path": "specs/000-repo-governance/spec.md",
       "status": "maintained",
       "review": [
-        "client-input-derived"
+        "client-input-derived",
+        "approved"
       ],
       "purpose": "Accepted repo model, scope boundaries, and documentation rules."
     },
@@ -77,7 +78,8 @@
       "path": "specs/000-repo-governance/quickstart.md",
       "status": "maintained",
       "review": [
-        "client-input-derived"
+        "client-input-derived",
+        "approved"
       ],
       "purpose": "Practical Spec Kit workflow for this repo, including the explicit docs gate."
     },
@@ -85,7 +87,8 @@
       "path": "specs/000-repo-governance/plan.md",
       "status": "maintained",
       "review": [
-        "client-input-derived"
+        "client-input-derived",
+        "approved"
       ],
       "purpose": "Current documentation structure contract for the repo."
     },

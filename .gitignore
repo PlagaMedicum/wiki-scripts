@@ -1,4 +1,5 @@
 .env
+.env*
 .codex
 .pywikibot/
 __pycache__/
@@ -13,6 +14,14 @@ apicache/
 throttle.ctrl
 *.pyc
 .coverage
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+target/
 suppressor/.env
 suppressor/state/
 suppressor/target/

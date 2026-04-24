@@ -1,7 +1,9 @@
 ---
 docmeta:
   status: maintained
-  review: client-input-derived,reviewed and commented
+  review:
+  - client-input-derived
+  - approved
   purpose: Practical Spec Kit workflow for this repo, including the explicit docs gate.
   source: .specify/doc-registry.json
 ---
@@ -25,7 +27,6 @@ specify check
 2. Create or update a feature directory under `specs/NNN-feature-name/`.
 3. Write `spec.md`, then `plan.md`, then `tasks.md`. If direct human answers or comments are still
    needed, keep them in feature-local files such as `questions.md` or `review-queue.md`.
-   <!-- todo: to not duplicate document logic and use only the research docs.  -->
    If the unresolved point is repo-level governance rather than feature-scoped work, move it into
    `specs/000-repo-governance/research.md`.
 4. Implement the change.
@@ -54,8 +55,8 @@ python3 tools/doc_workflow.py all
 ```
 
 7. Once the durable lessons are fixed elsewhere, close the feature by removing
-   `.specify/feature.json` and deleting or archiving the finished
-   `specs/NNN-feature-name/` directory.
+   `.specify/feature.json` and deleting the finished `specs/NNN-feature-name/` directory unless the
+   directory still carries active context. Git history remains the archive.
 
 ## Brownfield Notes
 

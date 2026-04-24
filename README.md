@@ -29,17 +29,16 @@ and deterministic checks so important assumptions do not stay buried in generate
   Main libraries: `tokio`, `reqwest`, `reqwest-eventsource`, `ratatui`,
   `metrics-exporter-prometheus`, `serde`.
 
-## Working Style
+## Workflow In Brief
 
-<!-- this section looks like instructions for llm, not human oriented. Keep this file-human-only. Remove this section, keep only valuable info. I ask you really seriously. -->
+Non-trivial changes use Spec Kit under `specs/NNN-feature-name/`, with
+`.specify/feature.json` used only while a feature is active. Managed human docs get review state from
+`.specify/doc-registry.json` plus deterministic sync; feature-local questions and review queues are
+temporary work surfaces, not durable policy.
 
-- treat this repo as a multi-project workspace, not one shared application
-- start non-trivial changes in `specs/NNN-feature-name/` and keep the active feature pointer honest
-- use file-backed review state (`questions.md`, `review-queue.md`, registry-backed frontmatter) instead of relying on chat memory
-- record managed-doc review changes through `.specify/doc-registry.json` plus sync, not by hand-editing managed frontmatter
-- move unresolved repo-level governance follow-up into `specs/000-repo-governance/research.md` instead of inline TODO comments in maintained governance docs
-- keep durable policy in `.specify/memory/constitution.md` and `specs/000-repo-governance/`
-- expect LLM output to need verification; reviewed docs, tests, and the explicit docs gate are the control surface
+When a feature closes, keep the durable lessons in maintained docs, code comments, tests, or explicit
+future-work entries. Finished feature artifacts do not need to stay in the working tree once their
+useful lessons are captured; git history is the archive.
 
 ## Where To Look Next
 
@@ -50,8 +49,7 @@ and deterministic checks so important assumptions do not stay buried in generate
   [`.specify/memory/constitution.md`](.specify/memory/constitution.md)
 - practical repo workflow:
   [`specs/000-repo-governance/quickstart.md`](specs/000-repo-governance/quickstart.md)
-- current active review surface:
-  [`.specify/feature.json`](.specify/feature.json), then the referenced feature's `review-queue.md`
-  and `questions.md` if an active feature exists
+- active review surface, if one exists:
+  `.specify/feature.json`, then the referenced feature's `review-queue.md` and `questions.md`
 - change-specific planning and implementation artifacts:
   [`specs/`](specs/README.md)

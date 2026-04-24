@@ -11,12 +11,15 @@ docmeta:
 
 ## Repo Workflow
 
-- Complete `001-docs-governance-hardening` to add file-backed question queues, stricter docs status
-  visibility, and `.specify` guardrails for LLM-assisted work.
+- Keep the docs gate, registry-backed frontmatter sync, scoped metadata preview, and no-silent-plan
+  overwrite guardrails stable as the baseline workflow.
+- When a feature closes, lift durable lessons into maintained docs, code comments, tests, or explicit
+  future-work entries, then remove the finished feature directory and rely on git history for the
+  detailed archive.
 - Keep repo-local Spec Kit template overrides conservative and close to upstream defaults unless the
   user explicitly asks for a reviewed deviation.
 - Treat the repo-local docs extension and workflow hardening as a candidate reusable basis only after
-  `001-docs-governance-hardening` proves stable.
+  it stays stable through the next feature cycle.
 
 ## Suppressor
 

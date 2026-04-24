@@ -1,7 +1,9 @@
 ---
 docmeta:
   status: maintained
-  review: client-input-derived, approved
+  review:
+  - client-input-derived
+  - approved
   purpose: Current documentation structure contract for the repo.
   source: .specify/doc-registry.json
 ---

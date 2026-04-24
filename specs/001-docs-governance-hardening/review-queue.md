@@ -21,16 +21,17 @@ blockers that keep the feature review-open.
 - `answer_needed`: direct answer requested in `questions.md`
 - `comment_requested`: review comment requested in `questions.md`
 - `update_needed`: document or workflow update still needed
+- `resolved`: durable docs or git history now carry the outcome
 
 ## Current Queue
 
 | ID | Status | Subject | Owner | Note |
 |----|--------|---------|-------|------|
-| RQ001 | approval_needed | [governance spec](../000-repo-governance/spec.md) | client | Accepted repo decisions still need explicit client confirmation in the registry |
-| RQ002 | approval_needed | [governance plan](../000-repo-governance/plan.md) | client | Standing documentation-structure contract still needs explicit client confirmation in the registry |
-| RQ003 | approval_needed | [governance quickstart](../000-repo-governance/quickstart.md) | client | Workflow quickstart still needs explicit client confirmation in the registry |
-| RQ004 | comment_requested | [spec.md](./spec.md) | client | Review the updated scope, schema requirements, additive review-label semantics, and `speckit.docs` priority |
-| RQ005 | comment_requested | [plan.md](./plan.md) | client | Review the updated implementation priorities, registry-backed managed review capture, temporary review-surface rules, and traceability guidance |
-| RQ006 | comment_requested | [tasks.md](./tasks.md) | client | Review the updated task ordering with `speckit.docs` reliability first and `doc_status.py` included in the schema work |
-| RQ007 | comment_requested | [contracts/status-report.md](./contracts/status-report.md) | client | Review the proposed queue schema, review-label semantics, and unresolved-marker policy |
-| RQ008 | comment_requested | [checklists/governance.md](./checklists/governance.md) | client | Review whether the requirements-quality checklist covers the schema, additive review labels, and docs-workflow risks |
+| RQ001 | resolved | [governance spec](../000-repo-governance/spec.md) | client | Accepted repo decisions are approved through the registry-backed review state |
+| RQ002 | resolved | [governance plan](../000-repo-governance/plan.md) | client | Standing documentation-structure contract is approved through the registry-backed review state |
+| RQ003 | resolved | [governance quickstart](../000-repo-governance/quickstart.md) | client | Workflow quickstart is approved through the registry-backed review state |
+| RQ004 | resolved | [spec.md](./spec.md) | client | Durable scope and schema lessons were lifted into maintained governance docs and the feature can rest in git history |
+| RQ005 | resolved | [plan.md](./plan.md) | client | Durable review-capture, temporary-surface, and traceability lessons were lifted into maintained governance docs |
+| RQ006 | resolved | [tasks.md](./tasks.md) | client | Remaining close-out work was completed and the finished feature tree can be removed |
+| RQ007 | resolved | [contracts/status-report.md](./contracts/status-report.md) | client | Queue semantics and unresolved-marker policy are reflected in maintained workflow guidance |
+| RQ008 | resolved | [checklists/governance.md](./checklists/governance.md) | client | Checklist lessons are closed; future audit can use git history |

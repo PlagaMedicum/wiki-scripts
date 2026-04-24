@@ -1,7 +1,9 @@
 ---
 docmeta:
   status: maintained
-  review: client-input-derived, reviewed and commented
+  review:
+  - client-input-derived
+  - approved
   purpose: Accepted repo model, scope boundaries, and documentation rules.
   source: .specify/doc-registry.json
 ---
@@ -17,9 +19,6 @@ rules. It is the durable human-maintained reference for how this repository is o
 Use this file for settled direction. Use [`research.md`](research.md) for unresolved questions and
 tradeoffs.
 
-<!-- todo: clean research.md from resolved questions and keep it clean, while new questions will not appear.
-also do the same thing for 001 questions and research. Merge the 2 into just research, no need for 2 files with the same logic. -->
-
 ## Repo Model
 
 - This repository is a workspace for separate wiki tools, not one merged application.
@@ -28,8 +27,6 @@ also do the same thing for 001 questions and research. Merge the 2 into just res
 - The repo is not trying to become a generic wiki automation framework today.
 - Most of the repo has been built with heavy LLM assistance, so durable lessons need to be fixed in
   code, tests, governance docs, or explicit comments after review.
-
-  <!-- todo: lesons learning should be fixed in constitution if not yet made -->
 
 ## Stable Documentation Model
 
@@ -46,6 +43,8 @@ also do the same thing for 001 questions and research. Merge the 2 into just res
   approval labels, and queue state must be derived from the combination.
 - Repo-level unresolved governance or review follow-up belongs in `research.md`; feature-scoped
   unresolved human input belongs in feature-local `questions.md` or `review-queue.md`.
+- Resolved temporary-surface items should be folded into durable docs and cleaned out rather than
+  kept as duplicate archives.
 
 ## Accepted Repo Decisions
 
@@ -67,7 +66,6 @@ also do the same thing for 001 questions and research. Merge the 2 into just res
   Spec Kit command `/speckit.docs`.
 - When a feature needs direct human approval, comment, or answer, record that need in feature-local
   docs such as `questions.md` or `review-queue.md` instead of relying only on chat state.
-  <!-- todo: Currently it seems that research and questions are the same logic. We need to merge them. We need to have no duplicating docs in the repo. Also, if the question is resolved, It should be restructured in the other docs and be cleaned up from the research doc.  -->
 - Spec Kit provides the structure. Codex or other LLM tools may draft and implement inside that
   structure, but they do not define the client vision by themselves.
 - Repo policy belongs in the constitution and this governance stack, not spread across many
@@ -95,8 +93,8 @@ also do the same thing for 001 questions and research. Merge the 2 into just res
 - Avoid feedback loops aggressively, especially around any journalling or follow-on actions.
 - The preferred next step is to test whether journalling entries can be hidden automatically; if
   that is not possible, evaluate whether they can be safely marked or filtered as bot-originated
-  follow-on actions.
-  <!-- todo: even if we hide and edit, it should also be marked as bot edit.  -->
+  follow-on actions. The next suppressor policy spec should decide whether any hide-and-edit
+  fallback must be marked as a bot-originated edit.
 - Current operational targets are:
   - hide latency target under one second when possible
   - recovery target within a few minutes after disconnect or restart, with priority on newer edits
@@ -119,7 +117,8 @@ also do the same thing for 001 questions and research. Merge the 2 into just res
 - Docs must distinguish current behavior from future direction explicitly.
 - Open matters that still need a decision belong in [`research.md`](research.md), not mixed into
   accepted decisions.
-  <!-- todo: accepted the decisions should not be stored in research doc.  -->
+- Accepted decisions should be moved out of temporary research or question files once the durable docs
+  are updated.
 - Maintained standing-governance docs must not keep unresolved inline TODO-style review comments
   once that follow-up has been captured in `research.md` or a scoped feature surface.
 - Feature-local unresolved questions and requested comments belong in the active feature directory,
@@ -128,7 +127,6 @@ also do the same thing for 001 questions and research. Merge the 2 into just res
   registry-managed docs.
 - Git history is the default archive. Finished feature specs should not be kept only for archival
   completeness once their durable lessons have been captured elsewhere.
-  <!-- todo: When learning lessons, it should also fix a code of feature in the comments, so it could be found in git history when needed. -->
 - If a feature revealed important pitfalls or costly mistakes, preserve that experience in code
   comments, tests, governance docs, or other maintained docs instead of leaving it buried only in
   an old feature spec.

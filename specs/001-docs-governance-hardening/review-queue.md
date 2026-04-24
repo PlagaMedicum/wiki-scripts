@@ -30,7 +30,7 @@ blockers that keep the feature review-open.
 | RQ002 | approval_needed | [governance plan](../000-repo-governance/plan.md) | client | Standing documentation-structure contract still needs explicit client confirmation in the registry |
 | RQ003 | approval_needed | [governance quickstart](../000-repo-governance/quickstart.md) | client | Workflow quickstart still needs explicit client confirmation in the registry |
 | RQ004 | comment_requested | [spec.md](./spec.md) | client | Review the updated scope, schema requirements, additive review-label semantics, and `speckit.docs` priority |
-| RQ005 | comment_requested | [plan.md](./plan.md) | client | Review the updated implementation priorities, marker-example guardrail, and follow-on feature order |
+| RQ005 | comment_requested | [plan.md](./plan.md) | client | Review the updated implementation priorities, registry-backed managed review capture, temporary review-surface rules, and traceability guidance |
 | RQ006 | comment_requested | [tasks.md](./tasks.md) | client | Review the updated task ordering with `speckit.docs` reliability first and `doc_status.py` included in the schema work |
 | RQ007 | comment_requested | [contracts/status-report.md](./contracts/status-report.md) | client | Review the proposed queue schema, review-label semantics, and unresolved-marker policy |
 | RQ008 | comment_requested | [checklists/governance.md](./checklists/governance.md) | client | Review whether the requirements-quality checklist covers the schema, additive review labels, and docs-workflow risks |

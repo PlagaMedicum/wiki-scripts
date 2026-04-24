@@ -46,6 +46,28 @@ If a feature-local queue and the registry imply different durable review state, 
 queue to request alignment work and update `.specify/doc-registry.json` for the durable state
 change.
 
+If the unresolved point is repo-level governance rather than feature-scoped follow-up, move it into
+`specs/000-repo-governance/research.md` instead of duplicating it in the feature-local question
+files.
+
+## Capture Managed Governance Review Correctly
+
+Do not hand-edit `docmeta.review` in managed standing docs such as files under
+`specs/000-repo-governance/`.
+
+When review or approval changes on a managed governance doc:
+
+1. Update `.specify/doc-registry.json` with the additive review labels that reflect the new durable
+   state.
+2. Run the docs sync/lint workflow so the managed doc frontmatter is regenerated from the registry.
+3. If the review also produced unresolved follow-up comments, move those points into
+   `specs/000-repo-governance/research.md`, a feature-local review file, or a new scoped feature.
+4. Remove inline TODO-style review comments from the maintained governance doc once the temporary
+   surface has absorbed them.
+
+When a review or feature produces a durable governance lesson, keep a light trace back to the
+originating feature or decision when that will help later audit or git-history lookup.
+
 ## Validate The Docs Workflow
 
 Run the explicit docs gate:
@@ -110,10 +132,12 @@ Use this close-out sequence:
 
 1. Run `rtk python3 tools/doc_workflow.py status --json` and confirm that the active feature has no
    pending question or review-queue items left to resolve.
-2. Run `rtk python3 tools/doc_workflow.py all` and confirm the docs gate still passes.
-3. Run `rtk git status --short` and confirm the active feature artifacts and related tooling/docs are
+2. Run `rtk python3 tools/doc_status.py lint` and confirm there is no managed-doc review drift and
+   no remaining inline TODO-style review comments in maintained governance docs.
+3. Run `rtk python3 tools/doc_workflow.py all` and confirm the docs gate still passes.
+4. Run `rtk git status --short` and confirm the active feature artifacts and related tooling/docs are
    tracked the way you expect before treating the work as landed.
-4. Only after the review queue is clear and the tree is landed intentionally should `.specify/feature.json`
+5. Only after the review queue is clear and the tree is landed intentionally should `.specify/feature.json`
    stop pointing at this feature.
 
 The feature spec may remain `Draft` until those review and approval steps are explicitly cleared.

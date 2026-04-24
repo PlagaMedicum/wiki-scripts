@@ -37,6 +37,17 @@ Managed docs get their metadata from `.specify/doc-registry.json`.
 - Multiple labels may coexist. The workflow must derive queue state from the combination rather
   than treating each label as an isolated pending flag.
 
+## Managed Governance Review Capture
+
+- Review or approval changes on managed governance docs become durable only when
+  `.specify/doc-registry.json` is updated and the managed frontmatter is synced from that registry.
+- Manual edits to managed-doc `docmeta.review` do not count as durable review evidence.
+- Feature-local queue files may request alignment or follow-up work on managed docs, but they do
+  not replace the registry as the source of truth for durable managed review state.
+- Unresolved review comments on maintained standing-governance docs must move into
+  `specs/000-repo-governance/research.md`, a feature-local review file, or a follow-on feature
+  spec. They should not remain as inline TODO markers in the maintained doc.
+
 ## File-Backed Question Contract
 
 Feature-local `questions.md` files may contain entries in this form:
@@ -81,6 +92,14 @@ Action-needed rows in `review-queue.md` may be surfaced by the status tool for:
 - `answer_needed`
 - `comment_requested`
 - `update_needed`
+
+## Temporary Review Surface Contract
+
+- Repo-level unresolved governance questions belong in `specs/000-repo-governance/research.md`.
+- Feature-scoped human input belongs in the active feature's `questions.md` or `review-queue.md`.
+- Resolved items should be cleaned out of the temporary surface once the durable docs are updated.
+- When durable governance lessons are lifted from a feature review, the repo should preserve
+  traceability to the originating feature or decision source when that materially helps later audit.
 
 ## Queue Precedence And Fallback
 

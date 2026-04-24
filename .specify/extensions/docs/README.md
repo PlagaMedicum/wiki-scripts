@@ -40,9 +40,16 @@ Managed-doc review semantics are additive. Provenance labels such as `client-inp
 coexist with terminal labels such as `approved`, and the queue is derived from the combination
 rather than from one label in isolation.
 
+Managed-governance review or approval changes are durable only when `.specify/doc-registry.json`
+is updated and synced. Hand-edited review labels in managed Markdown are not the source of truth.
+
 If the active feature has `questions.md` or `review-queue.md` files with the documented queue
 schema, the status report also surfaces pending direct answers, requested comments, and feature
 updates from those files.
+
+Repo-level unresolved governance follow-up belongs in `specs/000-repo-governance/research.md`.
+Maintained governance docs should not keep unresolved inline TODO-style review comments once that
+follow-up has been captured in an authoritative temporary surface.
 
 Unresolved-marker detection is case-insensitive, but marker syntax shown inside inline code or
 fenced code examples is treated as documentation, not as live unresolved work.
@@ -71,3 +78,6 @@ Scope meanings:
 Frontmatter is authoritative when both frontmatter and legacy `DOCMETA` are present. Legacy
 `DOCMETA` may still be parsed during migration, but `DOCMETA`-only workflow docs are no longer the
 maintained contract.
+
+Broad metadata sync and feature-generation are different write surfaces. Use scope or dry-run for
+the former, and explicit overwrite actions for the latter.

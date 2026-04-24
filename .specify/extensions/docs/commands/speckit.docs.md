@@ -35,7 +35,11 @@ This command runs the same final gate as `make docs`:
 - The status output is a review/closure queue, not an automatic approval system.
 - Managed-doc review labels are additive, so provenance and terminal review/approval labels can
   coexist without remaining falsely pending.
+- Managed-governance review or approval changes become durable only through
+  `.specify/doc-registry.json` plus sync, not through hand-edited Markdown review labels.
 - If the active feature tracks pending answers, requested comments, or queued updates in
   `questions.md` and `review-queue.md`, those items can appear in the status output too.
+- Repo-level unresolved governance follow-up belongs in `specs/000-repo-governance/research.md`
+  rather than as inline TODO review comments in maintained governance docs.
 - Literal marker syntax shown in inline code or fenced contract examples should not be treated as a
   live unresolved item.

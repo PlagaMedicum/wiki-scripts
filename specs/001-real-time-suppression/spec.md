@@ -70,6 +70,10 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - A recent-change event or API result is missing expected metadata such as title, revision ID, actor, timestamp, or comment flags.
 - A catch-up window includes pages that moved, disappeared, or left the watched set during the window.
 - Retry exhaustion leaves unresolved items after catch-up and requires operator escalation or documented release blocking.
+- `Удзельнік:Wizardist/SuppressionList` changes while eligible edits already exist on newly added pages.
+- `Вікіпедыя:Запыты да схавальнікаў` changes while the cached source list is unchanged but recent watched-page edits still need immediate verification.
+- MediaWiki rejects a timestamp parameter or returns a non-JSON/API-error response during catch-up or RevDel.
+- A low-spec host runs the daemon and TUI concurrently while catch-up, logging, and status persistence are active.
 
 ## Requirements *(mandatory)*
 
@@ -89,6 +93,12 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **FR-012**: The system MUST produce audit information sufficient for operational review without exposing sensitive content, hidden text, credentials, tokens, or session secrets.
 - **FR-013**: The system MUST make "daemon running but real-time hiding ineffective" visible as an unhealthy state rather than a normal running state.
 - **FR-014**: The system MUST support verification with controlled events so regressions in immediate hiding, stall detection, catch-up, and reporting can be tested before production use.
+- **FR-015**: The system MUST treat changes to `Удзельнік:Wizardist/SuppressionList` and configured source-adjacent request pages, including `Вікіпедыя:Запыты да схавальнікаў`, as immediate recovery triggers that refresh source state and run bounded catch-up for newly added or recently affected watched pages.
+- **FR-016**: The system MUST serialize MediaWiki API timestamp parameters in a MediaWiki-accepted UTC second-precision format and test this behavior against catch-up and coverage queries.
+- **FR-017**: The system MUST classify MediaWiki/API/transport failures into compact non-sensitive categories, persist the actionable class/code/status, and aggregate repeated failures so one root cause cannot flood the TUI or terminal.
+- **FR-018**: The system MUST keep implementation boundaries microservice-like inside the existing local daemon: stream ingestion, source refresh, catch-up, worker execution, state persistence, and TUI rendering communicate through explicit structs, bounded channels, and small interfaces, without adding extra OS services or public network surfaces for this feature.
+- **FR-019**: The system MUST remain economical on low-spec hardware by using bounded queues, bounded catch-up windows, bounded concurrency, compact persisted state, coalesced logging, and no unbounded in-memory revision/title buffers, without lowering latency/recovery targets or dropping documentation evidence.
+- **FR-020**: The system MUST preserve implementation lessons in durable code comments, tests, and maintained suppressor docs when they prevent recurrence of this incident, especially timestamp formatting, source-list catch-up, error classification, warning coalescing, and test-page benchmark rules.
 
 ### Key Entities
 
@@ -97,6 +107,9 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **Suppression Action**: A hide attempt or confirmed hide result for an observed edit. Key attributes include target edit, outcome, timing, error reason if any, and retry state.
 - **Real-Time Health State**: The operator-visible freshness and effectiveness state of background monitoring. Key attributes include last observed change time, last eligible edit time, current lag, recovery state, and latest actionable notice.
 - **Coverage Window**: A bounded time range used to verify edits after the suppressor-rights accident or after daemon downtime. Key attributes include start, end, checked pages, counted outcomes, and unresolved items.
+- **API Failure Snapshot**: A compact non-sensitive classification of a MediaWiki/API/transport failure. Key attributes include failure class, API code, HTTP status, retryability, operation, safe sample title/revision, and timestamp.
+- **Source Refresh Event**: An observed source-list or request-page change plus its refresh and immediate catch-up result. Key attributes include trigger title, trigger revision, old/new source revision, added/removed titles, catch-up scope, outcome, and safe error details.
+- **Benchmark Run**: A controlled verification run on `Удзельнік:Plaga med Bot/suppressor/tests`. Key attributes include run ID, bot-marked edit count, timing samples, percentile summaries, and unresolved benchmark revisions.
 
 ## Success Criteria *(mandatory)*
 
@@ -108,6 +121,12 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **SC-004**: Accident-window verification accounts for 100% of eligible watched-page edits in the selected window as hidden, already hidden, skipped, failed, or unresolved.
 - **SC-005**: The operator can distinguish "running and hiding", "running but catching up", "running but unhealthy", and "blocked by rights/session/wiki error" from the console without inspecting raw logs.
 - **SC-006**: Automated or controlled verification covers immediate hiding, feed stall recovery, missed-edit catch-up, duplicate event handling, a burst of at least 10 controlled eligible events across watched pages, public `user|comment` RevDel safety boundaries, and rights/session failure reporting.
+- **SC-007**: When `Удзельнік:Wizardist/SuppressionList` adds a watched title during daemon operation, the daemon refreshes the source state and starts bounded catch-up for newly added titles without waiting for manual reload or scheduled reconciliation.
+- **SC-008**: Catch-up and coverage tests prove that MediaWiki timestamp parameters contain no fractional precision and that a mocked `badtimestamp` response is surfaced as a classified non-retryable API failure instead of thousands of per-page warnings.
+- **SC-009**: Runtime warning output for a repeated catch-up/API root cause is coalesced into an aggregate summary with counts and safe samples, and the TUI remains readable on a compact terminal.
+- **SC-010**: A benchmark run using `Удзельнік:Plaga med Bot/suppressor/tests` creates only bot-marked test edits, accounts for every benchmark revision, and records publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
+- **SC-011**: Low-spec verification records idle and active resource use for daemon plus TUI, and default configuration keeps queues, concurrency, state files, and logs bounded while meeting the realtime and recovery targets.
+- **SC-012**: Durable suppressor docs and targeted code comments/tests capture the incident lessons, performance evidence, and operational checks needed to prevent recurrence, including timestamp formatting, source-triggered catch-up, API error classification, warning coalescing, and benchmark safety.
 
 ## Assumptions
 
@@ -117,10 +136,14 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Nightly reconciliation remains a fallback safety net; real-time hiding is the primary protection path.
 - The exact accident window can be supplied during planning or operation; the feature must support checking any bounded recent window rather than hard-coding one date range.
 - Sensitive article content and hidden text must not be displayed in routine logs, reports, or console status.
+- Microservice architecture means internal microservice-like boundaries in one local binary for this feature, not a split into extra deployed services.
+- Economy means bounded resource use and measured low-spec behavior without compromising performance, latency, recovery targets, or documentation quality.
 
 ## Documentation Impact
 
 - Update suppressor operator documentation to explain real-time health states, expected hiding latency, emergency catch-up, and accident-window coverage checks.
 - Update suppressor implementation or runtime-boundary documentation to distinguish real-time hiding, catch-up, and nightly reconciliation responsibilities.
 - Update suppressor testing documentation with controlled verification cases for immediate hiding, stale monitoring, missed-event catch-up, duplicate events, and rights/session failures.
-- No repo governance change is expected unless planning discovers that this incident requires a broader operational policy.
+- Update implementation docs with internal service boundaries, resource-economy defaults, state/log bounds, and incident lessons that should shape future suppressor changes.
+- Update operations docs with low-spec expectations, benchmark use of `Удзельнік:Plaga med Bot/suppressor/tests`, bot-edit requirements, and release evidence interpretation.
+- Repo governance has been amended in constitution v1.5.0 to require low-spec economy without performance, robustness, or documentation compromise.

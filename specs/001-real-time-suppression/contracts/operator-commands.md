@@ -93,8 +93,104 @@ Success:
 
 - Operator can distinguish healthy, catching-up, stale, unhealthy, and blocked states.
 
+### Source-List Immediate Recovery
+
+Purpose: Handle changes to `Удзельнік:Wizardist/SuppressionList` and source-adjacent request pages without waiting for reconciliation.
+
+Inputs:
+
+- Recentchange event for `Удзельнік:Wizardist/SuppressionList`.
+- Recentchange event for `Вікіпедыя:Запыты да схавальнікаў` or a configured request-page title.
+- Optional operator-triggered reload remains available, but it is not the primary path.
+
+Output:
+
+- Cache refresh outcome.
+- Count of newly added and removed watched titles.
+- Immediate catch-up trigger and title scope.
+- Catch-up summary with hidden, already-hidden, skipped, failed, and unresolved counts.
+- Actionable refresh or catch-up error when the source page or API fails.
+
+Success:
+
+- Newly added watched pages are checked immediately in a bounded recent window.
+- The operator can see whether the source-list edit was handled, skipped as unchanged, or failed.
+
+Failure:
+
+- Refresh failure is reported as an unhealthy/actionable notice.
+- Catch-up failure is summarized by root cause and unresolved count.
+- The daemon does not silently ignore source-list refresh errors.
+
+### Test Page Benchmark
+
+Purpose: Produce production-safe end-to-end latency evidence using the approved bot test page.
+
+Inputs:
+
+- Test page title: `Удзельнік:Plaga med Bot/suppressor/tests`.
+- Requested edit count.
+- Optional run label.
+- Optional dry-run/report-only mode for transport and catch-up checks.
+
+Required wiki behavior:
+
+- Automated benchmark edits may write only to `Удзельнік:Plaga med Bot/suppressor/tests`.
+- Every benchmark edit must be submitted with the MediaWiki bot edit marker.
+- Edit summaries must identify the run as a suppressor benchmark.
+- Routine benchmark runs must not edit `Удзельнік:Wizardist/SuppressionList`; source-list behavior is tested only when explicitly requested.
+
+Output:
+
+- Run ID and test page title.
+- Count of created bot-marked edits.
+- Count hidden, already-hidden, failed, unresolved, and skipped.
+- Publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timing samples.
+- p50/p95/p99 only when sample size is sufficient; otherwise mark the run as smoke evidence.
+
+Success:
+
+- All benchmark revisions are hidden or explicitly accounted for.
+- Timing evidence is safe to copy into operator docs.
+
+Failure:
+
+- Any unhidden benchmark revision is reported with revision ID, reason, and next action.
+- Missing bot marker is a hard benchmark failure.
+
+### Resource Economy Verification
+
+Purpose: Prove the daemon and TUI remain suitable for low-spec local hardware while preserving realtime safety.
+
+Inputs:
+
+- Scenario name: idle daemon, daemon plus TUI, live edit, startup catch-up, source-refresh catch-up, benchmark, or failure storm.
+- Optional sample duration.
+- Optional report-only mode.
+
+Output:
+
+- Scenario and duration.
+- RSS/memory summary when available.
+- CPU summary when available.
+- Maximum queue depth and API concurrency.
+- State file size summary.
+- Log volume summary and warning aggregation count.
+- Any resource limit that was hit or approached.
+
+Success:
+
+- Resource use remains bounded and the realtime/recovery targets are still met.
+- Warning coalescing prevents repeated root-cause failures from flooding the terminal.
+
+Failure:
+
+- Unbounded queue/state/log growth, hot-loop CPU use, or unacceptable memory growth blocks production-readiness claims until fixed or explicitly documented as a release limitation.
+
 ## TUI Action Placement
 
 - Keep the Actions list short and operator-focused.
 - Prefer adding "Emergency catch-up" and "Coverage report" only if they map to implemented one-shot commands.
 - Keep manual cache reload and nightly reconciliation visible as slower diagnostic/fallback actions, not as the expected live hiding path.
+- Add benchmark entry points only if they are clearly labeled as test-page actions and cannot accidentally target production sensitive pages.
+- Prefer one-shot resource verification commands or docs-guided measurement over always-on heavy profiling.

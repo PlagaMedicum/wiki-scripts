@@ -50,6 +50,25 @@ rtk python3 tools/doc_workflow.py all
 4. Confirm bounded catch-up runs with a visible recovery trigger.
 5. Confirm eligible missed edits are hidden or reported unresolved before the state returns to healthy.
 
+## API Timestamp And Error Classification Check
+
+1. Run a mocked MediaWiki API test where `rvstart` receives the daemon's serialized catch-up timestamp.
+2. Confirm the timestamp has UTC second precision and no fractional component.
+3. Run a mocked `badtimestamp` response and confirm the daemon records `api_code=badtimestamp`, operation `fetch-revisions`, and a non-retryable outcome.
+4. Run mocked non-JSON, HTTP status, timeout, and network-failure responses.
+5. Confirm runtime status and TUI output distinguish those cases without showing response bodies, cookies, tokens, hidden text, or raw comments.
+6. Confirm repeated catch-up failures produce a summary count and safe sample titles instead of one terminal warning per watched page.
+
+## Source-List Immediate Recovery Check
+
+1. Simulate a recentchange event for `Удзельнік:Wizardist/SuppressionList`.
+2. Mock the refreshed source page so it adds at least one watched title.
+3. Confirm cache refresh diffs the old and new watched sets.
+4. Confirm immediate bounded catch-up runs for newly added titles before the source-list edit is treated as handled.
+5. Simulate a recentchange event for `Вікіпедыя:Запыты да схавальнікаў`.
+6. Confirm the daemon runs the configured immediate recent-window catch-up or reports a clear actionable reason if it cannot.
+7. Confirm refresh failures are visible in runtime status and are not silently ignored.
+
 ## Accident-Window Check
 
 1. Choose a bounded start and end time covering the suppressor-rights accident or a controlled local test window.
@@ -66,20 +85,70 @@ rtk python3 tools/doc_workflow.py all
 5. Use at least 100 controlled observations before claiming percentile compliance; smaller production-safe manual checks are smoke evidence, not SLO proof.
 6. Compare the collected evidence with the feature targets for normal hiding, stale detection, and recovery completion.
 
+## Bot Test Page Benchmark
+
+Approved external test page:
+
+```text
+Удзельнік:Plaga med Bot/suppressor/tests
+```
+
+Rules:
+
+- Automated and manual benchmark edits may write only to that test page.
+- Every benchmark edit must be marked as a bot edit through the MediaWiki edit API.
+- Edit summaries must include a suppressor benchmark run label.
+- Benchmark content must be test-only and must not include sensitive payloads.
+- Routine benchmark runs must not edit `Удзельнік:Wizardist/SuppressionList`; source-list behavior is tested separately and only when explicitly requested.
+
+Benchmark flow:
+
+1. Confirm the bot account is authenticated and has the required rights.
+2. Create a unique run ID.
+3. Submit the requested number of edits to `Удзельнік:Plaga med Bot/suppressor/tests` with the bot marker set.
+4. Observe the edits through the realtime path or the explicit benchmark harness.
+5. Confirm each benchmark revision is hidden or explicitly reported as already-hidden, failed, or unresolved.
+6. Record publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
+7. Mark runs with fewer than the documented percentile sample size as smoke checks, not SLO proof.
+8. Copy final benchmark evidence into `suppressor/docs/operations.md` during release close-out.
+
+## Resource Economy And Boundary Check
+
+1. Run the daemon alone and record idle CPU, memory, queue depth, and state file sizes.
+2. Run the daemon with the TUI open and repeat the same measurements.
+3. Run a bounded startup catch-up, a source-refresh catch-up, and a mocked repeated-failure catch-up.
+4. Confirm API concurrency, queue depth, retained outcomes, benchmark samples, and log output stay bounded.
+5. Confirm repeated failures are coalesced into aggregate warnings and do not flood the TUI.
+6. Inspect the code boundaries for stream ingestion, source refresh, catch-up, MediaWiki API transport, worker execution, runtime state, and TUI rendering.
+7. Confirm cross-boundary data uses typed structs/enums or small function contracts rather than raw string conventions where stable behavior matters.
+8. Record low-spec evidence and any remaining resource tradeoffs in `suppressor/docs/operations.md` and architecture notes in `suppressor/docs/implementation.md`; do not accept a tradeoff that lowers performance targets or drops durable documentation evidence.
+
+## Durable Lesson Check
+
+1. Confirm regression tests cover MediaWiki timestamp formatting, `badtimestamp` classification, source-list immediate catch-up, source-refresh failures, warning coalescing, and bot-marked benchmark edits.
+2. Confirm implementation docs explain internal service boundaries and resource-economy defaults.
+3. Confirm operations docs explain how to read classified errors, warning summaries, source refresh status, low-spec evidence, and benchmark output.
+4. Confirm runtime-boundary docs list any new or changed state fields and their retention bounds.
+5. Keep code comments limited to non-obvious protocol or safety rules that tests alone do not explain.
+
 ## Production Readiness Gate
 
 Do not call the fix production-ready until:
 
 - realtime live hide verification passes;
 - silent-starvation and reconnect recovery verification passes;
+- MediaWiki timestamp serialization and API error classification checks pass;
+- source-list immediate recovery checks pass;
 - accident-window coverage verification passes for the chosen window;
 - latency evidence shows the target path and recovery path are within the documented thresholds, or the remaining gap is explicitly documented before release;
+- resource-economy verification passes for daemon, TUI, catch-up, source-refresh catch-up, benchmark, and repeated-failure scenarios while preserving the realtime/recovery performance targets and enough documentation evidence for maintainers to repeat the checks;
 - unresolved accident-window items are zero, or each remaining item has a documented owner, reason, next action, and explicit release decision;
 - rights/session loss, blocked state, unrecoverable API errors, or stale realtime state after deployment are treated as release stop conditions until resolved or explicitly accepted for a dry-run/report-only release;
 - unavailable external wiki conditions are documented with the exact checks that could not run and the narrower confidence claim that remains;
 - suppressor tests pass with the documented command;
 - repo docs workflow passes;
 - operator docs describe realtime health, emergency catch-up, and coverage reports.
+- maintained docs and targeted tests preserve the incident lessons required to prevent recurrence.
 
 ## Feature Close-Out Notes
 

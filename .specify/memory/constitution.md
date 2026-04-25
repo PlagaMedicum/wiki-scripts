@@ -10,12 +10,13 @@ docmeta:
 
 <!--
 Sync Impact Report
-Version change: 1.3.0 -> 1.4.0
+Version change: 1.4.0 -> 1.5.0
 Modified principles:
-- IV. Deterministic Documentation And Honest Status -> IV. Deterministic Documentation, Safe Writes, And Honest Status
-- Workflow And Quality Gates (expanded guidance only)
+- Added VI. Resource Economy, Robustness, And Durable Lessons
+- Language And Deployment Policy (expanded resource-boundary guidance)
+- Workflow And Quality Gates (expanded resource, recovery, and lesson-preservation gates)
 Added sections:
-- None
+- VI. Resource Economy, Robustness, And Durable Lessons
 Removed sections:
 - None
 Templates requiring updates:
@@ -80,6 +81,22 @@ New tools, major refactors, service splits, workflow changes, doc-governance cha
 high-risk operational changes MUST use Spec Kit. The required path is `spec.md`, then `plan.md`,
 then `tasks.md`, then implementation, then the explicit docs gate.
 
+### VI. Resource Economy, Robustness, And Durable Lessons
+
+Operational tools MUST be designed for low-spec local machines by default. Plans for performance-,
+reliability-, or safety-sensitive work MUST state concrete resource goals for CPU, memory, disk,
+network, concurrency, queues, polling, and log volume when those resources can constrain operation.
+Implementations MUST prefer bounded work queues, bounded concurrency, compact durable state,
+coalesced or rate-limited warnings, and idle waits over busy loops or unbounded accumulation.
+Economy MUST NOT justify weaker correctness, degraded performance, delayed safety actions, lossy
+recovery, missing observability, or reduced documentation quality; any tradeoff between cost,
+latency, throughput, safety, robustness, and documentation completeness MUST be explicit in the spec
+or plan. Documentation economy means concise durable evidence, not undocumented decisions.
+Microservice architecture in this repo means explicit ownership boundaries first. Additional OS
+processes, public services, or dependencies require evidence that they improve isolation,
+robustness, or operator control more than they increase overhead. Incident lessons MUST be preserved
+in tests, operator docs, code comments, or governance docs before the feature closes.
+
 ## Language And Deployment Policy
 
 - Python is the default language for smaller and faster-turnaround wiki automation.
@@ -89,6 +106,10 @@ then `tasks.md`, then implementation, then the explicit docs gate.
 - Public network services are not the default goal for this repo.
 - Projects SHOULD remain separately packageable and separately runnable where that improves failure
   isolation or operator control.
+- Resource-sensitive local tools SHOULD stay single-process unless a separate process gives a clear
+  failure-isolation or operator-control benefit that is worth its runtime cost.
+- New dependencies, services, or long-running processes MUST justify their resource cost, new
+  failure modes, and operator burden in the feature plan.
 
 ## Workflow And Quality Gates
 
@@ -117,6 +138,15 @@ then `tasks.md`, then implementation, then the explicit docs gate.
   trace to the originating feature or decision when that materially helps later audit or git
   history lookup.
 - Production-readiness claims MUST be backed by strong automated coverage plus manual verification.
+- Safety-, reliability-, or performance-sensitive specs and plans MUST include resource goals,
+  bounded concurrency/state/logging decisions, recovery/status behavior, and test or benchmark
+  evidence scaled to the risk.
+- Implementation task lists SHOULD include low-spec verification whenever CPU, memory, disk,
+  network, or queue growth could affect correctness, latency, or operator trust.
+- Incident fixes MUST capture the lesson in tests, docs, or narrowly useful comments so the repo
+  does not rely on chat history to remember why the fix exists.
+- Documentation work MAY be terse, but it MUST preserve enough context, evidence, and lessons for a
+  future maintainer or operator to repeat the decision without depending on chat history.
 - Tooling, logging, and metrics MUST avoid secrets and sensitive payloads.
 - Operator surfaces, CLIs, and Makefiles SHOULD stay small, well-described, and layered. Prefer a
   few clear entrypoints over long flat command lists that only make sense after rereading docs.
@@ -143,4 +173,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.4.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-20
+**Version**: 1.5.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-25

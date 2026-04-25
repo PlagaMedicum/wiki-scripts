@@ -21,6 +21,11 @@ The docs gate is frontmatter-first. Managed docs sync registry-backed metadata i
 frontmatter, while local docs are schema-linted against the same frontmatter contract without
 claiming registry-backed review state.
 
+For safety-, reliability-, or performance-sensitive work, the docs gate is also the point where
+resource goals, low-spec verification, recovery/status evidence, and durable incident lessons must
+be present in the affected maintained or project-local docs. Documentation can be concise, but it
+must not drop the performance evidence or operational lessons needed to repeat the decision.
+
 The gate command and the maintenance command are different surfaces:
 
 - `python3 tools/doc_workflow.py all` or `/speckit.docs` runs the full docs gate

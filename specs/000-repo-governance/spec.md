@@ -27,6 +27,8 @@ tradeoffs.
 - The repo is not trying to become a generic wiki automation framework today.
 - Most of the repo has been built with heavy LLM assistance, so durable lessons need to be fixed in
   code, tests, governance docs, or explicit comments after review.
+- Low-spec local operation is a default constraint for operational tools. Resource economy must
+  support robustness, performance, and documentation quality, not replace them.
 
 ## Stable Documentation Model
 
@@ -56,6 +58,10 @@ tradeoffs.
 - Rust is preferred for performance-sensitive, reliability-sensitive, or safety-sensitive services.
 - Cross-language reuse should default to shared contracts, schemas, process rules, or clear process
   boundaries before embedded shared libraries.
+- Resource-sensitive tools should prefer explicit internal ownership boundaries before adding
+  separate long-running processes, public services, or dependencies.
+- Queues, concurrency, durable state, polling, and log volume should be bounded when unbounded growth
+  could affect correctness, latency, recovery, or operator trust.
 
 ### Workflow
 
@@ -72,6 +78,10 @@ tradeoffs.
   overlapping docs.
 - For long-running work, keep commits reasonably small and descriptive so the feature history stays
   usable as evidence later.
+- Safety-, reliability-, or performance-sensitive specs and plans should include resource goals,
+  recovery/status behavior, low-spec verification, and durable lessons captured in tests or docs.
+- Resource constraints must not be used to lower performance goals or skip documentation of evidence,
+  operational checks, and lessons learned.
 
 ### Biblio
 
@@ -102,6 +112,11 @@ tradeoffs.
     suppression-list input
 - The service should log stop reasons with enough detail for troubleshooting without leaking secrets
   or sensitive payloads.
+- The service should use internal service boundaries for stream ingestion, source-page refresh,
+  reconciliation, suppression execution, status, and persistence while staying a local low-overhead
+  daemon unless a process split is justified.
+- Suppressor work should treat log storms, unbounded queues, needless polling, and oversized durable
+  state as correctness risks because they can delay hiding or hide real operational failures.
 
 ### Environment Contract
 
@@ -130,6 +145,10 @@ tradeoffs.
 - If a feature revealed important pitfalls or costly mistakes, preserve that experience in code
   comments, tests, governance docs, or other maintained docs instead of leaving it buried only in
   an old feature spec.
+- If a feature changes resource, recovery, or operator-status behavior, update the project-local
+  docs and quickstart checks so later maintainers can repeat the evidence.
+- Concise docs are preferred, but undocumented operational decisions are not acceptable for
+  safety-sensitive tools.
 - When a feature or review produces a durable governance lesson, preserve traceability back to the
   originating feature or decision source when that materially helps later audit or git-history
   lookup.

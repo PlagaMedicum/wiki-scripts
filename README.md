@@ -25,7 +25,7 @@ and deterministic checks so important assumptions do not stay buried in generate
   Main libraries: `pywikibot`, `rich`, `prompt-toolkit`, `python-dotenv`.
 - [`suppressor/`](suppressor/README.md)
   Rust tooling for fast public RevDel on watched revisions, kept intentionally narrow and
-  safety-sensitive.
+  safety-sensitive, with low-spec local operation treated as a design constraint.
   Main libraries: `tokio`, `reqwest`, `reqwest-eventsource`, `ratatui`,
   `metrics-exporter-prometheus`, `serde`.
 
@@ -39,6 +39,11 @@ temporary work surfaces, not durable policy.
 When a feature closes, keep the durable lessons in maintained docs, code comments, tests, or explicit
 future-work entries. Finished feature artifacts do not need to stay in the working tree once their
 useful lessons are captured; git history is the archive.
+
+Safety-, reliability-, or performance-sensitive changes must state resource goals, keep queues and
+concurrency bounded, avoid unnecessary services or dependencies, and verify that economy does not
+come at the cost of correctness, performance, recovery, operator-visible status, or durable
+documentation.
 
 ## Where To Look Next
 

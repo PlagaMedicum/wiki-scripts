@@ -28,7 +28,10 @@ docmeta:
 **Target Platform**: [e.g., Linux server, iOS 15+, WASM, or explicitly unknown]
 **Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app, or explicitly unknown]  
 **Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps, or explicitly unknown]  
+**Resource Goals**: [CPU, memory, disk, network, queue, polling, and log-volume budgets or explicitly unknown]
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable, or explicitly unknown]  
+**Architecture Constraints**: [internal service boundaries, process boundaries, dependency limits, or explicitly unknown]
+**Minimalism Constraints**: [what must stay simple, local, bounded, or low-overhead, or explicitly unknown]
 **Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens, or explicitly unknown]
 
 If a direct human answer is still required, write it into `questions.md` or a feature-local review
@@ -53,6 +56,14 @@ Include document impact in this check:
 - whether `.specify/doc-registry.json` changes
 - whether standing-governance review follow-up must move out of maintained docs and into an
   authoritative temporary surface
+- whether safety-, reliability-, or performance-sensitive work states resource goals, bounded
+  concurrency/state/logging, and recovery/status behavior
+- whether resource economy preserves performance targets and documentation completeness instead of
+  treating them as optional
+- whether a requested microservice architecture is represented by explicit ownership boundaries
+  first, with any extra process or dependency justified by isolation or operator-control benefits
+- whether low-spec verification, benchmarks, or manual checks are required before completion
+- whether incident lessons need tests, docs, or narrowly useful code comments before closure
 - whether `make docs` / `python3 tools/doc_workflow.py all` must be run
 - whether the feature needs `questions.md` or `review-queue.md` updates to capture pending human
   input explicitly

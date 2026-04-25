@@ -29,6 +29,9 @@ specify check
    needed, keep them in feature-local files such as `questions.md` or `review-queue.md`.
    If the unresolved point is repo-level governance rather than feature-scoped work, move it into
    `specs/000-repo-governance/research.md`.
+   For safety-, reliability-, or performance-sensitive work, state resource goals, bounded
+   concurrency/state/logging, recovery/status behavior, low-spec verification, and how incident
+   lessons will be preserved.
 4. Implement the change.
 5. Check the current docs queue when you need to see pending approval, manual review, answer, or
    update work:
@@ -77,6 +80,9 @@ python3 tools/doc_workflow.py all
   consistent instead of inventing a second header system for them.
 - When durable lessons from a feature or review are folded into maintained docs, keep a light trace
   to the originating feature or decision when it will materially help later audit or git history.
+- Do not trade away correctness, recovery, or operator-visible status for resource economy. Make any
+  cost, latency, throughput, safety, robustness, or documentation tradeoff explicit in the active
+  spec or plan.
 
 ## Repo-Local Refresh
 

@@ -75,6 +75,7 @@ Fields:
 - `completed_at`: Time the action reached success or terminal failure.
 - `outcome`: `hidden`, `already-hidden`, `skipped`, `retrying`, `failed`, `unresolved`, or `blocked`.
 - `reason_code`: Compact non-sensitive reason such as `duplicate`, `not-watched`, `bad-token-retried`, `permission-denied`, `network`, `api-transient`, or `api-terminal`.
+- `error`: Optional `ApiFailureSnapshot` for failed, retrying, unresolved, or blocked actions.
 - `attempt_count`: Number of worker/API attempts.
 
 Validation rules:
@@ -93,6 +94,55 @@ queued -> submitted -> failed -> unresolved
 queued -> skipped
 queued -> blocked
 ```
+
+## ApiFailureSnapshot
+
+Represents compact non-sensitive evidence for a failed MediaWiki API call or transport operation.
+
+Fields:
+
+- `class`: `api-json-error`, `http-status`, `non-json-response`, `decode-error`, `network`, `timeout`, `auth-session`, or `unknown`.
+- `api_code`: MediaWiki API error code when present, such as `badtimestamp`, `badtoken`, or `permissiondenied`.
+- `http_status`: HTTP status code when available.
+- `content_type`: Response content type when available.
+- `retryable`: Whether the daemon considers the failure transient.
+- `operation`: `fetch-revisions`, `fetch-page-content`, `fetch-source-metadata`, `revisiondelete`, `login`, `csrf-token`, `userinfo`, or `freshness-probe`.
+- `sample_title`: Optional page title associated with the failure.
+- `sample_revid`: Optional revision ID associated with the failure.
+- `message`: Short redacted message suitable for TUI display.
+- `occurred_at`: Time the failure was classified.
+
+Validation rules:
+
+- Must not store full response bodies, hidden text, raw comments, credentials, tokens, cookies, or session material.
+- Decode and non-JSON failures must preserve enough metadata to tell whether the daemon contacted MediaWiki and what kind of response came back.
+- Repeated failures with the same class/code may be aggregated in summaries while retaining a small safe sample.
+
+## SourceListRefresh
+
+Represents an observed change to the suppression-list source or request page and the recovery work triggered by that change.
+
+Fields:
+
+- `trigger_title`: Page that caused the refresh, such as `Удзельнік:Wizardist/SuppressionList` or `Вікіпедыя:Запыты да схавальнікаў`.
+- `trigger_revid`: Revision ID of the triggering edit when available.
+- `started_at`: Local time the refresh started.
+- `completed_at`: Local time the refresh completed or failed.
+- `old_source_revid`: Previous cached source revision.
+- `new_source_revid`: New source revision after refresh.
+- `new_titles`: Newly added watched titles after diffing the old and new cache snapshots.
+- `removed_titles`: Titles removed from the watched set after refresh.
+- `redirects_reused`: Whether existing redirect expansion was preserved.
+- `catchup_triggered`: Whether immediate bounded catch-up was started.
+- `catchup_title_scope`: `new-titles`, `request-window`, or `all-watched`.
+- `outcome`: `unchanged`, `refreshed`, `refresh-failed`, `catchup-started`, `catchup-failed`, or `completed`.
+- `error`: Optional `ApiFailureSnapshot`.
+
+Validation rules:
+
+- A successful source-list refresh that adds titles must trigger immediate bounded catch-up over those titles unless an operator explicitly runs report-only mode.
+- Refresh failures must be visible as unhealthy or actionable notices; they must not be silently ignored.
+- Routine automated benchmarks must not edit the production source list.
 
 ## SuppressionOutcome
 
@@ -137,13 +187,16 @@ Fields:
 - `last_reconnect_reason`: Latest reconnect or stream-failure reason suitable for operator display.
 - `catchup_active`: Whether bounded catch-up is running.
 - `latest_error_code`: Compact latest actionable error.
+- `latest_error`: Optional `ApiFailureSnapshot` or source-list failure summary.
 - `latest_notice`: Operator-facing current status.
+- `last_source_refresh`: Optional `SourceListRefresh` summary.
 
 Validation rules:
 
 - A running daemon cannot report `healthy` while realtime observation is stale beyond the configured threshold and recovery has not completed.
 - Rights/session failures set `state` to `blocked`.
 - TUI rendering must expose the state and latest notice without requiring log inspection.
+- Repeated API failures must be summarized by class and count so one root cause cannot flood the operator terminal.
 
 ## CoverageWindow
 
@@ -167,3 +220,91 @@ Validation rules:
 
 - Every checked eligible edit must be counted exactly once.
 - Reports must not include hidden text, full edit comments, credentials, or tokens.
+
+## BenchmarkRun
+
+Represents controlled live verification against the approved bot test page.
+
+Fields:
+
+- `test_page_title`: Must be `Удзельнік:Plaga med Bot/suppressor/tests` unless explicitly overridden by the operator for a non-production environment.
+- `run_id`: Unique local identifier included in edit summaries and metrics labels where safe.
+- `edit_count`: Number of benchmark edits created.
+- `bot_marked`: Whether every test edit was submitted with the MediaWiki bot edit marker.
+- `started_at`: Run start time.
+- `completed_at`: Run completion time.
+- `publish_to_detect_ms`: Timing samples from page edit publication to stream/catch-up observation.
+- `detect_to_queue_ms`: Timing samples from observation to worker queueing.
+- `queue_to_hide_ms`: Timing samples from queueing to confirmed hide/already-hidden outcome.
+- `publish_to_hidden_ms`: End-to-end timing samples.
+- `p50_ms`, `p95_ms`, `p99_ms`: Summary percentiles when the sample size is large enough.
+- `smoke_only`: Whether the sample is too small for SLO percentile claims.
+- `unresolved_items`: Any test revisions not hidden or explicitly accounted for.
+
+Validation rules:
+
+- Every benchmark edit to the wiki test page must be marked as a bot edit.
+- Benchmark edit content and summaries must be test-only and must not contain sensitive payloads.
+- Percentile compliance claims require the documented controlled sample size; smaller production-safe checks are smoke evidence only.
+
+## InternalServiceBoundary
+
+Represents a microservice-like module boundary inside the single suppressor daemon/TUI deployment.
+
+Fields:
+
+- `name`: Boundary name such as `stream-ingestion`, `source-refresh`, `catchup`, `mw-api`, `revdel-worker`, `runtime-state`, `metrics`, or `tui-status`.
+- `owner_module`: Primary Rust module or module tree that owns the boundary.
+- `input_contracts`: Typed structs, enums, channels, or function inputs accepted by the boundary.
+- `output_contracts`: Typed outputs, status updates, metrics, or queued actions emitted by the boundary.
+- `bounded_resources`: Queue capacity, concurrency limit, sample size, state retention, or log aggregation limits that protect low-spec hosts.
+- `failure_contract`: How the boundary reports errors without leaking sensitive payloads.
+- `test_surface`: Unit, subsystem, or integration tests that prove the boundary behavior.
+- `docs_surface`: Maintained docs where the boundary and its operational lessons are explained.
+
+Validation rules:
+
+- A boundary must not require a separate deployed OS process, public network endpoint, or new operator supervisor for this feature.
+- Cross-boundary communication must prefer typed data over raw strings for stable contracts.
+- Every boundary that performs IO, buffering, retries, or background work must document its resource bound and failure contract.
+
+## ResourceEconomySnapshot
+
+Represents release evidence that the daemon and TUI remain suitable for low-spec local hardware.
+
+Fields:
+
+- `scenario`: `idle-daemon`, `daemon-plus-tui`, `live-edit`, `startup-catchup`, `source-refresh-catchup`, `benchmark`, or `failure-storm`.
+- `started_at`: Measurement start time.
+- `duration_seconds`: Measurement duration.
+- `rss_bytes`: Resident memory sample or summary.
+- `cpu_percent`: CPU sample or summary.
+- `queue_depth_max`: Maximum worker queue depth observed.
+- `api_concurrency_max`: Maximum concurrent MediaWiki API work observed.
+- `state_file_bytes`: Size of relevant state files after the scenario.
+- `log_lines_per_minute`: Log volume summary, with repeated failures coalesced.
+- `notes`: Compact non-sensitive notes about the environment and any limits.
+
+Validation rules:
+
+- Measurements must not include secrets or hidden content.
+- Resource evidence must cover both normal operation and at least one failure/recovery scenario.
+- A failing low-spec check blocks production-readiness claims until the tradeoff is documented or fixed.
+
+## DurableLesson
+
+Represents a lesson from the incident that must remain discoverable after feature-local planning notes are removed.
+
+Fields:
+
+- `lesson_id`: Stable short identifier.
+- `topic`: `timestamp-format`, `source-refresh`, `api-error-classification`, `warning-coalescing`, `benchmark-safety`, `resource-economy`, or `architecture-boundary`.
+- `source`: Incident, test, code audit, benchmark, or operator observation that produced the lesson.
+- `durable_location`: Code test, maintained doc, or concise code comment where the lesson is preserved.
+- `verification`: Test, docs gate, or manual release check that proves the lesson remains covered.
+
+Validation rules:
+
+- Lessons that prevent a repeat safety incident must be captured in tests when feasible.
+- Operator-facing lessons belong in maintained suppressor docs, not only in feature-local artifacts.
+- Code comments should be used only when the local rule is non-obvious from names and tests.

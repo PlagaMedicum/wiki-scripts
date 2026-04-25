@@ -97,6 +97,13 @@ docmeta:
   clarification note instead of inventing policy.
 - If a direct human answer or approval is still needed, record it in `questions.md` or another
   feature-local file instead of relying only on chat context.
+- For safety-, reliability-, or performance-sensitive work, include requirements for low-spec
+  operation, bounded queues/concurrency/state/logging, recovery behavior, and operator-visible
+  status where those constraints affect correctness or trust. Resource economy must not weaken
+  performance targets or documentation completeness.
+- If a "microservice" design is requested, specify the ownership boundaries first. Require a
+  separate process, public service, or new dependency only when the isolation or operator-control
+  benefit is explicit.
 - If the unresolved point is repo-level governance rather than feature-scoped work, record it in
   `specs/000-repo-governance/research.md` instead of duplicating it in feature-local question docs.
 - Do not claim registry-managed review or approval state inside feature-local docs; use a local
@@ -120,6 +127,9 @@ docmeta:
 - **SC-002**: [Measurable reliability or scale outcome, e.g., "The feature handles the agreed workload without failure"]
 - **SC-003**: [Verification outcome, e.g., "Primary workflow completes without manual workaround in the documented scenario"]
 - **SC-004**: [Regression-control outcome, e.g., "Automated checks cover the new failure or safety boundary"]
+- **SC-005**: [Resource-economy outcome, e.g., "The feature stays within the agreed CPU, memory, queue, or log-volume budget"]
+- **SC-006**: [Durable-lesson outcome, e.g., "The incident lesson is captured in tests, docs, or a narrowly useful comment"]
+- **SC-007**: [Documentation outcome, e.g., "Operator or maintainer docs preserve the evidence needed to repeat the decision"]
 
 ## Assumptions
 
@@ -149,6 +159,8 @@ docmeta:
   - specs/000-repo-governance/plan.md
   - specs/000-repo-governance/tasks.md
   - project-local README/docs
+  - resource, recovery, status, benchmark, or low-spec operation notes for affected tools
+  - tests/docs/comments that preserve durable lessons from incidents or reviews
   - .specify/memory/constitution.md (only if the workflow rules or governance change)
   - .specify/doc-registry.json (if a managed doc is added, renamed, or reclassified)
   - the explicit docs gate (`make docs` / `python3 tools/doc_workflow.py all`)

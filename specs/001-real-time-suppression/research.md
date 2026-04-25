@@ -99,3 +99,93 @@ docmeta:
 
 - Add a separate monitoring service. Rejected for this urgent fix because it increases deployment and failure-surface complexity.
 - Add a public dashboard. Rejected as outside current scope and unnecessary for one local operator.
+
+## Decision: Use microservice-like internal boundaries, not extra deployed services
+
+**Rationale**: The operator wants a good microservices architecture, but this repo's governance and the suppressor's low-spec deployment model favor one local daemon plus TUI. The right interpretation for this feature is a microservice-style internal architecture: stream ingestion, source refresh, catch-up, MediaWiki API transport, RevDel worker, runtime state, metrics, and TUI rendering stay independently testable and communicate through explicit typed contracts and bounded queues. This gives the maintenance and robustness benefits of service boundaries without adding processes, ports, supervisors, IPC, memory overhead, or deployment failure modes.
+
+**Alternatives considered**:
+
+- Split into multiple OS services. Rejected because it increases runtime overhead and operational complexity for one local operator and conflicts with the current narrow deployment model.
+- Keep broad shared mutable state and patch locally. Rejected because it is exactly the kind of coupling that hides live-path failures.
+- Introduce a public monitoring service or dashboard. Rejected as outside scope and too expensive for the current safety fix.
+
+## Decision: Treat resource economy as a release constraint
+
+**Rationale**: The daemon should run on the lowest reasonable local hardware without trading away realtime suppression. The design therefore prefers bounded channels, compact rolling state, low default catch-up concurrency, coalesced logs, no busy polling, and API calls scoped to deltas or bounded windows. Release evidence should record idle and active CPU/memory for daemon plus TUI, because a performance-sensitive safety service can fail operationally if it assumes a powerful workstation.
+
+**Alternatives considered**:
+
+- Optimize only after feature correctness. Rejected because catch-up, warning floods, and unbounded state can become correctness problems on low-spec machines.
+- Maximize concurrency to finish catch-up fastest. Rejected because it risks API pressure, memory growth, and poor behavior during outage loops.
+- Disable recovery work to save resources. Rejected because robustness and realtime safety are non-negotiable; economy must come from bounded design, not missing recovery.
+
+## Decision: Prefer small targeted code over new framework layers
+
+**Rationale**: The fastest robust fix is not a broad refactor. The existing crate already has workable modules for stream, cache, API, catch-up, runtime, worker, and TUI. The remediation should add narrow typed helpers, state fields, and tests where needed, while avoiding new dependencies and generalized frameworks unless they replace a fragile local implementation with a safer or cheaper primitive.
+
+**Alternatives considered**:
+
+- Introduce a full service framework or actor system. Rejected because it adds overhead and migration risk for little benefit in a single local daemon.
+- Continue using ad hoc strings across boundaries. Rejected where stable status/error contracts matter.
+- Refactor unrelated modules for style. Rejected because this is a safety incident and scope must stay narrow.
+
+## Decision: Preserve lessons as tests, docs, and targeted comments
+
+**Rationale**: The incident exposed specific failure modes: invalid MediaWiki timestamp formatting, refresh-only source hooks, non-actionable `api-error` status, warning floods, and insufficient benchmark evidence. These should not remain only in chat or temporary feature notes. Durable lessons belong in regression tests, operator docs, implementation/runtime docs, and short comments where the local rule is surprising.
+
+**Alternatives considered**:
+
+- Keep lessons only in feature planning artifacts. Rejected because feature-local docs may later be removed after close-out.
+- Add broad explanatory comments everywhere. Rejected because comments should be used only where they prevent a repeat bug or clarify a non-obvious protocol rule.
+- Rely on commit history only. Rejected because operators and future maintainers need direct docs and tests.
+
+## Decision: Serialize MediaWiki API timestamps without fractional precision
+
+**Rationale**: Runtime analysis on 2026-04-25 showed bounded catch-up sending `rvstart` values with fractional nanoseconds, which MediaWiki rejects with `badtimestamp`. Recovery paths depend on timestamp parameters, so the daemon needs one shared serializer for MediaWiki API timestamps. The chosen shape is UTC second precision with no fractional component, suitable for `rvstart`, coverage windows, and similar API parameters.
+
+**Alternatives considered**:
+
+- Continue using `DateTime::to_rfc3339()`. Rejected because it can include fractional nanoseconds and has already failed against production.
+- Format each API call locally. Rejected because one missed call site would reintroduce catch-up failure.
+- Accept `badtimestamp` as a normal unresolved outcome. Rejected because it turns every page into a false unresolved exposure and floods the operator surface.
+
+## Decision: Source-list edits trigger immediate bounded catch-up, not only cache refresh
+
+**Rationale**: The current live hook sees edits to `Удзельнік:Wizardist/SuppressionList`, refreshes the cache, and returns. That updates the watched set eventually, but it does not inspect edits that already happened on pages newly added to the list. The fix should treat a successful source-list refresh as a recovery trigger: compute the newly added watched titles and run a bounded catch-up over those titles immediately. The same recovery semantics should apply when `Вікіпедыя:Запыты да схавальнікаў` changes and the configured window may contain newly requested pages.
+
+**Alternatives considered**:
+
+- Wait for the next live edit on each newly added page. Rejected because the exposed revision may already exist and require immediate hiding.
+- Wait for current-day reconciliation. Rejected because its cadence is intentionally slower and cannot satisfy the live safety requirement.
+- Always run a full catch-up over all watched pages after every source-list edit. Rejected as avoidable load; default should prioritize the delta while allowing a wider operator-triggered catch-up.
+
+## Decision: Persist classified API failure evidence without sensitive payloads
+
+**Rationale**: The TUI currently showed repeated decode warnings, and runtime status preserved only generic `api-error` for a failed live RevDel. Operators need to distinguish `badtimestamp`, JSON API errors, HTTP status failures, non-JSON responses, decode failures, auth/session blockers, and transient network errors. The persisted evidence should include compact error class, API code, HTTP status, content type, retryability, affected action, and a redacted short message, but not full response bodies, comments, hidden text, credentials, tokens, or cookies.
+
+**Alternatives considered**:
+
+- Persist raw API responses. Rejected because responses may include sensitive or high-volume payloads.
+- Keep only `api-error`. Rejected because it is not actionable enough to diagnose live hiding failures.
+- Log detailed errors only to stdout. Rejected because the TUI and state file are the operator's primary incident surface.
+
+## Decision: Coalesce repeated catch-up warnings into summaries
+
+**Rationale**: One root-cause failure can affect every watched page, producing thousands of nearly identical warnings in the terminal. The daemon should classify the first failure, count repeated failures by class, preserve a small sample of titles, and render a summary such as `1427 page queries failed: badtimestamp`. This keeps the operator surface readable while preserving enough detail for diagnosis.
+
+**Alternatives considered**:
+
+- Suppress warnings entirely. Rejected because failures must remain visible.
+- Keep one warning per page. Rejected because the warning flood hides the actual issue and makes the TUI hard to use.
+- Log only after catch-up finishes. Rejected because a long catch-up still needs progress and early failure visibility.
+
+## Decision: Use the bot test page for external benchmark evidence
+
+**Rationale**: The operator explicitly allowed `Удзельнік:Plaga med Bot/suppressor/tests` for manual and automated tests and benchmarks. This provides a safe production wiki surface for publish-to-hide timing evidence without using sensitive articles. Every automated edit to that page must be marked as a bot edit, and benchmark content/summaries must be clearly test-only.
+
+**Alternatives considered**:
+
+- Benchmark only with synthetic events. Rejected because it cannot prove end-to-end MediaWiki edit, stream, API, and RevDel behavior.
+- Use arbitrary watched sensitive pages. Rejected because tests should avoid real sensitive subjects.
+- Mutate `Удзельнік:Wizardist/SuppressionList` for every benchmark. Rejected because routine benchmarks should not churn the production source list; source-list behavior should be tested explicitly and separately.

@@ -68,6 +68,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T007 Create base models/entities that all stories depend on
 - [ ] T008 Configure error handling and logging infrastructure
 - [ ] T009 Setup environment configuration management
+- [ ] T010 Define bounded queues, concurrency limits, durable-state limits, and log-volume controls
+- [ ] T011 Add operator-visible status or diagnostics for recovery, backlog, and resource pressure
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -157,6 +159,10 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Update `specs/000-repo-governance/spec.md` or `research.md` if the change affects repo policy
 - [ ] TXXX Code cleanup and refactoring
 - [ ] TXXX Performance optimization across all stories
+- [ ] TXXX Resource-economy verification for CPU, memory, disk, network, queues, polling, and logs
+- [ ] TXXX Low-spec manual benchmark or automated check when resource pressure can affect behavior
+- [ ] TXXX Preserve incident or review lessons in tests, project-local docs, or narrowly useful code comments
+- [ ] TXXX Verify documentation preserves the performance evidence, operational checks, and lessons needed by maintainers
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
 - [ ] TXXX Run quickstart.md validation
@@ -253,3 +259,7 @@ With multiple developers:
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
+- Avoid: unbounded queues, busy loops, unlimited log spam, unnecessary long-running processes, and
+  new dependencies that do not pay for their resource and failure-mode cost
+- Avoid: treating resource economy as permission to lower performance targets or omit durable
+  documentation

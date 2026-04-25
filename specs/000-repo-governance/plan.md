@@ -87,5 +87,7 @@ Project-local docs should stay only where they add real value beyond the project
 - architecture/runtime shape
 - operator contract
 - testing strategy
+- resource economy, recovery behavior, and low-spec validation when those constraints affect
+  operational trust
 
 Project-local doc index files should not exist just to repeat a short link list.

@@ -3,7 +3,7 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Operator command contract for real-time suppression recovery.
-  source: speckit-plan on 2026-04-24
+  source: speckit-plan on 2026-04-28
 ---
 
 # Contract: Operator Commands
@@ -39,6 +39,7 @@ Output:
 - Counts for checked, hidden, already-hidden, skipped, failed, and unresolved edits.
 - Compact unresolved item list with page title, revision ID, age, reason, and next action.
 - No hidden text or raw sensitive comments.
+- Standalone command summary output only; the command must not overwrite daemon-owned realtime status.
 
 Success:
 
@@ -48,6 +49,8 @@ Failure:
 
 - Rights/session failures report a blocked state.
 - API/network failures report retrying, failed, or unresolved outcomes.
+- Repeated throttle failures report backoff-until time, may stop early with a partial checked count, and must not turn the full watched set into detailed unresolved spam.
+- If the daemon is already running, this one-shot command must not make the TUI status pane look like the daemon itself entered catch-up unless the daemon actually did so.
 
 ### Accident-Window Coverage
 
@@ -66,6 +69,7 @@ Output:
 - Per-outcome counts.
 - Unresolved item list.
 - Recommendation to rerun, retry, inspect rights/session, or manually review.
+- Standalone report output or a dedicated bounded report surface; no mutation of daemon realtime truth.
 
 Success:
 
@@ -92,6 +96,7 @@ Output:
 Success:
 
 - Operator can distinguish healthy, catching-up, stale, unhealthy, and blocked states.
+- The status source is the daemon-owned runtime-status surface, not a one-shot command bootstrap.
 
 ### Source-List Immediate Recovery
 
@@ -107,7 +112,7 @@ Output:
 
 - Cache refresh outcome.
 - Count of newly added and removed watched titles.
-- Immediate catch-up trigger and title scope.
+- Immediate catch-up trigger, title scope, or deferred-by-backoff status.
 - Catch-up summary with hidden, already-hidden, skipped, failed, and unresolved counts.
 - Actionable refresh or catch-up error when the source page or API fails.
 
@@ -119,8 +124,9 @@ Success:
 Failure:
 
 - Refresh failure is reported as an unhealthy/actionable notice.
-- Catch-up failure is summarized by root cause and unresolved count.
+- Catch-up failure or deferral is summarized by root cause, unresolved count, and next retry point when throttled.
 - The daemon does not silently ignore source-list refresh errors.
+- Ordinary stream reopen events must not be mislabeled as source-trigger or startup recovery unless the watched-set refresh actually required bounded catch-up.
 
 ### Test Page Benchmark
 
@@ -175,6 +181,7 @@ Output:
 - CPU summary when available.
 - Maximum queue depth and API concurrency.
 - State file size summary.
+- Unresolved-item sample retention and warning-summary counts.
 - Log volume summary and warning aggregation count.
 - Any resource limit that was hit or approached.
 
@@ -187,6 +194,13 @@ Failure:
 
 - Unbounded queue/state/log growth, hot-loop CPU use, or unacceptable memory growth blocks production-readiness claims until fixed or explicitly documented as a release limitation.
 
+## Compatibility And Migration
+
+- Previously documented command summary keys, operator-visible action names, and bounded report surfaces SHOULD remain backward-compatible unless release evidence explicitly declares a change.
+- If a command, TUI action, or launch-path check detects that the previously documented setup is no longer valid, it MUST emit a compact migration notice naming the old assumption, the new authoritative surface, and the required operator action.
+- One-shot commands MUST NOT silently replace daemon realtime truth with a new incompatible surface or unlabeled background output.
+- Command help, TUI labels, and release evidence MUST state whether the authoritative verification path for the current deployment is a systemd-managed daemon, a TUI-managed child process, or another explicit supervisor path.
+
 ## TUI Action Placement
 
 - Keep the Actions list short and operator-focused.
@@ -194,3 +208,5 @@ Failure:
 - Keep manual cache reload and nightly reconciliation visible as slower diagnostic/fallback actions, not as the expected live hiding path.
 - Add benchmark entry points only if they are clearly labeled as test-page actions and cannot accidentally target production sensitive pages.
 - Prefer one-shot resource verification commands or docs-guided measurement over always-on heavy profiling.
+- Separate daemon logs from one-shot command logs, or label command-origin lines so the operator cannot mistake them for daemon realtime evidence.
+- The live-output pane must keep the newest visible rows in view when `latest` mode is active, even when lines wrap.

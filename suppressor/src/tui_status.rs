@@ -159,6 +159,7 @@ mod tests {
                 dry_run: false,
                 last_notice: Some("ok".to_string()),
                 last_notice_at: Some(Utc::now()),
+                resource_economy: None,
                 realtime: crate::state::RealtimeRuntimeStatus::default(),
                 reconciliation: ReconciliationRuntimeStatus::default(),
             },

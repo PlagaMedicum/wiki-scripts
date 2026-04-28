@@ -48,7 +48,9 @@ Durable operational state:
 - `last_event_id.txt`
 - `processed_revids.json`
 - `nightly_sweep_progress.json`
-- `runtime_status.json`, including daemon, realtime, latest outcome, catch-up summary, and reconciliation status
+- `runtime_status.json`, including daemon, realtime, latest outcome, latest classified error,
+  source-refresh summary, coalesced warning summaries, resource-economy snapshot, catch-up summary,
+  and reconciliation status
 
 Derived cache state:
 
@@ -68,6 +70,10 @@ Ephemeral coordination:
 - keep logs and metrics at the edges
 - keep realtime health separate from daemon process health and reconciliation progress
 - keep emergency catch-up bounded by configured windows and revision limits
+- keep source-list/request-page recovery inside the stream/cache/catch-up boundaries instead of
+  routing it through nightly reconciliation
+- keep API errors compact and classified; do not persist response bodies or sensitive payloads
+- coalesce repeated warning causes before they reach the operator surface
 - do not broaden the service unless there is a strong operational reason
 
 ## Future Direction

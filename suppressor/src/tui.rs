@@ -169,7 +169,7 @@ impl ControlApp {
                 .unwrap_or_else(Instant::now),
             should_quit: false,
         };
-        app.push_log("Control center started. Use arrows and Enter to run an action.");
+        app.push_control_log("Control center started. Use arrows and Enter to run an action.");
         app.refresh_status();
         app
     }
@@ -250,7 +250,7 @@ impl ControlApp {
         self.follow_logs = true;
     }
 
-    fn push_log<S: Into<String>>(&mut self, line: S) {
+    fn push_raw_log<S: Into<String>>(&mut self, line: S) {
         self.logs.push_back(line.into());
         let mut dropped = 0usize;
         while self.logs.len() > MAX_LOG_LINES {
@@ -262,9 +262,13 @@ impl ControlApp {
         }
     }
 
+    fn push_control_log<S: Into<String>>(&mut self, line: S) {
+        self.push_raw_log(format!("[control] {}", line.into()));
+    }
+
     fn drain_logs(&mut self) {
         while let Ok(line) = self.log_rx.try_recv() {
-            self.push_log(line);
+            self.push_raw_log(line);
         }
     }
 
@@ -282,7 +286,9 @@ impl ControlApp {
 
     fn spawn_managed_session(&mut self, mode: ManagedMode) {
         if self.managed.is_some() {
-            self.push_log("A managed session is already running. Stop it before starting another.");
+            self.push_control_log(
+                "A managed session is already running. Stop it before starting another.",
+            );
             return;
         }
         match build_child_command(
@@ -310,7 +316,7 @@ impl ControlApp {
                                 self.log_tx.clone(),
                             );
                         }
-                        self.push_log(format!(
+                        self.push_control_log(format!(
                             "Started managed {} session{}.",
                             mode.label(),
                             pid.map(|value| format!(" with child PID {}", value))
@@ -324,7 +330,7 @@ impl ControlApp {
                         self.refresh_status();
                     }
                     Err(error) => {
-                        self.push_log(format!(
+                        self.push_control_log(format!(
                             "Failed to start {} session: {error:#}",
                             mode.label()
                         ));
@@ -332,7 +338,7 @@ impl ControlApp {
                 }
             }
             Err(error) => {
-                self.push_log(format!(
+                self.push_control_log(format!(
                     "Failed to prepare {} session: {error:#}",
                     mode.label()
                 ));
@@ -349,15 +355,15 @@ impl ControlApp {
             let mut command = match build_child_command_owned(&current_exe, &paths, verbose, args) {
                 Ok(command) => command,
                 Err(error) => {
-                    let _ = tx.send(format!("Failed to prepare {label}: {error:#}"));
+                    let _ = tx.send(format!("[{label}] failed to prepare command: {error:#}"));
                     return;
                 }
             };
-            let _ = tx.send(format!("Starting {label}..."));
+            let _ = tx.send(format!("[{label}] starting command..."));
             let mut child = match command.spawn() {
                 Ok(child) => child,
                 Err(error) => {
-                    let _ = tx.send(format!("Failed to start {label}: {error:#}"));
+                    let _ = tx.send(format!("[{label}] failed to start command: {error:#}"));
                     return;
                 }
             };
@@ -369,13 +375,15 @@ impl ControlApp {
             }
             match child.wait().await {
                 Ok(status) if status.success() => {
-                    let _ = tx.send(format!("{label} finished successfully."));
+                    let _ = tx.send(format!("[{label}] command finished successfully."));
                 }
                 Ok(status) => {
-                    let _ = tx.send(format!("{label} failed with status {status}."));
+                    let _ = tx.send(format!("[{label}] command failed with status {status}."));
                 }
                 Err(error) => {
-                    let _ = tx.send(format!("Failed while waiting for {label}: {error:#}"));
+                    let _ = tx.send(format!(
+                        "[{label}] failed while waiting for command: {error:#}"
+                    ));
                 }
             }
         });
@@ -384,14 +392,14 @@ impl ControlApp {
     fn stop_daemon(&mut self) {
         if let Some(mut managed) = self.managed.take() {
             if let Err(error) = managed.child.start_kill() {
-                self.push_log(format!(
+                self.push_control_log(format!(
                     "Failed to stop managed {}: {error:#}",
                     managed.mode.label()
                 ));
                 self.managed = Some(managed);
                 return;
             }
-            self.push_log(format!(
+            self.push_control_log(format!(
                 "Sent stop request to managed {} session.",
                 managed.mode.label()
             ));
@@ -401,7 +409,7 @@ impl ControlApp {
 
         if let Some(pid) = self.status.daemon_pid {
             if !self.status.daemon_running {
-                self.push_log(format!(
+                self.push_control_log(format!(
                     "PID file exists at {} but process {} is not running. Start the daemon again to refresh the state.",
                     self.status.pid_file.display(),
                     pid
@@ -410,30 +418,32 @@ impl ControlApp {
             }
             match kill(Pid::from_raw(pid), Signal::SIGTERM) {
                 Ok(()) => {
-                    self.push_log(format!("Sent SIGTERM to daemon PID {}.", pid));
+                    self.push_control_log(format!("Sent SIGTERM to daemon PID {}.", pid));
                     self.refresh_status();
                 }
                 Err(error) => {
-                    self.push_log(format!("Failed to stop daemon PID {}: {error:#}", pid));
+                    self.push_control_log(format!("Failed to stop daemon PID {}: {error:#}", pid));
                 }
             }
         } else {
-            self.push_log("No running daemon was found. Start one with the Start daemon action.");
+            self.push_control_log(
+                "No running daemon was found. Start one with the Start daemon action.",
+            );
         }
     }
 
     fn post_reload_signal(&mut self) {
         match signals::send_reload(&self.paths.pid_file) {
-            Ok(()) => self.push_log("Posted cache reload signal."),
-            Err(error) => self.push_log(format!("Failed to post reload signal: {error:#}")),
+            Ok(()) => self.push_control_log("Posted cache reload signal."),
+            Err(error) => self.push_control_log(format!("Failed to post reload signal: {error:#}")),
         }
         self.refresh_status();
     }
 
     fn post_sweep_signal(&mut self) {
         match signals::send_manual_sweep(&self.paths.pid_file) {
-            Ok(()) => self.push_log("Queued nightly reconciliation signal."),
-            Err(error) => self.push_log(format!(
+            Ok(()) => self.push_control_log("Queued nightly reconciliation signal."),
+            Err(error) => self.push_control_log(format!(
                 "Failed to queue nightly reconciliation signal: {error:#}"
             )),
         }
@@ -446,7 +456,7 @@ impl ControlApp {
                 Ok(Some(status)) => {
                     let label = managed.mode.label();
                     let elapsed = managed.started_at.elapsed().as_secs();
-                    self.push_log(format!(
+                    self.push_control_log(format!(
                         "Managed {} session exited with status {} after {}s.",
                         label, status, elapsed
                     ));
@@ -456,7 +466,7 @@ impl ControlApp {
                 Ok(None) => {}
                 Err(error) => {
                     let label = managed.mode.label();
-                    self.push_log(format!(
+                    self.push_control_log(format!(
                         "Failed to poll managed {} session: {error:#}",
                         label
                     ));
@@ -466,36 +476,47 @@ impl ControlApp {
             }
         }
     }
+}
 
+fn background_command_for_action(action: UiAction) -> Option<(&'static str, Vec<String>)> {
+    match action {
+        UiAction::CheckAuth => Some(("check-auth", vec!["check-auth".to_string()])),
+        UiAction::PrintConfig => Some((
+            "print-effective-config",
+            vec!["print-effective-config".to_string()],
+        )),
+        UiAction::EmergencyCatchup => {
+            Some(("emergency-catchup", vec!["emergency-catchup".to_string()]))
+        }
+        UiAction::CoverageReport => Some((
+            "coverage-report",
+            vec!["coverage-report".to_string(), "--dry-run".to_string()],
+        )),
+        _ => None,
+    }
+}
+
+impl ControlApp {
     fn execute_selected_action(&mut self) {
         match self.selected_action() {
             UiAction::StartDaemon => self.spawn_managed_session(ManagedMode::Daemon),
             UiAction::StartDryRun => self.spawn_managed_session(ManagedMode::DryRun),
             UiAction::StopDaemon => self.stop_daemon(),
-            UiAction::CheckAuth => {
-                self.spawn_background_command("check-auth", vec!["check-auth".to_string()]);
+            UiAction::CheckAuth | UiAction::PrintConfig => {
+                if let Some((label, args)) = background_command_for_action(self.selected_action()) {
+                    self.spawn_background_command(label, args);
+                }
             }
-            UiAction::PrintConfig => self.spawn_background_command(
-                "print-effective-config",
-                vec!["print-effective-config".to_string()],
-            ),
             UiAction::ReloadCache => self.post_reload_signal(),
-            UiAction::EmergencyCatchup => self.spawn_background_command(
-                "emergency-catchup",
-                vec!["emergency-catchup".to_string()],
-            ),
-            UiAction::CoverageReport => self.spawn_background_command(
-                "coverage-report",
-                vec![
-                    "emergency-catchup".to_string(),
-                    "--report-only".to_string(),
-                    "--dry-run".to_string(),
-                ],
-            ),
+            UiAction::EmergencyCatchup | UiAction::CoverageReport => {
+                if let Some((label, args)) = background_command_for_action(self.selected_action()) {
+                    self.spawn_background_command(label, args);
+                }
+            }
             UiAction::SweepNow => self.post_sweep_signal(),
             UiAction::RefreshStatus => {
                 self.refresh_status();
-                self.push_log("Status refreshed.");
+                self.push_control_log("Status refreshed.");
             }
             UiAction::Quit => self.should_quit = true,
         }
@@ -555,7 +576,7 @@ pub async fn run(config_path: PathBuf, verbose: bool) -> Result<()> {
                 KeyCode::Char('q') => app.should_quit = true,
                 KeyCode::Char('r') => {
                     app.refresh_status();
-                    app.push_log("Status refreshed.");
+                    app.push_control_log("Status refreshed.");
                 }
                 _ => {}
             }
@@ -575,5 +596,50 @@ impl Drop for TerminalCleanup {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
         let _ = execute!(stdout, LeaveAlternateScreen);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::config::RuntimePaths;
+
+    fn test_paths() -> RuntimePaths {
+        RuntimePaths {
+            config_path: PathBuf::from("/tmp/config.toml"),
+            state_dir: PathBuf::from("/tmp/state"),
+            env_file: PathBuf::from("/tmp/.env"),
+            cache_file: PathBuf::from("/tmp/state/cache.json"),
+            last_event_id_file: PathBuf::from("/tmp/state/last_event_id"),
+            processed_revids_file: PathBuf::from("/tmp/state/processed.json"),
+            nightly_sweep_progress_file: PathBuf::from("/tmp/state/progress.json"),
+            runtime_status_file: PathBuf::from("/tmp/state/runtime.json"),
+            pid_file: PathBuf::from("/tmp/state/pid"),
+        }
+    }
+
+    #[test]
+    fn coverage_report_uses_its_own_command() {
+        let (label, args) = background_command_for_action(UiAction::CoverageReport).unwrap();
+
+        assert_eq!(label, "coverage-report");
+        assert_eq!(
+            args,
+            vec!["coverage-report".to_string(), "--dry-run".to_string()]
+        );
+    }
+
+    #[test]
+    fn control_logs_are_source_labeled() {
+        let mut app = ControlApp::new(test_paths(), PathBuf::from("/tmp/suppressor"), false);
+
+        app.push_control_log("Status refreshed.");
+
+        assert_eq!(
+            app.logs.back().map(String::as_str),
+            Some("[control] Status refreshed.")
+        );
     }
 }

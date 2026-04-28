@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -5,8 +6,9 @@ use chrono::{DateTime, TimeDelta, Utc};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
+use crate::mw_api::classify_api_failure;
 use crate::runtime::{AppRuntime, RevDelDispatch, RevDelMode};
-use crate::state::{CoverageSummary, UnresolvedExposureItem};
+use crate::state::{ApiFailureSnapshot, CoverageSummary, UnresolvedExposureItem, WarningSummary};
 
 #[derive(Clone, Debug)]
 pub struct CatchupRequest {
@@ -14,6 +16,7 @@ pub struct CatchupRequest {
     pub end: DateTime<Utc>,
     pub trigger: String,
     pub report_only: bool,
+    pub title_scope: Option<Vec<String>>,
 }
 
 pub async fn run_default_catchup(
@@ -29,6 +32,27 @@ pub async fn run_default_catchup(
             end,
             trigger,
             report_only: false,
+            title_scope: None,
+        },
+    )
+    .await
+}
+
+pub async fn run_title_scoped_catchup(
+    runtime: &Arc<AppRuntime>,
+    trigger: String,
+    titles: Vec<String>,
+) -> Result<CoverageSummary> {
+    let end = Utc::now();
+    let start = end - TimeDelta::seconds(runtime.config.catchup.default_window_seconds);
+    run_catchup_window(
+        runtime,
+        CatchupRequest {
+            start,
+            end,
+            trigger,
+            report_only: false,
+            title_scope: Some(titles),
         },
     )
     .await
@@ -40,14 +64,22 @@ pub async fn run_catchup_window(
 ) -> Result<CoverageSummary> {
     validate_window(runtime, request.start, request.end)?;
     runtime.mark_recovery_started(request.trigger.clone()).await;
-    let titles = runtime.cache.read().await.watched_titles().to_vec();
+    let titles = scoped_titles(runtime, request.title_scope.clone()).await;
+    let mut warning_aggregates =
+        WarningAggregates::new(runtime.config.catchup.warning_sample_limit);
     let mut summary = CoverageSummary {
         started_at: Some(request.start),
         ended_at: Some(request.end),
         requested_by: request.trigger.clone(),
-        pages_checked: titles.len(),
         ..CoverageSummary::default()
     };
+
+    if let Some(backoff_until) = runtime.current_backoff_until().await {
+        summary.stopped_early_reason = Some("rate-limit-backoff-active".to_string());
+        summary.backoff_until = Some(backoff_until);
+        runtime.mark_recovery_completed(summary.clone()).await;
+        return Ok(summary);
+    }
 
     info!(
         trigger = %request.trigger,
@@ -59,6 +91,7 @@ pub async fn run_catchup_window(
     );
 
     'titles: for title in titles {
+        summary.pages_checked += 1;
         let revisions = match runtime
             .client
             .fetch_revisions_in_window(&title, request.start, request.end)
@@ -66,30 +99,48 @@ pub async fn run_catchup_window(
         {
             Ok(revisions) => revisions,
             Err(error) => {
+                let failure = classify_api_failure(&error, "fetch-revisions", Some(&title), None);
+                let observation = warning_aggregates.record(
+                    failure.clone(),
+                    runtime.config.catchup.rate_limit_stop_after_failures,
+                    runtime.config.catchup.rate_limit_backoff_default_seconds,
+                    Utc::now(),
+                );
                 summary.failed_count += 1;
-                summary.unresolved_count += 1;
-                summary.unresolved_items.push(UnresolvedExposureItem {
-                    title: title.clone(),
-                    revid: 0,
-                    age_seconds: None,
-                    reason: "revision-query-failed".to_string(),
-                    next_action: "check API/network and rerun catch-up".to_string(),
-                });
-                warn!(title = %title, error = %error, "catch-up page query failed");
+                push_unresolved_item(
+                    &mut summary,
+                    runtime.config.catchup.unresolved_sample_limit,
+                    UnresolvedExposureItem {
+                        title: title.clone(),
+                        revid: 0,
+                        age_seconds: None,
+                        reason: format!("revision-query-failed:{}", warning_reason(&failure)),
+                        next_action: "check API/network and rerun catch-up".to_string(),
+                    },
+                );
+                if observation.stop_after {
+                    summary.stopped_early_reason = Some("rate-limited".to_string());
+                    summary.backoff_until = observation.backoff_until;
+                    break 'titles;
+                }
                 continue;
             }
         };
 
-        for revision in revisions {
+        for revision in revisions.into_iter().rev() {
             if summary.edits_checked >= runtime.config.catchup.max_revisions_per_run {
-                summary.unresolved_count += 1;
-                summary.unresolved_items.push(UnresolvedExposureItem {
-                    title: title.clone(),
-                    revid: revision.revid,
-                    age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                    reason: "max-revisions-reached".to_string(),
-                    next_action: "rerun catch-up with a narrower window".to_string(),
-                });
+                summary.stopped_early_reason = Some("max-revisions-reached".to_string());
+                push_unresolved_item(
+                    &mut summary,
+                    runtime.config.catchup.unresolved_sample_limit,
+                    UnresolvedExposureItem {
+                        title: title.clone(),
+                        revid: revision.revid,
+                        age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
+                        reason: "max-revisions-reached".to_string(),
+                        next_action: "rerun catch-up with a narrower window".to_string(),
+                    },
+                );
                 break 'titles;
             }
             summary.edits_checked += 1;
@@ -98,14 +149,17 @@ pub async fn run_catchup_window(
                 continue;
             }
             if request.report_only {
-                summary.unresolved_count += 1;
-                summary.unresolved_items.push(UnresolvedExposureItem {
-                    title: title.clone(),
-                    revid: revision.revid,
-                    age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                    reason: "report-only-not-hidden".to_string(),
-                    next_action: "run emergency catch-up without report-only".to_string(),
-                });
+                push_unresolved_item(
+                    &mut summary,
+                    runtime.config.catchup.unresolved_sample_limit,
+                    UnresolvedExposureItem {
+                        title: title.clone(),
+                        revid: revision.revid,
+                        age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
+                        reason: "report-only-not-hidden".to_string(),
+                        next_action: "run emergency catch-up without report-only".to_string(),
+                    },
+                );
                 continue;
             }
             let (completion_tx, completion_rx) = oneshot::channel();
@@ -126,31 +180,60 @@ pub async fn run_catchup_window(
                 Ok(Ok(Ok(()))) => summary.hidden_count += 1,
                 Ok(Ok(Err(reason))) => {
                     summary.failed_count += 1;
-                    summary.unresolved_count += 1;
-                    summary.unresolved_items.push(UnresolvedExposureItem {
-                        title: title.clone(),
-                        revid: revision.revid,
-                        age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                        reason,
-                        next_action: "review auth/API state and rerun catch-up".to_string(),
-                    });
+                    push_unresolved_item(
+                        &mut summary,
+                        runtime.config.catchup.unresolved_sample_limit,
+                        UnresolvedExposureItem {
+                            title: title.clone(),
+                            revid: revision.revid,
+                            age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
+                            reason,
+                            next_action: "review auth/API state and rerun catch-up".to_string(),
+                        },
+                    );
                 }
                 Ok(Err(_)) | Err(_) => {
-                    summary.unresolved_count += 1;
-                    summary.unresolved_items.push(UnresolvedExposureItem {
-                        title: title.clone(),
-                        revid: revision.revid,
-                        age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                        reason: "worker-completion-timeout".to_string(),
-                        next_action: "check worker status and rerun catch-up".to_string(),
-                    });
+                    push_unresolved_item(
+                        &mut summary,
+                        runtime.config.catchup.unresolved_sample_limit,
+                        UnresolvedExposureItem {
+                            title: title.clone(),
+                            revid: revision.revid,
+                            age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
+                            reason: "worker-completion-timeout".to_string(),
+                            next_action: "check worker status and rerun catch-up".to_string(),
+                        },
+                    );
                 }
             }
         }
     }
 
+    summary.warning_summaries = warning_aggregates.into_summaries();
+    for warning in &summary.warning_summaries {
+        warn!(
+            count = warning.count,
+            class = %warning.class,
+            api_code = ?warning.api_code,
+            http_status = ?warning.http_status,
+            retry_after_seconds = ?warning.retry_after_seconds,
+            stopped_early = warning.stopped_early,
+            sample_titles = ?warning.sample_titles,
+            "catch-up page query failures coalesced"
+        );
+    }
     runtime.mark_recovery_completed(summary.clone()).await;
     Ok(summary)
+}
+
+async fn scoped_titles(runtime: &Arc<AppRuntime>, title_scope: Option<Vec<String>>) -> Vec<String> {
+    let mut titles = match title_scope {
+        Some(titles) => titles,
+        None => runtime.cache.read().await.watched_titles().to_vec(),
+    };
+    titles.sort();
+    titles.dedup();
+    titles
 }
 
 pub fn validate_window(
@@ -183,6 +266,15 @@ pub fn format_summary_lines(summary: &CoverageSummary) -> Vec<String> {
         format!("coverage.failed={}", summary.failed_count),
         format!("coverage.unresolved={}", summary.unresolved_count),
     ];
+    if let Some(reason) = summary.stopped_early_reason.as_deref() {
+        lines.push(format!("coverage.stopped_early_reason={}", reason));
+    }
+    if let Some(until) = summary.backoff_until.as_ref() {
+        lines.push(format!(
+            "coverage.backoff_until={}",
+            until.format("%Y-%m-%dT%H:%M:%SZ")
+        ));
+    }
     for item in &summary.unresolved_items {
         lines.push(format!(
             "coverage.unresolved_item title={} revid={} age_seconds={} reason={} next_action={}",
@@ -195,7 +287,155 @@ pub fn format_summary_lines(summary: &CoverageSummary) -> Vec<String> {
             item.next_action
         ));
     }
+    for warning in &summary.warning_summaries {
+        lines.push(format!(
+            "coverage.warning_summary class={} api_code={} http_status={} retryable={} retry_after_seconds={} count={} samples={} stopped_early={}",
+            warning.class,
+            warning.api_code.as_deref().unwrap_or("none"),
+            warning
+                .http_status
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            warning.retryable,
+            warning
+                .retry_after_seconds
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            warning.count,
+            warning.sample_titles.join("|"),
+            warning.stopped_early
+        ));
+    }
     lines
+}
+
+fn push_unresolved_item(
+    summary: &mut CoverageSummary,
+    sample_limit: usize,
+    item: UnresolvedExposureItem,
+) {
+    summary.unresolved_count += 1;
+    if summary.unresolved_items.len() < sample_limit {
+        summary.unresolved_items.push(item);
+    }
+}
+
+fn warning_reason(snapshot: &ApiFailureSnapshot) -> String {
+    snapshot
+        .api_code
+        .as_deref()
+        .unwrap_or(snapshot.class.as_str())
+        .to_string()
+}
+
+#[derive(Clone, Debug)]
+struct WarningAggregates {
+    sample_limit: usize,
+    by_key: BTreeMap<String, WarningSummary>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct WarningObservation {
+    stop_after: bool,
+    backoff_until: Option<DateTime<Utc>>,
+}
+
+impl WarningAggregates {
+    fn new(sample_limit: usize) -> Self {
+        Self {
+            sample_limit,
+            by_key: BTreeMap::new(),
+        }
+    }
+
+    fn record(
+        &mut self,
+        snapshot: ApiFailureSnapshot,
+        stop_after_failures: usize,
+        default_backoff_seconds: u64,
+        now: DateTime<Utc>,
+    ) -> WarningObservation {
+        let key = format!(
+            "{}|{}|{}|{}",
+            snapshot.class,
+            snapshot.api_code.as_deref().unwrap_or(""),
+            snapshot
+                .http_status
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            snapshot.operation
+        );
+        let retry_after_seconds =
+            rate_limit_retry_after_seconds(&snapshot, default_backoff_seconds);
+        let entry = self.by_key.entry(key).or_insert_with(|| WarningSummary {
+            class: snapshot.class.clone(),
+            api_code: snapshot.api_code.clone(),
+            http_status: snapshot.http_status,
+            content_type: snapshot.content_type.clone(),
+            retryable: snapshot.retryable,
+            retry_after_seconds,
+            operation: snapshot.operation.clone(),
+            count: 0,
+            sample_titles: Vec::new(),
+            message: snapshot.message.clone(),
+            stopped_early: false,
+        });
+        entry.count += 1;
+        entry.retry_after_seconds = match (entry.retry_after_seconds, retry_after_seconds) {
+            (Some(current), Some(latest)) => Some(current.max(latest)),
+            (None, Some(latest)) => Some(latest),
+            (current, None) => current,
+        };
+        if let Some(title) = snapshot.sample_title
+            && entry.sample_titles.len() < self.sample_limit
+            && !entry.sample_titles.contains(&title)
+        {
+            entry.sample_titles.push(title);
+        }
+        let stop_after =
+            entry.retry_after_seconds.is_some() && entry.count >= stop_after_failures.max(1);
+        if stop_after {
+            entry.stopped_early = true;
+        }
+        WarningObservation {
+            stop_after,
+            backoff_until: stop_after.then(|| {
+                now + TimeDelta::seconds(
+                    entry
+                        .retry_after_seconds
+                        .unwrap_or(default_backoff_seconds)
+                        .min(i64::MAX as u64) as i64,
+                )
+            }),
+        }
+    }
+
+    fn into_summaries(self) -> Vec<WarningSummary> {
+        let mut summaries = self.by_key.into_values().collect::<Vec<_>>();
+        summaries.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.class.cmp(&right.class))
+                .then_with(|| left.operation.cmp(&right.operation))
+        });
+        summaries
+    }
+}
+
+fn rate_limit_retry_after_seconds(
+    snapshot: &ApiFailureSnapshot,
+    default_backoff_seconds: u64,
+) -> Option<u64> {
+    if snapshot.http_status == Some(429) || snapshot.api_code.as_deref() == Some("ratelimited") {
+        Some(
+            snapshot
+                .retry_after_seconds
+                .unwrap_or(default_backoff_seconds),
+        )
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -226,5 +466,127 @@ mod tests {
         assert!(rendered.contains("revid=42"));
         assert!(!rendered.contains("comment="));
         assert!(!rendered.contains("token="));
+    }
+
+    #[test]
+    fn warning_aggregates_coalesce_repeated_root_causes() {
+        let mut aggregates = WarningAggregates::new(2);
+        for title in ["A", "B", "C"] {
+            let _ = aggregates.record(
+                ApiFailureSnapshot {
+                    class: "api-json-error".to_string(),
+                    api_code: Some("badtimestamp".to_string()),
+                    http_status: Some(200),
+                    retryable: false,
+                    operation: "fetch-revisions".to_string(),
+                    sample_title: Some(title.to_string()),
+                    message: "invalid timestamp".to_string(),
+                    ..ApiFailureSnapshot::default()
+                },
+                3,
+                30,
+                Utc::now(),
+            );
+        }
+
+        let summaries = aggregates.into_summaries();
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].count, 3);
+        assert_eq!(summaries[0].api_code.as_deref(), Some("badtimestamp"));
+        assert_eq!(summaries[0].sample_titles, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn warning_aggregates_stop_early_for_repeated_rate_limits() {
+        let mut aggregates = WarningAggregates::new(2);
+        let now = DateTime::parse_from_rfc3339("2026-04-25T17:05:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut observation = WarningObservation::default();
+        for title in ["A", "B", "C"] {
+            observation = aggregates.record(
+                ApiFailureSnapshot {
+                    class: "non-json-response".to_string(),
+                    http_status: Some(429),
+                    retryable: true,
+                    retry_after_seconds: Some(45),
+                    operation: "fetch-revisions".to_string(),
+                    sample_title: Some(title.to_string()),
+                    message: "rate limited".to_string(),
+                    ..ApiFailureSnapshot::default()
+                },
+                3,
+                30,
+                now,
+            );
+        }
+
+        let summaries = aggregates.into_summaries();
+
+        assert!(observation.stop_after);
+        assert_eq!(
+            observation.backoff_until,
+            Some(now + TimeDelta::seconds(45))
+        );
+        assert_eq!(summaries[0].retry_after_seconds, Some(45));
+        assert!(summaries[0].stopped_early);
+    }
+
+    #[test]
+    fn unresolved_samples_are_bounded_but_counts_keep_growing() {
+        let mut summary = CoverageSummary::default();
+
+        for revid in 1..=4 {
+            push_unresolved_item(
+                &mut summary,
+                2,
+                UnresolvedExposureItem {
+                    title: format!("Page {revid}"),
+                    revid,
+                    age_seconds: Some(5),
+                    reason: "rate-limited".to_string(),
+                    next_action: "retry later".to_string(),
+                },
+            );
+        }
+
+        assert_eq!(summary.unresolved_count, 4);
+        assert_eq!(summary.unresolved_items.len(), 2);
+        assert_eq!(summary.unresolved_items[0].revid, 1);
+        assert_eq!(summary.unresolved_items[1].revid, 2);
+    }
+
+    #[test]
+    fn formats_summary_with_backoff_and_stop_reason() {
+        let summary = CoverageSummary {
+            requested_by: "operator-manual".to_string(),
+            stopped_early_reason: Some("rate-limited".to_string()),
+            backoff_until: Some(
+                DateTime::parse_from_rfc3339("2026-04-25T17:06:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            warning_summaries: vec![WarningSummary {
+                class: "non-json-response".to_string(),
+                http_status: Some(429),
+                retryable: true,
+                retry_after_seconds: Some(30),
+                operation: "fetch-revisions".to_string(),
+                count: 3,
+                sample_titles: vec!["A".to_string()],
+                message: "rate limited".to_string(),
+                stopped_early: true,
+                ..WarningSummary::default()
+            }],
+            ..CoverageSummary::default()
+        };
+
+        let rendered = format_summary_lines(&summary).join("\n");
+
+        assert!(rendered.contains("coverage.stopped_early_reason=rate-limited"));
+        assert!(rendered.contains("coverage.backoff_until=2026-04-25T17:06:00Z"));
+        assert!(rendered.contains("retry_after_seconds=30"));
+        assert!(rendered.contains("stopped_early=true"));
     }
 }

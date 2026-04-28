@@ -207,8 +207,94 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &ControlApp) {
         if let Some(trigger) = runtime_status.realtime.last_recovery_trigger.as_deref() {
             lines.push(Line::from(format!("Recovery trigger: {}", trigger)));
         }
+        if let Some(until) = runtime_status.realtime.backoff_until.as_ref() {
+            lines.push(Line::from(format!(
+                "Backoff until: {}",
+                until.format("%H:%M:%S UTC")
+            )));
+        }
+        if let Some(at) = runtime_status.realtime.last_freshness_probe_at {
+            let source = runtime_status
+                .realtime
+                .last_freshness_probe_source
+                .as_deref()
+                .unwrap_or("unknown");
+            lines.push(Line::from(format!(
+                "Freshness probe: {} [{}]",
+                at.format("%H:%M:%S UTC"),
+                source
+            )));
+        }
         if let Some(error) = runtime_status.realtime.latest_error_code.as_deref() {
             lines.push(Line::from(format!("Realtime error: {}", error)));
+        }
+        if let Some(error) = runtime_status.realtime.latest_error.as_ref() {
+            lines.push(Line::from(format!(
+                "Latest error: class={} code={} http={} retryable={} retry_after={}",
+                error.class,
+                error.api_code.as_deref().unwrap_or("none"),
+                error
+                    .http_status
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                error.retryable,
+                error
+                    .retry_after_seconds
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            )));
+        }
+        if let Some(refresh) = runtime_status.realtime.last_source_refresh.as_ref() {
+            lines.push(Line::from(format!(
+                "Source refresh: {} new={} removed={} scope={} deferred={}",
+                refresh.outcome,
+                refresh.new_titles_count,
+                refresh.removed_titles_count,
+                refresh.catchup_title_scope.as_deref().unwrap_or("none"),
+                refresh
+                    .deferred_until
+                    .as_ref()
+                    .map(|value| value.format("%H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            )));
+        }
+        if let Some(summary) = runtime_status.realtime.latest_recovery_summary.as_ref()
+            && let Some(reason) = summary.stopped_early_reason.as_deref()
+        {
+            let until = summary
+                .backoff_until
+                .as_ref()
+                .map(|value| value.format("%H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "none".to_string());
+            lines.push(Line::from(format!(
+                "Recovery stop: {} until={}",
+                reason, until
+            )));
+        }
+        if let Some(warning) = runtime_status
+            .realtime
+            .latest_recovery_warnings
+            .first()
+            .or_else(|| {
+                runtime_status
+                    .realtime
+                    .latest_recovery_summary
+                    .as_ref()
+                    .and_then(|summary| summary.warning_summaries.first())
+            })
+        {
+            lines.push(Line::from(format!(
+                "Warning summary: {}x {} {} retry_after={} stopped_early={} samples={}",
+                warning.count,
+                warning.class,
+                warning.api_code.as_deref().unwrap_or(""),
+                warning
+                    .retry_after_seconds
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                warning.stopped_early,
+                warning.sample_titles.join("|")
+            )));
         }
         lines.push(Line::from(render_reconcile_line(
             &runtime_status.reconciliation,
@@ -269,8 +355,7 @@ fn render_logs(frame: &mut Frame<'_>, area: Rect, app: &ControlApp) {
     };
     let logs = Paragraph::new(display)
         .block(focused_block(title, app.focus == FocusPane::Output))
-        .scroll((top as u16, 0))
-        .wrap(Wrap { trim: false });
+        .scroll((top as u16, 0));
     frame.render_widget(logs, area);
 }
 

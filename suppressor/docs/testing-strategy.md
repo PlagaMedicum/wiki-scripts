@@ -20,7 +20,11 @@ docmeta:
 - queue and worker behavior
 - realtime status serialization and backward compatibility
 - stream resume and silent-starvation decisions
+- source-list and request-page trigger helpers
+- MediaWiki timestamp serialization and API failure classification
+- source-cache watched-title diffing
 - catch-up summary formatting without sensitive payloads
+- catch-up warning aggregation without per-page log spam
 - TUI support helpers
 
 ### Boundary Tests
@@ -40,6 +44,9 @@ docmeta:
 - local runtime helper behavior
 - realtime runtime status persistence
 - CLI parsing for emergency catch-up and coverage commands
+- MediaWiki API timestamp formatting for recovery query parameters
+- compact runtime status fields for latest classified errors, source refresh, resource summaries,
+  and coalesced warning summaries
 
 ## Known Gaps
 
@@ -51,8 +58,8 @@ docmeta:
 
 ## Current Gate Evidence
 
-- `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1`: passed with 64 tests.
-- `rtk cargo test --manifest-path suppressor/Cargo.toml`: passed with 64 tests.
+- `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1`: passed with 75 tests.
+- `rtk cargo test --manifest-path suppressor/Cargo.toml`: passed with 75 tests.
 - `rtk cargo clippy --manifest-path suppressor/Cargo.toml --all-targets --all-features -- -D warnings`: passed.
 - Wiremock-backed tests bind local loopback ports. In sandboxed agent runs they may fail with
   `Operation not permitted` unless the test command is allowed to bind local ports; rerun the same
@@ -72,6 +79,12 @@ Alternate incident causes were also inspected and covered in the implementation 
 - queue dispatch and worker outcomes now update runtime status for queued, hidden, failed, and
   blocked states.
 - rights/session failures persist a blocked realtime state before the worker exits fail-closed.
+- MediaWiki API timestamps now have a regression test for UTC second precision without fractional
+  seconds.
+- Repeated catch-up page-query failures now have a regression test proving root-cause aggregation
+  and bounded safe title samples.
+- Source-list cache diffing now has regression coverage for added, removed, unchanged, and
+  redirect-derived watched-title sets.
 
 ## Testing Rule
 

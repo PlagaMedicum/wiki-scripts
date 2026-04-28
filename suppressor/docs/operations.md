@@ -51,11 +51,21 @@ The checked-in `config.toml` is the current be.wiki production baseline for:
 - API URL
 - EventStreams URL
 - watched-list title
+- request-page triggers, currently `Вікіпедыя:Запыты да схавальнікаў`
 - RevDel reason
+- realtime stale/read timeouts
+- bounded catch-up window and maximum revisions per run
+- catch-up warning sample retention
 - reconciliation timing
+- queue capacity
 - metrics bind
 
 Treat that file as the current working baseline, not as a guarantee that every wiki already fits it.
+The low-spec defaults are intentionally conservative: one daemon process, one TUI, queue capacity
+100, sequential bounded catch-up, five safe title samples per repeated warning class, and no
+unbounded warning output. These bounds are not a license to delay hiding; if a source-list edit adds
+more titles than the planning threshold, the daemon still starts title-scoped catch-up and logs that
+the source edit is large.
 
 ## State Files
 
@@ -79,6 +89,9 @@ These are local machine files, not source-of-truth docs.
 - use `make coverage-report ARGS="--start <RFC3339> --report-only"` for accident-window accounting
 - use `make nightly-sweep-now` as a slower safety-net reconciliation action
 - treat auth or rights loss as a stop-condition, not a soft warning
+- treat generic repeated `Failed to decode JSON response` or per-page catch-up warnings as an
+  incident symptom; the daemon should now show one classified warning summary with count, class/API
+  code, HTTP status when known, retryability, and a few safe sample titles
 
 ## Operational Targets
 
@@ -103,3 +116,25 @@ These are local machine files, not source-of-truth docs.
 
 Reports include page title, revision ID, age, reason, and next action. They must not include hidden
 text, raw comments, credentials, tokens, or session material.
+
+## Source-List And Request-Page Hooks
+
+Edits to `Удзельнік:Wizardist/SuppressionList` are realtime triggers. After the cache refresh
+succeeds, the daemon diffs the old and new watched-title sets and immediately starts bounded
+catch-up for newly added watched titles. Removed titles are recorded in status but not checked.
+
+Edits to configured request pages, including `Вікіпедыя:Запыты да схавальнікаў`, start an immediate
+recent-window catch-up over the current watched set. This is a recovery hook, not a replacement for
+keeping the source list current.
+
+Runtime status and the TUI show the latest source-refresh outcome, added/removed counts, catch-up
+scope, classified refresh errors, and the latest catch-up summary.
+
+## 2026-04-25 Warning-Storm Lesson
+
+The terminal warning storm was consistent with one root cause repeated across many watched pages:
+catch-up revision queries failed and logged once per title. The specific timestamp lesson is that
+MediaWiki API timestamp parameters must use UTC second precision with no fractional part; fractional
+`rvstart` values can be rejected as `badtimestamp`, causing every page query in a catch-up run to
+fail. The code now uses a shared MediaWiki timestamp formatter for revision queries and EventStreams
+`since` values, and catch-up coalesces repeated query failures into a compact summary.

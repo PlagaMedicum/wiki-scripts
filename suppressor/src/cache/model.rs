@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
@@ -26,6 +26,12 @@ pub struct RuntimeCache {
     pub snapshot: SuppressionListCache,
     pub watched_set: HashSet<String>,
     pub source_title_normalized: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WatchedTitleDiff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 impl RuntimeCache {
@@ -117,6 +123,23 @@ impl SuppressionListCache {
             watched_titles_normalized,
             redirect_map: discovered,
             ..self.clone()
+        }
+    }
+
+    pub fn watched_title_diff(&self, newer: &Self) -> WatchedTitleDiff {
+        let old = self
+            .watched_titles_normalized
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let new = newer
+            .watched_titles_normalized
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        WatchedTitleDiff {
+            added: new.difference(&old).cloned().collect(),
+            removed: old.difference(&new).cloned().collect(),
         }
     }
 }
@@ -247,5 +270,58 @@ mod tests {
             updated.redirect_map,
             BTreeMap::from([("Foo".to_string(), "Foo Redirect".to_string())])
         );
+    }
+
+    #[test]
+    fn watched_title_diff_reports_added_and_removed_titles() {
+        let previous = SuppressionListCache {
+            source_title: "Удзельнік:Wizardist/SuppressionList".to_string(),
+            source_pageid: Some(1),
+            source_lastrevid: Some(2),
+            source_last_timestamp: None,
+            fetched_at: Utc::now(),
+            listed_titles_normalized: vec!["Foo".to_string(), "Old".to_string()],
+            watched_titles_normalized: vec!["Foo".to_string(), "Old".to_string()],
+            redirect_map: BTreeMap::new(),
+            titles_hash_sha256: "old".to_string(),
+        };
+        let newer = SuppressionListCache {
+            listed_titles_normalized: vec!["Foo".to_string(), "New".to_string()],
+            watched_titles_normalized: vec![
+                "Foo".to_string(),
+                "New".to_string(),
+                "New Redirect".to_string(),
+            ],
+            titles_hash_sha256: "new".to_string(),
+            ..previous.clone()
+        };
+
+        let diff = previous.watched_title_diff(&newer);
+
+        assert_eq!(
+            diff.added,
+            vec!["New".to_string(), "New Redirect".to_string()]
+        );
+        assert_eq!(diff.removed, vec!["Old".to_string()]);
+    }
+
+    #[test]
+    fn watched_title_diff_is_empty_for_unchanged_watched_set() {
+        let snapshot = SuppressionListCache {
+            source_title: "Удзельнік:Wizardist/SuppressionList".to_string(),
+            source_pageid: Some(1),
+            source_lastrevid: Some(2),
+            source_last_timestamp: None,
+            fetched_at: Utc::now(),
+            listed_titles_normalized: vec!["Foo".to_string()],
+            watched_titles_normalized: vec!["Foo".to_string(), "Foo Redirect".to_string()],
+            redirect_map: BTreeMap::new(),
+            titles_hash_sha256: "hash".to_string(),
+        };
+
+        let diff = snapshot.watched_title_diff(&snapshot);
+
+        assert!(diff.added.is_empty());
+        assert!(diff.removed.is_empty());
     }
 }

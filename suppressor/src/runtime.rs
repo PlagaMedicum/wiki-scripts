@@ -19,8 +19,8 @@ use crate::reconcile::{
     ReconcileCoordinator, ReconcileMode, reconciliation_loop, revisiondelete_batch_limit,
 };
 use crate::state::{
-    CoverageSummary, NightlySweepProgress, ProcessedRevidsState, RuntimeStatus,
-    SuppressionOutcomeSnapshot, load_json, save_json_atomic,
+    ApiFailureSnapshot, CoverageSummary, NightlySweepProgress, ProcessedRevidsState, RuntimeStatus,
+    SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -573,6 +573,11 @@ impl AppRuntime {
                 status.dry_run = dry_run;
                 status.last_notice = Some("bootstrap completed".to_string());
                 status.last_notice_at = Some(Utc::now());
+                status.resource_economy = Some(crate::state::ResourceEconomySnapshot {
+                    queue_depth_max_recent: 0,
+                    latest_measurement_at: Some(Utc::now()),
+                    ..crate::state::ResourceEconomySnapshot::default()
+                });
                 status.realtime.state = "starting".to_string();
                 status.realtime.last_state_changed_at = Some(Utc::now());
                 status.realtime.stale_threshold_seconds =
@@ -613,15 +618,31 @@ impl AppRuntime {
     pub async fn mark_realtime_stream_open(&self) {
         self.update_runtime_status(|status| {
             let now = Utc::now();
-            status.realtime.state = "healthy".to_string();
-            status.realtime.last_state_changed_at = Some(now);
+            let backoff_until = active_backoff_until(status.realtime.backoff_until, now);
+            status.realtime.backoff_until = backoff_until;
+            let next_state = converged_realtime_state_after_stream_open(&status.realtime, now);
+            if status.realtime.state != next_state {
+                status.realtime.state = next_state;
+                status.realtime.last_state_changed_at = Some(now);
+            }
             status.realtime.last_stream_opened_at = Some(now);
             status.realtime.stale_threshold_seconds = self.config.realtime.stale_threshold_seconds;
             status.realtime.stream_read_timeout_seconds =
                 self.config.realtime.stream_read_timeout_seconds;
-            status.realtime.latest_error_code = None;
-            status.realtime.latest_notice = Some("real-time stream opened".to_string());
-            status.last_notice = Some("real-time stream opened".to_string());
+            if backoff_until.is_none() {
+                status.realtime.latest_error_code = None;
+                status.realtime.latest_error = None;
+            }
+            let notice = if let Some(until) = backoff_until {
+                format!(
+                    "real-time stream opened; catch-up backoff until {}",
+                    render_runtime_time(&until)
+                )
+            } else {
+                "real-time stream opened".to_string()
+            };
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
             status.last_notice_at = Some(now);
         })
         .await;
@@ -630,16 +651,27 @@ impl AppRuntime {
     pub async fn mark_realtime_event(&self, event_id: Option<String>) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
+            let backoff_until = active_backoff_until(status.realtime.backoff_until, now);
             status.realtime.last_event_observed_at = Some(now);
+            status.realtime.last_freshness_probe_source = Some("stream".to_string());
             status.realtime.current_lag_seconds = Some(0);
             if let Some(event_id) = event_id {
                 status.realtime.last_event_id = Some(event_id);
             }
-            if status.realtime.state == "stale" || status.realtime.state == "reconnecting" {
-                status.realtime.state = "healthy".to_string();
+            let next_state = converged_realtime_state_after_stream_event(&status.realtime, now);
+            if status.realtime.state != next_state {
+                status.realtime.state = next_state;
                 status.realtime.last_state_changed_at = Some(now);
             }
-            status.realtime.latest_notice = Some("observed target-wiki event".to_string());
+            status.realtime.backoff_until = backoff_until;
+            status.realtime.latest_notice = Some(if let Some(until) = backoff_until {
+                format!(
+                    "observed target-wiki event; recovery backoff until {}",
+                    render_runtime_time(&until)
+                )
+            } else {
+                "observed target-wiki event".to_string()
+            });
         })
         .await;
     }
@@ -677,23 +709,87 @@ impl AppRuntime {
         .await;
     }
 
+    pub async fn record_api_failure(&self, snapshot: ApiFailureSnapshot) {
+        self.update_runtime_status(move |status| {
+            status.realtime.latest_error_code = snapshot
+                .api_code
+                .clone()
+                .or_else(|| Some(snapshot.class.clone()));
+            status.realtime.latest_notice = Some(format!(
+                "{} {} failed",
+                snapshot.operation,
+                status
+                    .realtime
+                    .latest_error_code
+                    .as_deref()
+                    .unwrap_or("error")
+            ));
+            status.realtime.latest_error = Some(snapshot);
+        })
+        .await;
+    }
+
+    pub async fn record_source_refresh(&self, refresh: SourceListRefresh) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            let active_deferred_until = active_backoff_until(refresh.deferred_until, now);
+            let notice = format!(
+                "source refresh {} new={} removed={} catchup={}",
+                refresh.outcome,
+                refresh.new_titles_count,
+                refresh.removed_titles_count,
+                refresh.catchup_triggered
+            );
+            if active_deferred_until.is_some() {
+                status.realtime.state = "catching-up".to_string();
+                status.realtime.last_state_changed_at = Some(now);
+                status.realtime.backoff_until = active_deferred_until;
+            } else if refresh.error.is_some() || refresh.outcome.ends_with("failed") {
+                status.realtime.state = "unhealthy".to_string();
+                status.realtime.last_state_changed_at = Some(now);
+            }
+            if let Some(error) = refresh.error.clone() {
+                status.realtime.latest_error_code =
+                    error.api_code.clone().or_else(|| Some(error.class.clone()));
+                status.realtime.latest_error = Some(error);
+            }
+            status.realtime.last_source_refresh = Some(refresh);
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
+            status.last_notice_at = Some(now);
+        })
+        .await;
+    }
+
     pub async fn mark_recovery_started(&self, trigger: String) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
+            let notice = format!("{} catch-up started", trigger);
             status.realtime.state = "catching-up".to_string();
             status.realtime.last_state_changed_at = Some(now);
             status.realtime.catchup_active = true;
             status.realtime.last_recovery_trigger = Some(trigger.clone());
             status.realtime.last_recovery_started_at = Some(now);
-            status.realtime.latest_notice = Some(format!("{} catch-up started", trigger));
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
+            status.last_notice_at = Some(now);
         })
         .await;
+    }
+
+    pub async fn current_backoff_until(&self) -> Option<DateTime<Utc>> {
+        let status = self.reconcile.runtime_status.lock().await;
+        active_backoff_until(status.realtime.backoff_until, Utc::now())
     }
 
     pub async fn mark_recovery_completed(&self, summary: CoverageSummary) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
-            status.realtime.state = if summary.unresolved_count == 0 {
+            let backoff_until = active_backoff_until(summary.backoff_until, now);
+            let notice = render_recovery_notice(&summary);
+            status.realtime.state = if backoff_until.is_some() {
+                "catching-up".to_string()
+            } else if summary.unresolved_count == 0 {
                 "healthy".to_string()
             } else {
                 "unhealthy".to_string()
@@ -701,10 +797,46 @@ impl AppRuntime {
             status.realtime.last_state_changed_at = Some(now);
             status.realtime.catchup_active = false;
             status.realtime.last_recovery_completed_at = Some(now);
-            status.realtime.latest_notice = Some(format!(
-                "catch-up completed checked={} unresolved={}",
-                summary.edits_checked, summary.unresolved_count
-            ));
+            status.realtime.backoff_until = backoff_until;
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
+            status.last_notice_at = Some(now);
+            if let Some(warning) = summary.warning_summaries.first() {
+                status.realtime.latest_error_code = warning
+                    .api_code
+                    .clone()
+                    .or_else(|| Some(warning.class.clone()));
+                status.realtime.latest_error = Some(ApiFailureSnapshot {
+                    class: warning.class.clone(),
+                    api_code: warning.api_code.clone(),
+                    http_status: warning.http_status,
+                    content_type: warning.content_type.clone(),
+                    retryable: warning.retryable,
+                    retry_after_seconds: warning.retry_after_seconds,
+                    operation: warning.operation.clone(),
+                    message: warning.message.clone(),
+                    occurred_at: Some(now),
+                    ..ApiFailureSnapshot::default()
+                });
+            } else if backoff_until.is_none() && summary.unresolved_count == 0 {
+                status.realtime.latest_error_code = None;
+                status.realtime.latest_error = None;
+            }
+            let warning_count = summary
+                .warning_summaries
+                .iter()
+                .map(|warning| warning.count)
+                .sum();
+            if warning_count > 0 {
+                let mut resource = status.resource_economy.clone().unwrap_or_default();
+                resource.queue_depth_max_recent = resource
+                    .queue_depth_max_recent
+                    .max(status.realtime.queue_depth);
+                resource.coalesced_warning_count_recent = warning_count;
+                resource.latest_measurement_at = Some(now);
+                status.resource_economy = Some(resource);
+            }
+            status.realtime.latest_recovery_warnings = summary.warning_summaries.clone();
             status.realtime.latest_recovery_summary = Some(summary);
         })
         .await;
@@ -725,6 +857,7 @@ impl AppRuntime {
         let observed_at = action.observed_at;
         let queued_at = action.queued_at;
         self.update_runtime_status(move |status| {
+            let backoff_until = active_backoff_until(status.realtime.backoff_until, completed_at);
             status.realtime.queue_depth = queue_depth;
             status.realtime.last_action_completed_at = Some(completed_at);
             if outcome == "hidden" || outcome == "already-hidden" {
@@ -733,6 +866,20 @@ impl AppRuntime {
             if outcome == "blocked" {
                 status.realtime.state = "blocked".to_string();
                 status.realtime.last_state_changed_at = Some(completed_at);
+            } else if mode == RevDelMode::Live.label()
+                && matches!(outcome, "failed" | "retrying" | "throttled" | "unresolved")
+            {
+                status.realtime.state = "unhealthy".to_string();
+                status.realtime.last_state_changed_at = Some(completed_at);
+            } else if mode == RevDelMode::Live.label()
+                && matches!(outcome, "hidden" | "already-hidden")
+                && !status.realtime.catchup_active
+                && backoff_until.is_none()
+            {
+                status.realtime.state = "healthy".to_string();
+                status.realtime.last_state_changed_at = Some(completed_at);
+                status.realtime.latest_error_code = None;
+                status.realtime.latest_error = None;
             }
             status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
                 title,
@@ -773,6 +920,99 @@ impl AppRuntime {
     }
 }
 
+fn active_backoff_until(
+    backoff_until: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    backoff_until.filter(|until| *until > now)
+}
+
+fn latest_live_outcome_is_degraded(status: &crate::state::RealtimeRuntimeStatus) -> bool {
+    matches!(
+        status.latest_outcome.as_ref(),
+        Some(outcome)
+            if outcome.mode == RevDelMode::Live.label()
+                && matches!(
+                    outcome.outcome.as_str(),
+                    "failed" | "retrying" | "throttled" | "unresolved" | "blocked"
+                )
+    )
+}
+
+fn converged_realtime_state_after_stream_open(
+    status: &crate::state::RealtimeRuntimeStatus,
+    now: DateTime<Utc>,
+) -> String {
+    if status.catchup_active || active_backoff_until(status.backoff_until, now).is_some() {
+        return "catching-up".to_string();
+    }
+    if matches!(status.state.as_str(), "blocked")
+        || matches!(
+            status.latest_outcome.as_ref(),
+            Some(outcome)
+                if outcome.mode == RevDelMode::Live.label() && outcome.outcome == "blocked"
+        )
+    {
+        return "blocked".to_string();
+    }
+    if latest_live_outcome_is_degraded(status) {
+        return "unhealthy".to_string();
+    }
+    if status.last_event_observed_at.is_none() && status.state == "starting" {
+        return "starting".to_string();
+    }
+    if status.last_event_observed_at.is_none() && status.state == "reconnecting" {
+        return "reconnecting".to_string();
+    }
+    "healthy".to_string()
+}
+
+fn converged_realtime_state_after_stream_event(
+    status: &crate::state::RealtimeRuntimeStatus,
+    now: DateTime<Utc>,
+) -> String {
+    if status.catchup_active || active_backoff_until(status.backoff_until, now).is_some() {
+        return "catching-up".to_string();
+    }
+    if matches!(status.state.as_str(), "blocked")
+        || matches!(
+            status.latest_outcome.as_ref(),
+            Some(outcome)
+                if outcome.mode == RevDelMode::Live.label() && outcome.outcome == "blocked"
+        )
+    {
+        return "blocked".to_string();
+    }
+    if latest_live_outcome_is_degraded(status) {
+        return "unhealthy".to_string();
+    }
+    "healthy".to_string()
+}
+
+fn render_runtime_time(value: &DateTime<Utc>) -> String {
+    value.format("%H:%M:%S UTC").to_string()
+}
+
+fn render_recovery_notice(summary: &CoverageSummary) -> String {
+    if let Some(until) = summary.backoff_until.as_ref() {
+        if let Some(reason) = summary.stopped_early_reason.as_deref() {
+            return format!(
+                "catch-up paused until {} ({})",
+                render_runtime_time(until),
+                reason
+            );
+        }
+        return format!("catch-up paused until {}", render_runtime_time(until));
+    }
+    if let Some(reason) = summary.stopped_early_reason.as_deref() {
+        return format!("catch-up stopped early: {}", reason);
+    }
+    format!(
+        "catch-up completed checked={} unresolved={}",
+        summary.edits_checked, summary.unresolved_count
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -807,6 +1047,7 @@ mod tests {
                 title: "List".to_string(),
                 cache_file: "./state/cache.json".to_string(),
                 metadata_recheck_seconds: 60,
+                request_pages: vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()],
             },
             matching: MatchingConfig {
                 drop_canary: true,
@@ -841,6 +1082,11 @@ mod tests {
                 default_window_seconds: 1800,
                 max_window_seconds: 7200,
                 max_revisions_per_run: 1000,
+                warning_sample_limit: 5,
+                source_refresh_title_scope_limit: 250,
+                rate_limit_backoff_default_seconds: 30,
+                rate_limit_stop_after_failures: 3,
+                unresolved_sample_limit: 25,
             },
             nightly_sweep: NightlySweepConfig {
                 enabled: true,
@@ -989,5 +1235,107 @@ mod tests {
         assert_eq!(pass.batch_sleep_ms, config.nightly_sweep.batch_sleep_ms);
         assert_eq!(pass.batch_limit, 500);
         assert_eq!(pass.persistence, CachePersistence::Ephemeral);
+    }
+
+    #[test]
+    fn active_backoff_filters_expired_values() {
+        let now = DateTime::parse_from_rfc3339("2026-04-25T17:10:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expired = DateTime::parse_from_rfc3339("2026-04-25T17:09:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let active = DateTime::parse_from_rfc3339("2026-04-25T17:10:30Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(active_backoff_until(Some(expired), now), None);
+        assert_eq!(active_backoff_until(Some(active), now), Some(active));
+    }
+
+    #[test]
+    fn recovery_notice_prefers_backoff_and_stop_reason() {
+        let summary = CoverageSummary {
+            stopped_early_reason: Some("rate-limited".to_string()),
+            backoff_until: Some(
+                DateTime::parse_from_rfc3339("2026-04-25T17:11:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            edits_checked: 7,
+            unresolved_count: 3,
+            ..CoverageSummary::default()
+        };
+
+        assert_eq!(
+            render_recovery_notice(&summary),
+            "catch-up paused until 17:11:00 UTC (rate-limited)"
+        );
+    }
+
+    #[test]
+    fn stream_event_converges_idle_catchup_to_healthy() {
+        let now = DateTime::parse_from_rfc3339("2026-04-28T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let status = crate::state::RealtimeRuntimeStatus {
+            state: "catching-up".to_string(),
+            catchup_active: false,
+            backoff_until: None,
+            latest_outcome: Some(SuppressionOutcomeSnapshot {
+                title: "Title".to_string(),
+                revid: 42,
+                outcome: "hidden".to_string(),
+                mode: RevDelMode::Live.label().to_string(),
+                ..SuppressionOutcomeSnapshot::default()
+            }),
+            ..crate::state::RealtimeRuntimeStatus::default()
+        };
+
+        assert_eq!(
+            converged_realtime_state_after_stream_event(&status, now),
+            "healthy"
+        );
+    }
+
+    #[test]
+    fn stream_event_keeps_failed_live_protection_unhealthy() {
+        let now = DateTime::parse_from_rfc3339("2026-04-28T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let status = crate::state::RealtimeRuntimeStatus {
+            state: "catching-up".to_string(),
+            catchup_active: false,
+            backoff_until: None,
+            latest_outcome: Some(SuppressionOutcomeSnapshot {
+                title: "Title".to_string(),
+                revid: 42,
+                outcome: "failed".to_string(),
+                mode: RevDelMode::Live.label().to_string(),
+                ..SuppressionOutcomeSnapshot::default()
+            }),
+            ..crate::state::RealtimeRuntimeStatus::default()
+        };
+
+        assert_eq!(
+            converged_realtime_state_after_stream_event(&status, now),
+            "unhealthy"
+        );
+    }
+
+    #[test]
+    fn stream_open_keeps_starting_before_first_event() {
+        let now = DateTime::parse_from_rfc3339("2026-04-28T11:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let status = crate::state::RealtimeRuntimeStatus {
+            state: "starting".to_string(),
+            ..crate::state::RealtimeRuntimeStatus::default()
+        };
+
+        assert_eq!(
+            converged_realtime_state_after_stream_open(&status, now),
+            "starting"
+        );
     }
 }

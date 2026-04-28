@@ -13,6 +13,7 @@ password_env = "BEWIKI_BOT_PASSWORD"
 title = "Удзельнік:Wizardist/SuppressionList"
 cache_file = "./state/suppression_list_cache.json"
 metadata_recheck_seconds = 600
+request_pages = ["Вікіпедыя:Запыты да схавальнікаў"]
 
 [matching]
 drop_canary = true
@@ -49,6 +50,11 @@ freshness_probe_seconds = 30
 default_window_seconds = 1800
 max_window_seconds = 7200
 max_revisions_per_run = 5000
+warning_sample_limit = 5
+source_refresh_title_scope_limit = 250
+rate_limit_backoff_default_seconds = 30
+rate_limit_stop_after_failures = 3
+unresolved_sample_limit = 25
 
 [nightly_sweep]
 enabled = true

@@ -9,9 +9,11 @@ use reqwest_eventsource::{Event, EventSource};
 use tracing::{debug, info, warn};
 
 use crate::cache::{CachePersistence, CacheRefreshMode, refresh_cache};
+use crate::catchup::run_title_scoped_catchup;
+use crate::mw_api::classify_api_failure;
 use crate::recentchange::LiveRevisionCandidate;
 use crate::runtime::{AppRuntime, RevDelDispatch, RevDelMode};
-use crate::state::{load_text, save_text_atomic};
+use crate::state::{SourceListRefresh, load_text, save_text_atomic};
 
 pub fn spawn_stream_loop(runtime: Arc<AppRuntime>) {
     tokio::spawn(async move {
@@ -27,6 +29,7 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
     } else {
         load_text(&runtime.paths.last_event_id_file)?
     };
+    let mut startup_catchup_pending = true;
     let mut use_since_recovery = false;
     let initial_backoff = runtime.config.retry.stream_backoff_initial_ms;
     let max_backoff = runtime
@@ -138,7 +141,11 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                     backoff_ms = initial_backoff;
                     info!("recentchange stream opened");
                     runtime.mark_realtime_stream_open().await;
-                    spawn_bounded_catchup(Arc::clone(&runtime), "startup".to_string());
+                    if let Some(trigger) =
+                        take_startup_catchup_trigger(&mut startup_catchup_pending)
+                    {
+                        spawn_bounded_catchup(Arc::clone(&runtime), trigger.to_string());
+                    }
                     continue;
                 }
                 Ok(Event::Message(message)) => {
@@ -163,23 +170,21 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                 }
                 Err(error) => {
                     counter!("event_reconnect_total").increment(1);
-                    use_since_recovery =
-                        should_use_since_recovery(resume_event_id.as_deref(), &error);
-                    let trigger = if use_since_recovery {
-                        "invalid-resume"
-                    } else {
-                        "reconnect-error"
-                    };
+                    let recovery =
+                        classify_stream_error_recovery(resume_event_id.as_deref(), &error);
+                    use_since_recovery = recovery.use_since_recovery;
                     runtime
                         .mark_realtime_state(
                             "reconnecting",
-                            Some(trigger.to_string()),
+                            Some(recovery.status_trigger.to_string()),
                             Some(error.to_string()),
                             Some("stream-error".to_string()),
                             "real-time stream reconnecting after error".to_string(),
                         )
                         .await;
-                    spawn_bounded_catchup(Arc::clone(&runtime), trigger.to_string());
+                    if let Some(trigger) = recovery.catchup_trigger {
+                        spawn_bounded_catchup(Arc::clone(&runtime), trigger.to_string());
+                    }
                     warn!(
                         use_since_recovery,
                         error = %error,
@@ -216,6 +221,23 @@ fn spawn_bounded_catchup(runtime: Arc<AppRuntime>, trigger: String) {
     });
 }
 
+fn spawn_title_scope_catchup(runtime: Arc<AppRuntime>, trigger: String, titles: Vec<String>) {
+    tokio::spawn(async move {
+        if let Err(error) = run_title_scoped_catchup(&runtime, trigger.clone(), titles).await {
+            warn!(error = %error, trigger = %trigger, "title-scoped catch-up failed");
+            runtime
+                .mark_realtime_state(
+                    "unhealthy",
+                    Some(trigger),
+                    Some("title-scoped catch-up failed".to_string()),
+                    Some("catchup-failed".to_string()),
+                    format!("title-scoped catch-up failed: {error}"),
+                )
+                .await;
+        }
+    });
+}
+
 pub async fn handle_recentchange_event(
     runtime: &Arc<AppRuntime>,
     event: crate::recentchange::RecentChangeEvent,
@@ -237,18 +259,22 @@ pub async fn handle_recentchange_event(
         let normalized_title = crate::titles::normalize_title(title);
         let source_title = runtime.cache.read().await.source_title_normalized.clone();
         if normalized_title == source_title {
-            info!(title = %title, "source suppression list page changed; refreshing cache");
-            let _ = refresh_cache(
-                &runtime.cache,
-                &runtime.client,
-                &runtime.config,
-                &runtime.paths,
-                CacheRefreshMode::Forced,
-                if runtime.dry_run {
-                    CachePersistence::Ephemeral
-                } else {
-                    CachePersistence::Persist
-                },
+            handle_source_list_change(
+                runtime,
+                title,
+                event.revision.as_ref().and_then(|revision| revision.new),
+            )
+            .await;
+            return Ok(event_id);
+        }
+        if is_request_page_trigger(
+            &normalized_title,
+            &runtime.config.suppression_list.request_pages,
+        ) {
+            handle_request_page_change(
+                runtime,
+                title,
+                event.revision.as_ref().and_then(|revision| revision.new),
             )
             .await;
             return Ok(event_id);
@@ -289,6 +315,139 @@ pub async fn handle_recentchange_event(
     Ok(event_id)
 }
 
+async fn handle_source_list_change(
+    runtime: &Arc<AppRuntime>,
+    title: &str,
+    trigger_revid: Option<u64>,
+) {
+    info!(title = %title, "source suppression list page changed; refreshing cache");
+    let started_at = Utc::now();
+    let before = runtime.cache.read().await.snapshot.clone();
+    let persistence = if runtime.dry_run {
+        CachePersistence::Ephemeral
+    } else {
+        CachePersistence::Persist
+    };
+    match refresh_cache(
+        &runtime.cache,
+        &runtime.client,
+        &runtime.config,
+        &runtime.paths,
+        CacheRefreshMode::Forced,
+        persistence,
+    )
+    .await
+    {
+        Ok(refreshed) => {
+            let after = runtime.cache.read().await.snapshot.clone();
+            let diff = before.watched_title_diff(&after);
+            let catchup_titles = diff.added.clone();
+            let catchup_requested = !catchup_titles.is_empty();
+            let catchup_title_scope = if catchup_requested
+                && catchup_titles.len() > runtime.config.catchup.source_refresh_title_scope_limit
+            {
+                warn!(
+                    added_titles = catchup_titles.len(),
+                    configured_limit = runtime.config.catchup.source_refresh_title_scope_limit,
+                    "source-list refresh added more titles than the low-spec planning threshold"
+                );
+                "new-titles-large"
+            } else {
+                "new-titles"
+            };
+            let deferred_until = if catchup_requested {
+                runtime.current_backoff_until().await
+            } else {
+                None
+            };
+            let catchup_triggered = catchup_requested && deferred_until.is_none();
+            let outcome = if deferred_until.is_some() {
+                "catchup-deferred"
+            } else if catchup_triggered {
+                "catchup-started"
+            } else if refreshed {
+                "refreshed"
+            } else {
+                "unchanged"
+            };
+            runtime
+                .record_source_refresh(SourceListRefresh {
+                    trigger_title: title.to_string(),
+                    trigger_revid,
+                    started_at: Some(started_at),
+                    completed_at: Some(Utc::now()),
+                    old_source_revid: before.source_lastrevid,
+                    new_source_revid: after.source_lastrevid,
+                    new_titles_count: diff.added.len(),
+                    removed_titles_count: diff.removed.len(),
+                    redirects_reused: before.titles_hash_sha256 == after.titles_hash_sha256,
+                    catchup_triggered,
+                    catchup_title_scope: catchup_requested.then(|| catchup_title_scope.to_string()),
+                    deferred_until,
+                    outcome: outcome.to_string(),
+                    error: None,
+                })
+                .await;
+            if catchup_triggered {
+                spawn_title_scope_catchup(
+                    Arc::clone(runtime),
+                    "source-list-refresh".to_string(),
+                    catchup_titles,
+                );
+            }
+        }
+        Err(error) => {
+            let failure =
+                classify_api_failure(&error, "source-refresh", Some(title), trigger_revid);
+            warn!(title = %title, error = %error, "source suppression list refresh failed");
+            runtime
+                .record_source_refresh(SourceListRefresh {
+                    trigger_title: title.to_string(),
+                    trigger_revid,
+                    started_at: Some(started_at),
+                    completed_at: Some(Utc::now()),
+                    old_source_revid: before.source_lastrevid,
+                    new_source_revid: before.source_lastrevid,
+                    outcome: "refresh-failed".to_string(),
+                    error: Some(failure),
+                    ..SourceListRefresh::default()
+                })
+                .await;
+        }
+    }
+}
+
+async fn handle_request_page_change(
+    runtime: &Arc<AppRuntime>,
+    title: &str,
+    trigger_revid: Option<u64>,
+) {
+    info!(title = %title, "request page changed; starting immediate catch-up");
+    let started_at = Utc::now();
+    let deferred_until = runtime.current_backoff_until().await;
+    let catchup_triggered = deferred_until.is_none();
+    runtime
+        .record_source_refresh(SourceListRefresh {
+            trigger_title: title.to_string(),
+            trigger_revid,
+            started_at: Some(started_at),
+            completed_at: Some(Utc::now()),
+            catchup_triggered,
+            catchup_title_scope: Some("request-window".to_string()),
+            deferred_until,
+            outcome: if catchup_triggered {
+                "catchup-started".to_string()
+            } else {
+                "catchup-deferred".to_string()
+            },
+            ..SourceListRefresh::default()
+        })
+        .await;
+    if catchup_triggered {
+        spawn_bounded_catchup(Arc::clone(runtime), "request-page-refresh".to_string());
+    }
+}
+
 async fn handle_live_candidate(
     runtime: &Arc<AppRuntime>,
     candidate: LiveRevisionCandidate,
@@ -319,6 +478,40 @@ async fn handle_live_candidate(
         .await
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamErrorRecovery {
+    use_since_recovery: bool,
+    status_trigger: &'static str,
+    catchup_trigger: Option<&'static str>,
+}
+
+fn take_startup_catchup_trigger(startup_catchup_pending: &mut bool) -> Option<&'static str> {
+    if *startup_catchup_pending {
+        *startup_catchup_pending = false;
+        Some("startup")
+    } else {
+        None
+    }
+}
+
+fn classify_stream_error_recovery(
+    resume_event_id: Option<&str>,
+    error: &dyn std::fmt::Display,
+) -> StreamErrorRecovery {
+    if should_use_since_recovery(resume_event_id, error) {
+        return StreamErrorRecovery {
+            use_since_recovery: true,
+            status_trigger: "invalid-resume",
+            catchup_trigger: Some("invalid-resume"),
+        };
+    }
+    StreamErrorRecovery {
+        use_since_recovery: false,
+        status_trigger: "reconnect-error",
+        catchup_trigger: None,
+    }
+}
+
 pub fn should_use_since_recovery(
     resume_event_id: Option<&str>,
     error: &dyn std::fmt::Display,
@@ -336,6 +529,12 @@ pub fn should_use_since_recovery(
 
 pub fn stream_silence_notice(seconds: u64) -> String {
     format!("real-time stream silent for {seconds}s")
+}
+
+fn is_request_page_trigger(normalized_title: &str, request_pages: &[String]) -> bool {
+    request_pages
+        .iter()
+        .any(|title| crate::titles::normalize_title(title) == normalized_title)
 }
 
 #[cfg(test)]
@@ -367,5 +566,53 @@ mod tests {
     #[test]
     fn stream_starvation_notice_is_actionable() {
         assert_eq!(stream_silence_notice(10), "real-time stream silent for 10s");
+    }
+
+    #[test]
+    fn startup_catchup_runs_only_once() {
+        let mut pending = true;
+
+        assert_eq!(take_startup_catchup_trigger(&mut pending), Some("startup"));
+        assert_eq!(take_startup_catchup_trigger(&mut pending), None);
+    }
+
+    #[test]
+    fn invalid_resume_errors_trigger_since_recovery_catchup() {
+        let recovery = classify_stream_error_recovery(Some("abc"), &"410 Gone");
+
+        assert_eq!(
+            recovery,
+            StreamErrorRecovery {
+                use_since_recovery: true,
+                status_trigger: "invalid-resume",
+                catchup_trigger: Some("invalid-resume"),
+            }
+        );
+    }
+
+    #[test]
+    fn generic_reconnect_errors_do_not_trigger_catchup() {
+        let recovery = classify_stream_error_recovery(Some("abc"), &"error decoding response body");
+
+        assert_eq!(
+            recovery,
+            StreamErrorRecovery {
+                use_since_recovery: false,
+                status_trigger: "reconnect-error",
+                catchup_trigger: None,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_request_page_is_detected_after_normalization() {
+        assert!(is_request_page_trigger(
+            "Вікіпедыя:Запыты да схавальнікаў",
+            &["Вікіпедыя:Запыты_да_схавальнікаў".to_string()]
+        ));
+        assert!(!is_request_page_trigger(
+            "Іншая старонка",
+            &["Вікіпедыя:Запыты да схавальнікаў".to_string()]
+        ));
     }
 }

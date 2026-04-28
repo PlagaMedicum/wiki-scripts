@@ -3,7 +3,7 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Implementation plan for restoring urgent real-time suppressor hiding.
-  source: speckit-plan on 2026-04-24
+  source: speckit-plan on 2026-04-28
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -11,21 +11,21 @@ docmeta:
 
 ## Summary
 
-Restore `suppressor` as a real-time safety service: eligible edits on watched sensitive pages must be detected, hidden, and reported without operator refreshes or nightly reconciliation. The plan keeps the existing Rust daemon/TUI architecture, but is now grounded in the targeted code audit: the most likely current fault is a silently stale EventStreams loop that can leave the daemon "running" while no new edits are handled, with no operator-visible realtime freshness signal. The implementation therefore prioritizes watchdog-based live-path hardening, explicit bounded catch-up, durable realtime status, and repeatable latency evidence.
+Restore `suppressor` as a real-time safety service: eligible edits on watched sensitive pages must be detected, hidden, and reported without operator refreshes or nightly reconciliation. The first remediation slice already fixed MediaWiki timestamp serialization, source-list/request-page triggers, classified API error persistence, warning coalescing, and basic throttle metadata. Current operator evidence adds a third class of remaining work beyond throttled catch-up and mixed command status: the same classified rate-limit failures now clearly affect the live hide path, `startup` recovery is still being used or labeled too broadly, and the realtime state machine can remain stuck in `catching-up` after backoff or recovery has already ended. The updated feature spec also adds a compatibility obligation: operator-facing status or report surfaces and launch-path assumptions must remain backward-compatible where practical, or the release must emit an explicit migration-needed diagnostic instead of silently invalidating the previous setup. The remaining plan therefore shifts from broad incident discovery to authoritative daemon status, rate-aware recovery across live and catch-up paths, state-convergent operator surfaces, compatibility-safe operator diagnostics, and deployment verification on low-spec hardware.
 
 ## Technical Context
 
 **Language/Version**: Rust edition 2024, using the existing `suppressor` crate  
 **Primary Dependencies**: `tokio`, `reqwest`, `reqwest-eventsource`, `serde`, `chrono`, `metrics`, `tracing`, `ratatui`, `crossterm`, `wiremock` for tests  
 **Storage**: Local state files under `suppressor/state/`: `last_event_id.txt`, `processed_revids.json`, `nightly_sweep_progress.json`, `runtime_status.json`, plus the suppression-list cache  
-**Testing**: `cargo test` in `suppressor/`, focused unit/subsystem tests, mocked MediaWiki API tests with `wiremock`, targeted stream-stall/watchdog tests with controlled time or harnesses, and controlled dry-run/manual latency verification against production config. External live verification may use `Удзельнік:Plaga med Bot/suppressor/tests` for manual and automated benchmark edits, and every benchmark edit to that page must be explicitly marked as a bot edit.
+**Testing**: `cargo test` in `suppressor/`, focused unit/subsystem tests, mocked MediaWiki API tests with `wiremock`, targeted stream-stall/watchdog tests with controlled time or harnesses, compatibility fixtures for older state/status shapes and stale supervisor artifacts, and controlled dry-run/manual latency verification against production config. The current local baseline already includes passing serialized and full suppressor test runs plus the repo docs gate; the remaining work needs new failing-first tests around throttling, live-path rate-limit failures, state convergence after recovery/backoff, bounded state retention, compatibility-safe command/report surfaces, and restart/live verification. External live verification may use `Удзельнік:Plaga med Bot/suppressor/tests` for manual and automated benchmark edits, and every benchmark edit to that page must be explicitly marked as a bot edit.
 **Target Platform**: Linux local daemon plus local TUI supervisor for be.wikipedia.org  
 **Project Type**: Single Rust CLI/daemon/TUI tool inside `suppressor/`  
-**Performance Goals**: 95% of eligible live edits hidden within 1 second, 99% within 5 seconds under normal wiki/account availability; stale realtime state visible within 10 seconds; 30-minute catch-up completed or reported within 2 minutes
+**Performance Goals**: 95% of eligible live edits hidden within 1 second, 99% within 5 seconds under normal wiki/account availability; stale realtime state visible within 10 seconds; 30-minute catch-up completed or reported within 2 minutes; publish-to-detect and detect-to-hide evidence recorded explicitly enough to distinguish daemon latency from unavoidable post-publication visibility
 **Resource Goals**: run comfortably on a low-spec local host with one daemon and one TUI, bounded queues, bounded API concurrency, bounded state/log growth, no busy loops, and measured idle/active CPU and memory during release verification, without lowering latency/recovery targets or dropping durable documentation evidence
 **Architecture Constraints**: preserve one local deployable daemon/TUI package, but keep internals microservice-like: EventStreams ingestion, source refresh, catch-up, RevDel worker, state persistence, metrics, and TUI status communicate through explicit structs, small traits/functions, and bounded channels rather than shared ad hoc coupling
 **Minimalism Constraints**: prefer existing dependencies and module patterns; add no new runtime dependency, abstraction, task, command, or state file unless it directly improves correctness, resource economy, observability, testability, or boundary clarity for this incident
-**Operational Constraints**: Keep scope narrow; hide only `user|comment`; do not log sensitive article content, hidden text, secrets, cookies, tokens, or session material; fail closed on unrecoverable auth/permission loss; avoid turning reconciliation into the primary live path; do not count manual cache reload or hour-scale current-day reconciliation as acceptable substitutes for live hiding
+**Operational Constraints**: Keep scope narrow; hide only `user|comment`; do not log sensitive article content, hidden text, secrets, cookies, tokens, or session material; fail closed on unrecoverable auth/permission loss; avoid turning reconciliation into the primary live path; do not count manual cache reload or hour-scale current-day reconciliation as acceptable substitutes for live hiding; document clearly that an external EventStreams daemon minimizes post-publication exposure but cannot guarantee zero first-view prevention without a broader in-wiki control path
 **Scale/Scope**: Current be.wiki production baseline with about 1.4k listed/watched sensitive titles, bursty RecentChanges input, one live stream connection, one local operator, one daemon process, and no new public network service for this feature
 
 **Known Findings From Targeted Code Audit**:
@@ -34,16 +34,28 @@ Restore `suppressor` as a real-time safety service: eligible edits on watched se
 - The current runtime status and TUI show daemon/reconciliation state plus `last_event_id`, but do not show realtime freshness, last matched edit, last successful hide, or the current recovery trigger.
 - The current `current_day_recheck` cadence is configured in hours, and manual reload only refreshes the suppression-list cache; neither path can satisfy the sub-second live-hiding requirement.
 - Existing instrumentation already captures queue depth, `event_to_api_submit_latency_ms`, and `immediate_hide_latency_ms`; the plan should extend this into a complete event-observed-to-hide latency evidence path.
+- One-shot operator commands can bootstrap a fresh runtime and currently share the daemon's runtime-status surface, which risks mixing manual command state with daemon truth.
+- The TUI live-output pane follows logical input lines while rendering wrapped rows, so the newest visible rows can lag behind the actual newest messages.
 
-**Findings From 2026-04-25 Runtime Analysis**:
+**Status After Initial Remediation (must remain covered by regression tests)**:
 
-- Bounded catch-up is sending MediaWiki revision timestamps with fractional nanoseconds through `rvstart`; production API probing showed MediaWiki rejects that shape as `badtimestamp`, which explains all-pages catch-up failure and the warning storm.
-- The source-list recentchange hook refreshes `Удзельнік:Wizardist/SuppressionList` and then returns; it does not immediately run a bounded catch-up for newly added pages, so new sensitive titles can wait for a slower fallback.
-- Live RevDel failures are persisted only as `api-error`; the exact API error code, HTTP status, content type, and retryability are not durable enough for the TUI or post-incident diagnosis.
-- Catch-up logs one warning per page for identical API failures, which floods the TUI and hides the root cause from the operator.
-- `freshness_probe_seconds` exists in config and contracts, but no implemented API freshness probe was found, so stale-stream lag may still be based only on stream-observed events.
-- The current code has useful module boundaries, but the remediation must tighten them into small internal service contracts instead of adding new processes or network services.
-- Release evidence must include resource-economy checks on daemon plus TUI so performance improvements do not assume a powerful workstation.
+- MediaWiki API timestamps are serialized through one UTC second-precision helper, removing fractional `rvstart` values.
+- Source-list and request-page recentchange hooks can refresh cache state and start immediate bounded catch-up.
+- Runtime status and the TUI can now persist classified API failure details and aggregate repeated warning causes instead of emitting one warning per page.
+
+**Residual Findings From 2026-04-26 Through 2026-04-28 Runtime And Operator Evidence**:
+
+- Catch-up and reconciliation still hit repeated `fetch-revisions` failures classified as `non-json-response` with `http_status=429`; the response shape now includes `text/plain` as well as earlier HTML/non-JSON cases, so the remaining production fault is throttling or rate limiting rather than timestamp shape.
+- Recovery can still scan too far under one repeated root cause, which turns a transient throttle event into large unresolved sets or oversized persisted reports instead of a compact actionable summary.
+- The bounded API freshness probe promised by the status contract still needs implementation or proof so the operator can distinguish a quiet wiki from a stale stream without relying only on stream-observed events.
+- Current live evidence can show good observed-to-hide latency for a matched edit, but the operator can still see the published edit before the daemon reacts; this is an architectural limit of a post-publication EventStreams consumer and must be documented honestly.
+- Current stream behavior still launches, labels, or reports full watched-set `startup` catch-up too broadly on EventStreams reopen or reconnect-error cases, which keeps the daemon in `catching-up` too often and materially harms the 2-minute recovery target.
+- One-shot TUI commands such as emergency catch-up and coverage report can currently contaminate daemon runtime truth because they write the same `runtime_status.json`.
+- The feature now also needs an explicit compatibility or migration strategy for operator-facing machine-readable status/report surfaces and launch-path assumptions, because the updated spec no longer allows silent invalidation of the previously documented setup.
+- Host-level checks show the real current launch path is a TUI-managed child process started through `make tui`, with `target/debug/suppressor --config ./config.toml tui` launching a child `... run` daemon; no installed system or user `suppressor.service` unit exists, so systemd journal evidence is not the authoritative default in this deployment.
+- Compact-terminal status should prioritize the active realtime failure or throttle-backoff state over older reconciliation noise when both are present, and live-output rendering should not hide the newest rows under wrapped-line lag.
+- The latest runtime evidence on 2026-04-28 shows the same classified `non-json-response`/`429` fault on a `live` suppression outcome, not only on catch-up or reconciliation, so live protection and recovery must share the same actionable throttle semantics.
+- The realtime state machine can remain in `catching-up` even when `catchup_active=false`, `backoff_until=null`, fresh target-wiki events are still arriving, and the latest notice is only `observed target-wiki event`; this is a state-convergence bug, not just a presentation issue.
 
 ## Constitution Check
 
@@ -63,12 +75,17 @@ Restore `suppressor` as a real-time safety service: eligible edits on watched se
 
 - Update `suppressor/README.md` with realtime health, emergency catch-up, and accident-window verification entry points.
 - Update `suppressor/docs/operations.md` with expected realtime latency, stale-state response, and manual verification flow.
+- Update `suppressor/docs/operations.md` to distinguish daemon-owned realtime state from one-shot command reports and to document the actual launch path used for verification.
+- Update `suppressor/docs/operations.md` to distinguish stream freshness from successful live hiding so a fresh stream plus a failed latest live action does not read as healthy.
+- Update `suppressor/docs/operations.md` and feature quickstart evidence to state whether the previously documented operator setup remains valid and, if not, the exact migration actions and new authoritative diagnostics path.
 - Update `suppressor/docs/implementation.md` with the distinction between realtime stream handling, bounded catch-up, worker execution, and nightly reconciliation.
 - Update `suppressor/docs/runtime-boundaries.md` if new state files, commands, or daemon loops are introduced.
 - Update `suppressor/docs/testing-strategy.md` with controlled realtime/catch-up/status tests.
 - Update suppressor docs with resource-economy defaults, bounded concurrency/state/logging behavior, and low-spec verification evidence.
 - Preserve incident lessons in targeted tests, durable docs, and concise code comments where the rule is non-obvious, especially MediaWiki timestamp serialization and source-triggered catch-up.
+- Document the architectural limit that current external realtime hiding cannot guarantee zero first-view prevention, and state what broader mechanism would be needed to change that claim.
 - Document clearly that manual cache reload and nightly/current-day reconciliation are diagnostic or fallback actions, not the primary remedy for live protection failures.
+- If the compatibility or migration-warning pattern becomes reusable outside `suppressor`, copy the generalized rule into `specs/000-repo-governance/research.md` rather than leaving it only in feature-local notes.
 - Standing governance has been amended through constitution v1.5.0 to encode low-spec economy without performance, robustness, or documentation compromise. No `.specify/doc-registry.json` change is expected.
 - Final feature close-out must run `python3 tools/doc_workflow.py all` and the relevant `suppressor` Rust checks.
 - No `questions.md` is needed at planning time; the accident-window bounds are operational input for a command/report, not a planning blocker.
@@ -84,11 +101,13 @@ specs/001-real-time-suppression/
 ├── data-model.md        # Phase 1 output (/speckit.plan command)
 ├── quickstart.md        # Phase 1 output (/speckit.plan command)
 ├── checklists/
-│   ├── requirements.md
+│   ├── operator-safety.md
 │   ├── realtime.md
 │   ├── recovery.md
-│   ├── operator-safety.md
-│   └── release-readiness.md
+│   ├── release-readiness.md
+│   ├── requirements.md
+│   ├── resource-economy.md
+│   └── runtime-truth.md
 ├── contracts/
 │   ├── operator-commands.md
 │   └── runtime-status.md
@@ -138,10 +157,11 @@ The implementation should behave like a set of small internal services while rem
 - `catchup.rs`: bounded recovery windows, title-scoped catch-up, summary aggregation, and unresolved exposure reporting.
 - `mw_api.rs`: MediaWiki transport, timestamp serialization, response parsing, and classified non-sensitive error snapshots.
 - `worker.rs`: RevDel submission, retry/relogin/token refresh, final outcome recording, and fatal blocked-state handling.
-- `runtime.rs` and `state.rs`: bounded queues, status persistence, outcome/error/source-refresh state, and explicit cross-module contracts.
+- `runtime.rs` and `state.rs`: bounded queues, status persistence, outcome/error/source-refresh state, compatibility diagnostics for older artifacts or invalid launch-path assumptions, and explicit cross-module contracts.
+- `commands.rs`: one-shot operator commands and reports that must not overwrite daemon realtime truth and must emit explicit migration guidance if a documented report surface changes.
 - `tui_status.rs` and `tui_view.rs`: read-only status snapshot collection and compact operator rendering.
 
-Cross-boundary data must use typed structs and compact enums rather than stringly-typed ad hoc messages where a stable contract matters. Channels and local state must remain bounded so catch-up, benchmark runs, or warning storms cannot exhaust low-spec machines.
+Cross-boundary data must use typed structs and compact enums rather than stringly-typed ad hoc messages where a stable contract matters. Channels and local state must remain bounded so catch-up, benchmark runs, or warning storms cannot exhaust low-spec machines. Daemon-owned realtime status must remain authoritative and must not be overwritten by one-shot command/report boundaries. If an operator-facing machine-readable surface cannot stay backward-compatible, the new surface must carry explicit migration guidance rather than silently breaking the prior workflow.
 
 ## Complexity Tracking
 
@@ -151,61 +171,51 @@ No constitution violations identified.
 
 ## Implementation Phases
 
-### Phase 0 - Incident Verification And Design Grounding
+### Phase 0 - Runtime Evidence And Deployment Grounding
 
-- Reproduce or disprove the silent-starvation hypothesis with a controlled harness that can open the stream and then stop delivering items without forcing an explicit stream error.
-- Confirm the current live path can run while ineffective: running daemon, old or unchanging last event state, and no realtime freshness, last-match, or last-hide status for the operator.
-- Identify whether the active incident is caused by silent EventStreams starvation, invalid Last-Event-ID recovery, title matching/cache state, queue/worker failure, or missing rights/session.
-- Confirm from config and control paths that current-day reconciliation and manual cache reload cannot satisfy the P1 latency target and must remain diagnostic/fallback only.
-- Preserve sensitive-data rules during investigation: inspect revision IDs, timestamps, titles, status, and outcomes, not hidden text.
+- Recheck the managed daemon, runtime state files, and journal or supervisor output after a restart so the investigation is tied to the binary that is actually running, not only local build output.
+- Confirm the actual launch path in use: systemd-managed daemon, TUI-managed child process, or another operator path. The plan and docs must verify the real authority instead of assuming one unit name.
+- Compare that actual launch path and its operator surfaces with the previously documented setup, and record whether compatibility is preserved or a migration notice is required before release.
+- Confirm whether one-shot commands currently overwrite daemon runtime status and identify the smallest bounded surface for command-only reports.
+- Confirm which live or recovery paths still emit classified `non-json-response` `HTTP 429` failures, whether `Retry-After` headers are present, and which loops currently ignore them.
+- Confirm whether the same `fetch-revisions` or related revision-query failure class appears in the live path before or during worker submission, and capture that separately from catch-up or reconciliation failures.
+- Measure which persisted artifacts grow materially during repeated failure storms, especially `runtime_status.json`, `nightly_sweep_progress.json`, and retained unresolved item lists.
+- Preserve sensitive-data rules during investigation: inspect revision IDs, timestamps, titles, status, headers, and compact messages, not hidden text.
+- Record the actual publish-to-observe and observe-to-hide timings for at least one controlled live edit so operator-visible latency is separated from architecture-level post-publication exposure.
 
-### Phase 1 - Realtime Health And State Contract
+### Phase 1 - Rate-Limit-Aware Recovery And Catch-Up
 
-- Extend runtime status with a dedicated realtime section, including state, last state change, stale threshold, last stream open, last event observed, last matching edit, last queued hide, last successful hide, lag, queue depth, current recovery trigger, last reconnect reason, catch-up state, and latest actionable error.
-- Persist status transitions whenever the stream opens, receives a target-wiki event, matches a watched edit, queues an action, completes an action, encounters an error, or crosses a silence/watchdog threshold.
-- Render realtime status in the TUI as healthy, catching up, stale, unhealthy, blocked, or stopped, and explicitly distinguish "process alive" from "realtime healthy".
+- Add first-class throttle handling for `HTTP 429` and similar rate-limit signals in `mw_api` and all catch-up or reconciliation callers: capture retryability, `Retry-After`, backoff-until time, and next operator-visible action.
+- Apply the same throttle classification and retry semantics to live-path revision lookups or pre-hide fetches so a rate-limited live edit is surfaced as an actionable degraded protection state rather than only as a stale latest outcome.
+- Add a bounded backoff or circuit-breaker stop condition so one repeated root cause pauses or stops recovery early instead of scanning the full watched set into the same unresolved failure.
+- Prioritize newest or most recent eligible edits during catch-up so limited API budget protects the newest exposure first while still accounting for partial progress.
+- Share rate-limit state across startup catch-up, operator manual catch-up, source-triggered catch-up, and reconciliation so one recovery path cannot starve or confuse another.
+- Stop treating every EventStreams `Open` as a fresh `startup` catch-up trigger; restrict full watched-set catch-up to true bootstrap, proven gap recovery, or explicit operator actions.
 
-### Phase 2 - Live Path Repair
+### Phase 2 - Freshness Probe And Trigger Hardening
 
-- Refactor event handling so parsing, wiki filtering, watched-title matching, dispatch, and status updates can be tested without a live EventSource connection.
-- Add an explicit silence watchdog or timeout-driven freshness mechanism so an open but silent stream cannot remain "running" forever if no new items arrive.
-- Keep the live path independent from reconciliation and ensure queueing a live candidate does not wait for nightly/current-day sweeps or source-list refresh work.
-- Use explicit recovery transitions for invalid Last-Event-ID, reconnect errors, and silent starvation instead of relying on hour-scale reconciliation as the first response.
-- Record skipped, duplicate, and already-hidden outcomes distinctly instead of treating all non-success states as invisible.
+- Implement or finish the low-cost bounded API freshness probe promised by the realtime status contract, using it only when stream silence makes freshness ambiguous.
+- Ensure source-list and request-page triggers can start immediate catch-up when healthy, or defer it visibly with a backoff reason and retry point when throttled.
+- Keep realtime state transitions honest: `healthy` only after stream freshness, pending recovery, active backoff conditions, and latest live protection failures are all clear.
+- Make `catching-up` a convergent state: once no catch-up is active, no backoff remains, and fresh events resume, the daemon must leave `catching-up` for `healthy`, `unhealthy`, or `reconnecting` according to the remaining evidence.
+- Make daemon-owned realtime status authoritative even while one-shot verification commands are running.
+- Detect stale or incompatible prior state, stale PID files, and invalid launch-path assumptions early enough to surface a non-healthy or migration-needed diagnostic instead of a false healthy state.
 
-### Phase 3 - Bounded Catch-Up And Accident Coverage
+### Phase 3 - Compact Durable State And Operator Surfaces
 
-- Add an explicit bounded API catch-up path for startup, stream reconnect, silent-starvation recovery, and operator-triggered emergency catch-up; do not rely on `since_recovery_seconds` stream replay alone as proof of coverage.
-- Prioritize newest eligible watched-page edits during catch-up while still accounting for every checked edit outcome.
-- Add accident-window coverage reporting that accounts for hidden, already-hidden, skipped, failed, and unresolved revisions without exposing sensitive content.
-- Surface recovery summary counts, unresolved identifiers, and recovery trigger information to runtime status and one-shot command output.
+- Bound unresolved-item retention and persist counts plus sampled items rather than the full repeated-failure set.
+- Extend recovery-summary state with aggregate warning summaries, stop-early reasons, retry-after data, and sampled affected titles or revisions.
+- Prioritize active realtime failures and throttle-backoff notices over older reconciliation text in the TUI, especially on compact terminals.
+- Show whether the latest actionable failure came from `live`, `catchup`, `reconciliation`, or `source-refresh` context so stream freshness cannot mask an ineffective live hide path.
+- Keep backward-compatible loading rules so older state files, stale pid files, and missing new fields degrade to non-healthy diagnostics instead of false healthy status.
+- Keep previously documented machine-readable status/report surfaces backward-compatible where practical, and if a change is unavoidable, emit a compact compatibility or migration notice with the required operator action and new authoritative path.
+- Separate daemon logs from one-shot command logs in the TUI, or label them clearly enough that operators cannot confuse them.
+- Make the TUI latest-follow behavior row-accurate under wrapped output, or disable wrap in the live-output pane so the newest messages are actually visible.
 
-### Phase 4 - Worker Outcome And Failure Visibility
+### Phase 4 - Verification, Docs, And Release Evidence
 
-- Record outcomes at the revision level with queued, submitted, hidden, already-hidden, retrying, failed, unresolved, and blocked states instead of a success-only processed ring.
-- Keep transient failures retryable and visible; classify rights/session/wiki-side blockers as urgent unhealthy states.
-- Preserve fail-closed behavior for fatal auth/permission loss, but make the blocked state durable and operator-visible before exit or supervisor restart.
-- Avoid duplicate hide attempts when events replay or another operator already hid the edit.
-
-### Phase 5 - Verification, Docs, And Operational Release
-
-- Add focused tests for live event classification and dispatch, silent-stream watchdog transitions, invalid-resume recovery, bounded catch-up selection, duplicate handling, revisiondelete success/failure outcomes, and TUI status rendering.
-- Extend latency evidence using existing queue/hide histograms plus a new end-to-end event-observed-to-hide timing path, and capture p50/p95 from controlled runs.
-- Run `cargo test` for `suppressor`; if the known parallel test issue still exists, document the isolated or single-thread command used as the release gate.
-- Perform manual benchmark/verification against a watched test page or equivalent controlled production-safe flow, recording publish-to-hide wall clock and stale-recovery timing.
-- Update suppressor operator/implementation/runtime/testing docs.
-- Run `python3 tools/doc_workflow.py all`.
-
-### Phase 6 - Remediation For 2026-04-25 Findings
-
-- Add a single MediaWiki timestamp serialization helper for API query parameters that emits UTC seconds without fractional precision, and use it for `rvstart`, coverage windows, stream `since` values where applicable, and any future MediaWiki timestamp parameter.
-- Extend API transport error handling so JSON API errors, non-JSON responses, HTTP status failures, and decode failures are classified separately; persist compact non-sensitive error evidence in runtime status and worker outcomes.
-- Change bounded catch-up warning behavior from per-page log spam to root-cause summaries: record the first few affected titles, aggregate repeated failures by classified reason, and surface the aggregate in the TUI.
-- Replace the source-list hook's refresh-only behavior with refresh-plus-immediate-catch-up: after a successful source cache refresh, compute newly added watched titles and run a short bounded catch-up for those titles before declaring the list update handled.
-- Treat `Вікіпедыя:Запыты да схавальнікаў` as a source-adjacent trigger: when it changes, refresh the source cache if needed and run immediate bounded catch-up over watched titles affected by the request page or the configured recent window.
-- Implement the bounded API freshness probe promised by the runtime-status contract, using a low-cost recentchanges query for the target wiki to distinguish a quiet stream from stale monitoring.
-- Add a production-safe benchmark path using `Удзельнік:Plaga med Bot/suppressor/tests`: the benchmark may create controlled test edits only on that page, must set the MediaWiki `bot` edit marker, and must record publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
-- Keep the benchmark path separate from production source-list mutations unless the operator explicitly asks to test source-list reload behavior; routine automated benchmark writes must not edit `Удзельнік:Wizardist/SuppressionList`.
-- Enforce resource-economy defaults while implementing the remediation: low catch-up concurrency by default, no unbounded queues or vectors for watched-page scans, no per-page warning spam, no hot-loop freshness probing, and compact rolling state for outcomes and benchmark samples, while preserving the performance targets and documentation evidence.
-- Keep the code small and direct: reuse existing runtime/cache/API/worker patterns, prefer simple typed helpers over framework-like abstractions, and reject new dependencies unless they replace fragile custom logic with a clearly safer or cheaper primitive.
-- Document every non-obvious incident lesson in the smallest durable place that will prevent recurrence: regression tests for behavior, operator docs for response, implementation docs for architecture, and concise code comments only where the code would otherwise invite a repeat bug.
+- Add failing-first tests for `429` HTML/non-JSON responses, `Retry-After` handling, repeated-root-cause stop conditions, bounded unresolved retention, freshness probing, source-triggered deferred catch-up, command/runtime-state isolation, and TUI compact-priority plus latest-log rendering.
+- Re-run `cargo test` and the repo docs gate, then restart the managed daemon and verify the live TUI, runtime status file, and journal or supervisor output reflect the new fields and behavior.
+- Prove either that the previously documented operator setup still works unchanged or that release evidence and operator docs declare the incompatibility, the new authoritative diagnostics path, and the exact migration steps before production use.
+- Run controlled benchmark and low-spec resource scenarios, including the approved bot test page with bot edits only, and capture latency plus CPU, memory, queue, state-size, and log-volume evidence.
+- Update maintained operator, implementation, runtime-boundary, and testing docs with rate-limit handling, recovery stop conditions, daemon-vs-command status authority, launch-path verification, TUI log behavior, and the architectural limit of post-publication hiding.

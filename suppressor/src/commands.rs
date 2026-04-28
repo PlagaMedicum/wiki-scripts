@@ -110,6 +110,7 @@ pub async fn run_emergency_catchup(
             end,
             trigger: "operator-manual".to_string(),
             report_only,
+            title_scope: None,
         },
     )
     .await?;
@@ -140,6 +141,7 @@ pub async fn run_coverage_report(
             end,
             trigger: "coverage".to_string(),
             report_only: report_only || dry_run,
+            title_scope: None,
         },
     )
     .await?;

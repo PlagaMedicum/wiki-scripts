@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::auth::{authenticate, refresh_csrf_token};
-use crate::mw_api::is_fatal_auth_or_permission_error;
+use crate::mw_api::{classify_api_failure, is_fatal_auth_or_permission_error};
 use crate::runtime::{AppRuntime, RevDelAction};
 use crate::state::{ProcessedRevidsState, save_json_atomic};
 
@@ -121,6 +121,16 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
             Err(error) => {
                 counter!("revdel_failure_total").increment(action.revids.len() as u64);
                 let fatal = is_fatal_auth_or_permission_error(&error);
+                let failure = classify_api_failure(
+                    &error,
+                    "revisiondelete",
+                    Some(&action.title),
+                    action.revids.first().copied(),
+                );
+                let reason_code = failure
+                    .api_code
+                    .clone()
+                    .or_else(|| Some(failure.class.clone()));
                 error!(
                     title = %action.title,
                     revids = ?action.revids,
@@ -131,13 +141,9 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
                     "revisiondelete failed"
                 );
                 if fatal {
+                    runtime.record_api_failure(failure).await;
                     runtime
-                        .record_action_completed(
-                            &action,
-                            "blocked",
-                            Some("auth-or-permission".to_string()),
-                            1,
-                        )
+                        .record_action_completed(&action, "blocked", reason_code, 1)
                         .await;
                     if let Some(completion_tx) = action.completion_tx.take() {
                         let _ = completion_tx.send(Err(error.to_string()));
@@ -145,13 +151,9 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
                     error!("fatal auth/permission failure during revisiondelete; exiting");
                     std::process::exit(1);
                 } else {
+                    runtime.record_api_failure(failure).await;
                     runtime
-                        .record_action_completed(
-                            &action,
-                            "failed",
-                            Some("api-error".to_string()),
-                            1,
-                        )
+                        .record_action_completed(&action, "failed", reason_code, 1)
                         .await;
                     if let Some(completion_tx) = action.completion_tx.take() {
                         let _ = completion_tx.send(Err(error.to_string()));

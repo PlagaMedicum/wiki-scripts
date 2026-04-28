@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Feature specification for restoring urgent real-time suppressor hiding.
-  source: user request on 2026-04-24
+  source:
+  - user request on 2026-04-24
+  - user request on 2026-04-28
 ---
 
 # Feature Specification: Real-Time Suppression Recovery
@@ -40,6 +42,10 @@ As the suppressor operator, I need the operator console to show whether real-tim
 1. **Given** the suppressor has not observed recent change activity for longer than the freshness threshold while wiki activity continues, **When** the operator views status, **Then** the console clearly reports stale real-time monitoring and the current lag.
 2. **Given** the real-time stream disconnects, stalls, or resumes with a gap, **When** the daemon recovers, **Then** it catches up on eligible missed edits before reporting the real-time path as healthy again.
 3. **Given** a suppression attempt fails because of rights, session, rate, network, or wiki-side errors, **When** the daemon continues running, **Then** the operator sees a clear actionable notice and the edit remains queued for retry or manual review.
+4. **Given** fresh target-wiki events continue to arrive but the latest eligible live suppression attempt is failed, throttled, blocked, or unresolved, **When** the operator views status, **Then** the console reports degraded protection rather than a healthy real-time state.
+5. **Given** the operator runs an emergency catch-up or coverage report while the daemon is already running, **When** the operator views status and command output, **Then** daemon-owned real-time status remains authoritative and the command output is clearly distinguishable from daemon evidence.
+6. **Given** the stream reopens without a real missed-change gap or only reconnect noise occurred, **When** monitoring resumes, **Then** the daemon does not relabel the event as startup recovery and does not remain in a recovery state after recovery has ended.
+7. **Given** an updated version changes a previously documented operator status surface, report surface, or authoritative launch path, **When** the operator prepares to run that version, **Then** the release evidence clearly states whether the previous setup remains valid and, if not, the required migration or verification steps before the new version is trusted.
 
 ---
 
@@ -74,6 +80,13 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - `Вікіпедыя:Запыты да схавальнікаў` changes while the cached source list is unchanged but recent watched-page edits still need immediate verification.
 - MediaWiki rejects a timestamp parameter or returns a non-JSON/API-error response during catch-up or RevDel.
 - A low-spec host runs the daemon and TUI concurrently while catch-up, logging, and status persistence are active.
+- A one-shot diagnostic or reporting action runs while the daemon is healthy, catching up, stale, unhealthy, or blocked and must not replace daemon-owned status truth.
+- Fresh target-wiki events continue to arrive while the latest live hide outcome is still failed, throttled, blocked, or unresolved.
+- The stream reopens or reconnects without a true missed-change gap and must not be mislabeled as startup recovery.
+- The actual deployment path uses a local supervisor rather than a system service, so operator verification must use the authoritative runtime surface for that path.
+- Long wrapped lines appear in a compact terminal and must not push the newest daemon evidence out of view in latest-follow mode.
+- An updated version encounters older operator state or status artifacts whose shape reflects the previously documented setup.
+- An updated version changes which launch path, supervisor, or diagnostics surface is authoritative for operator verification.
 
 ## Requirements *(mandatory)*
 
@@ -85,30 +98,40 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **FR-004**: The system MUST determine and record one final outcome for every observed watched-page edit: hidden, already hidden, skipped by policy, failed, retried, or unresolved.
 - **FR-005**: The system MUST detect stale, stalled, disconnected, or gapped real-time monitoring and attempt recovery without operator intervention.
 - **FR-006**: The system MUST catch up on eligible watched-page edits missed during daemon downtime, feed gaps, restart, or recovery before declaring real-time monitoring healthy.
-- **FR-007**: The system MUST surface real-time health in the operator console, including current freshness, lag, last observed change, last eligible edit handled, last hiding action, and latest actionable error.
+- **FR-007**: The system MUST surface real-time health in the operator console, including current freshness, lag, last observed change, last eligible edit handled, last hiding action, latest actionable error, and enough context to distinguish transport freshness from live hide effectiveness.
 - **FR-008**: The system MUST provide an operator-initiated emergency catch-up or verification action that checks recent watched-page edits and reports unresolved exposure.
 - **FR-009**: The system MUST provide an accident-window coverage report that separates hidden, already-hidden, skipped, failed, and unresolved edits.
 - **FR-010**: The system MUST retry transient hiding failures while avoiding duplicate or conflicting actions for edits that are already hidden.
 - **FR-011**: The system MUST preserve safety boundaries by hiding only edits that match the watched-page set and the suppressor policy.
 - **FR-012**: The system MUST produce audit information sufficient for operational review without exposing sensitive content, hidden text, credentials, tokens, or session secrets.
-- **FR-013**: The system MUST make "daemon running but real-time hiding ineffective" visible as an unhealthy state rather than a normal running state.
+- **FR-013**: The system MUST make "daemon running but real-time hiding ineffective" visible as an unhealthy or degraded-protection state rather than a normal running state, even when fresh target-wiki events are still arriving.
 - **FR-014**: The system MUST support verification with controlled events so regressions in immediate hiding, stall detection, catch-up, and reporting can be tested before production use.
-- **FR-015**: The system MUST treat changes to `Удзельнік:Wizardist/SuppressionList` and configured source-adjacent request pages, including `Вікіпедыя:Запыты да схавальнікаў`, as immediate recovery triggers that refresh source state and run bounded catch-up for newly added or recently affected watched pages.
+- **FR-015**: The system MUST treat changes to `Удзельнік:Wizardist/SuppressionList` and configured source-adjacent request pages, including `Вікіпедыя:Запыты да схавальнікаў`, as immediate recovery triggers that refresh source state and run bounded catch-up for newly added or recently affected watched pages, or visibly defer that follow-up with a retry point when shared recovery limits prevent immediate execution.
 - **FR-016**: The system MUST serialize MediaWiki API timestamp parameters in a MediaWiki-accepted UTC second-precision format and test this behavior against catch-up and coverage queries.
-- **FR-017**: The system MUST classify MediaWiki/API/transport failures into compact non-sensitive categories, persist the actionable class/code/status, and aggregate repeated failures so one root cause cannot flood the TUI or terminal.
+- **FR-017**: The system MUST classify MediaWiki/API/transport failures into compact non-sensitive categories, persist the actionable class/code/status and failure context, and aggregate repeated failures so one root cause cannot flood the TUI or terminal, regardless of whether the failure occurs in live hiding, source refresh, catch-up, or reconciliation.
 - **FR-018**: The system MUST keep implementation boundaries microservice-like inside the existing local daemon: stream ingestion, source refresh, catch-up, worker execution, state persistence, and TUI rendering communicate through explicit structs, bounded channels, and small interfaces, without adding extra OS services or public network surfaces for this feature.
 - **FR-019**: The system MUST remain economical on low-spec hardware by using bounded queues, bounded catch-up windows, bounded concurrency, compact persisted state, coalesced logging, and no unbounded in-memory revision/title buffers, without lowering latency/recovery targets or dropping documentation evidence.
 - **FR-020**: The system MUST preserve implementation lessons in durable code comments, tests, and maintained suppressor docs when they prevent recurrence of this incident, especially timestamp formatting, source-list catch-up, error classification, warning coalescing, and test-page benchmark rules.
+- **FR-021**: The system MUST treat the daemon-owned runtime status surface as authoritative for operator real-time health, and one-shot diagnostic, coverage, benchmark, or report actions MUST NOT overwrite or impersonate that daemon-owned state.
+- **FR-022**: The system MUST expose whether the latest actionable failure or outcome came from live hiding, recovery catch-up, reconciliation, source refresh, or one-shot operator work so the operator can tell which protection path is degraded.
+- **FR-023**: The system MUST leave transient recovery states once catch-up or backoff has ended and MUST report the resulting healthy, unhealthy, reconnecting, or blocked state according to remaining evidence rather than staying in a stale recovery label.
+- **FR-024**: The system MUST treat true startup recovery, ordinary reopen, reconnect noise, and gap recovery as distinct operator-visible situations and MUST NOT relabel ordinary reopen noise as startup recovery.
+- **FR-025**: The system MUST keep daemon runtime evidence and one-shot command output visibly distinguishable in operator surfaces, and compact/latest views MUST keep the newest daemon evidence visible enough for the operator to trust the current state.
+- **FR-026**: The system MUST let operators verify health and recovery through the actual launch path and authoritative diagnostics surface in use, rather than assuming a particular service manager or unit name exists.
+- **FR-027**: The system MUST preserve backward-compatible operator-facing machine-readable status and report surfaces for the previously documented setup, or explicitly declare any intentional incompatibility before release readiness is claimed.
+- **FR-028**: If an update invalidates a previously documented launch path, persisted state artifact, or operator workflow, the system MUST provide an explicit migration notice, required operator actions, and the new authoritative diagnostics path before the update is treated as production-ready.
+- **FR-029**: The system MUST detect incompatible, unreadable, or stale prior operator state or supervisory artifacts and surface a non-healthy or migration-needed diagnostic instead of silently presenting healthy status.
 
 ### Key Entities
 
 - **Watched Sensitive Page**: A page whose new eligible edits must be protected by the suppressor. Key attributes include page identity, current listing source, and whether it is active for suppression.
 - **Observed Edit**: A newly observed or caught-up change on a watched page. Key attributes include page, edit identifier, timestamp, actor category, eligibility status, and handling outcome.
 - **Suppression Action**: A hide attempt or confirmed hide result for an observed edit. Key attributes include target edit, outcome, timing, error reason if any, and retry state.
-- **Real-Time Health State**: The operator-visible freshness and effectiveness state of background monitoring. Key attributes include last observed change time, last eligible edit time, current lag, recovery state, and latest actionable notice.
+- **Real-Time Health State**: The operator-visible freshness and effectiveness state of background monitoring. Key attributes include last observed change time, last eligible edit time, current lag, recovery state, latest actionable notice, latest protection outcome, and whether stream freshness and hide effectiveness currently agree.
 - **Coverage Window**: A bounded time range used to verify edits after the suppressor-rights accident or after daemon downtime. Key attributes include start, end, checked pages, counted outcomes, and unresolved items.
-- **API Failure Snapshot**: A compact non-sensitive classification of a MediaWiki/API/transport failure. Key attributes include failure class, API code, HTTP status, retryability, operation, safe sample title/revision, and timestamp.
-- **Source Refresh Event**: An observed source-list or request-page change plus its refresh and immediate catch-up result. Key attributes include trigger title, trigger revision, old/new source revision, added/removed titles, catch-up scope, outcome, and safe error details.
+- **API Failure Snapshot**: A compact non-sensitive classification of a MediaWiki/API/transport failure. Key attributes include failure class, API code, HTTP status, retryability, failure context, safe sample title/revision, and timestamp.
+- **Source Refresh Event**: An observed source-list or request-page change plus its refresh and immediate catch-up result. Key attributes include trigger title, trigger revision, old/new source revision, added/removed titles, catch-up scope, outcome, deferred-by-backoff status, retry point, and safe error details.
+- **Operator Command Report**: A bounded summary emitted by a one-shot operator action. Key attributes include action type, outcome counts, unresolved totals, safe next action, command provenance, and its separation from daemon-owned real-time status.
 - **Benchmark Run**: A controlled verification run on `Удзельнік:Plaga med Bot/suppressor/tests`. Key attributes include run ID, bot-marked edit count, timing samples, percentile summaries, and unresolved benchmark revisions.
 
 ## Success Criteria *(mandatory)*
@@ -116,10 +139,10 @@ As the suppressor operator, I need confidence that edits made after the suppress
 ### Measurable Outcomes
 
 - **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds; release evidence must report p95 and p99 for the controlled realtime path.
-- **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, the operator console shows an unhealthy state and current lag measured against the latest observed target-wiki event or a bounded API freshness probe when the stream is silent.
+- **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, including cases where fresh events continue but the latest live hide outcome is failed, throttled, blocked, or unresolved, the operator console shows a non-healthy state and current lag measured against the latest observed target-wiki event or a bounded API freshness probe when the stream is silent.
 - **SC-003**: After daemon restart or real-time recovery, eligible watched-page edits missed in the preceding 30 minutes are either hidden or reported unresolved within 2 minutes.
 - **SC-004**: Accident-window verification accounts for 100% of eligible watched-page edits in the selected window as hidden, already hidden, skipped, failed, or unresolved.
-- **SC-005**: The operator can distinguish "running and hiding", "running but catching up", "running but unhealthy", and "blocked by rights/session/wiki error" from the console without inspecting raw logs.
+- **SC-005**: The operator can distinguish "running and hiding", "running but catching up", "running but unhealthy", "blocked by rights/session/wiki error", and "one-shot operator command output" from the console without inspecting raw logs.
 - **SC-006**: Automated or controlled verification covers immediate hiding, feed stall recovery, missed-edit catch-up, duplicate event handling, a burst of at least 10 controlled eligible events across watched pages, public `user|comment` RevDel safety boundaries, and rights/session failure reporting.
 - **SC-007**: When `Удзельнік:Wizardist/SuppressionList` adds a watched title during daemon operation, the daemon refreshes the source state and starts bounded catch-up for newly added titles without waiting for manual reload or scheduled reconciliation.
 - **SC-008**: Catch-up and coverage tests prove that MediaWiki timestamp parameters contain no fractional precision and that a mocked `badtimestamp` response is surfaced as a classified non-retryable API failure instead of thousands of per-page warnings.
@@ -127,6 +150,10 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **SC-010**: A benchmark run using `Удзельнік:Plaga med Bot/suppressor/tests` creates only bot-marked test edits, accounts for every benchmark revision, and records publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
 - **SC-011**: Low-spec verification records idle and active resource use for daemon plus TUI, and default configuration keeps queues, concurrency, state files, and logs bounded while meeting the realtime and recovery targets.
 - **SC-012**: Durable suppressor docs and targeted code comments/tests capture the incident lessons, performance evidence, and operational checks needed to prevent recurrence, including timestamp formatting, source-triggered catch-up, API error classification, warning coalescing, and benchmark safety.
+- **SC-013**: Once catch-up or backoff ends and no other blocking or recovery condition remains, the operator console leaves the transient recovery state within 10 seconds and shows the resulting healthy, unhealthy, reconnecting, or blocked state.
+- **SC-014**: During a one-shot diagnostic, coverage, benchmark, or reporting action, the operator can still identify daemon-owned real-time state, the source of the latest actionable problem, and the newest daemon evidence from the console without manual refresh or raw-log inspection.
+- **SC-015**: Release evidence accounts for 100% of intentional operator-surface or launch-path incompatibilities by either proving unchanged behavior against the previously documented setup or listing the required migration actions before production use.
+- **SC-016**: When older state artifacts or invalid launch-path assumptions are present, status inspection yields a non-healthy or migration-needed diagnostic within 10 seconds rather than a false healthy state.
 
 ## Assumptions
 
@@ -138,6 +165,9 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Sensitive article content and hidden text must not be displayed in routine logs, reports, or console status.
 - Microservice architecture means internal microservice-like boundaries in one local binary for this feature, not a split into extra deployed services.
 - Economy means bounded resource use and measured low-spec behavior without compromising performance, latency, recovery targets, or documentation quality.
+- Real-time hiding begins only after an eligible edit becomes observable to this external monitoring path; eliminating all first-view exposure would require a broader in-wiki or pre-publication control path outside this feature's scope.
+- The deployment may use a local supervisor path instead of a system service manager, so operator-facing requirements must remain truthful for whichever authoritative launch path is actually in use.
+- Repo-wide rules for compatibility prompts or migration approval may grow from this incident, but this feature is responsible only for the suppressor-specific operator surfaces and setup it changes.
 
 ## Documentation Impact
 
@@ -146,4 +176,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Update suppressor testing documentation with controlled verification cases for immediate hiding, stale monitoring, missed-event catch-up, duplicate events, and rights/session failures.
 - Update implementation docs with internal service boundaries, resource-economy defaults, state/log bounds, and incident lessons that should shape future suppressor changes.
 - Update operations docs with low-spec expectations, benchmark use of `Удзельнік:Plaga med Bot/suppressor/tests`, bot-edit requirements, and release evidence interpretation.
+- Update operator and operations docs to explain daemon-owned status truth, one-shot command separation, launch-path-aware verification, and degraded protection versus mere stream freshness.
+- Update operator-facing docs to state the post-publication architecture limit explicitly and avoid any claim that the current feature can guarantee zero first-view prevention.
+- If this feature establishes a reusable compatibility or migration-warning rule for machine-readable operator surfaces, capture the generalized lesson in `specs/000-repo-governance/research.md` instead of leaving it only in suppressor-local docs.
 - Repo governance has been amended in constitution v1.5.0 to require low-spec economy without performance, robustness, or documentation compromise.

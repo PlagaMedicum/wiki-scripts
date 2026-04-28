@@ -27,6 +27,7 @@ pub struct RuntimeStatus {
     pub dry_run: bool,
     pub last_notice: Option<String>,
     pub last_notice_at: Option<DateTime<Utc>>,
+    pub resource_economy: Option<ResourceEconomySnapshot>,
     pub realtime: RealtimeRuntimeStatus,
     pub reconciliation: ReconciliationRuntimeStatus,
 }
@@ -53,11 +54,17 @@ pub struct RealtimeRuntimeStatus {
     pub last_recovery_started_at: Option<DateTime<Utc>>,
     pub last_recovery_completed_at: Option<DateTime<Utc>>,
     pub last_reconnect_reason: Option<String>,
+    pub last_freshness_probe_at: Option<DateTime<Utc>>,
+    pub last_freshness_probe_source: Option<String>,
     pub catchup_active: bool,
+    pub backoff_until: Option<DateTime<Utc>>,
     pub latest_error_code: Option<String>,
+    pub latest_error: Option<ApiFailureSnapshot>,
     pub latest_notice: Option<String>,
     pub latest_outcome: Option<SuppressionOutcomeSnapshot>,
+    pub latest_recovery_warnings: Vec<WarningSummary>,
     pub latest_recovery_summary: Option<CoverageSummary>,
+    pub last_source_refresh: Option<SourceListRefresh>,
 }
 
 impl Default for RealtimeRuntimeStatus {
@@ -82,13 +89,64 @@ impl Default for RealtimeRuntimeStatus {
             last_recovery_started_at: None,
             last_recovery_completed_at: None,
             last_reconnect_reason: None,
+            last_freshness_probe_at: None,
+            last_freshness_probe_source: None,
             catchup_active: false,
+            backoff_until: None,
             latest_error_code: None,
+            latest_error: None,
             latest_notice: None,
             latest_outcome: None,
+            latest_recovery_warnings: Vec::new(),
             latest_recovery_summary: None,
+            last_source_refresh: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ApiFailureSnapshot {
+    pub class: String,
+    pub api_code: Option<String>,
+    pub http_status: Option<u16>,
+    pub content_type: Option<String>,
+    pub retryable: bool,
+    pub retry_after_seconds: Option<u64>,
+    pub operation: String,
+    pub sample_title: Option<String>,
+    pub sample_revid: Option<u64>,
+    pub message: String,
+    pub occurred_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SourceListRefresh {
+    pub trigger_title: String,
+    pub trigger_revid: Option<u64>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub old_source_revid: Option<u64>,
+    pub new_source_revid: Option<u64>,
+    pub new_titles_count: usize,
+    pub removed_titles_count: usize,
+    pub redirects_reused: bool,
+    pub catchup_triggered: bool,
+    pub catchup_title_scope: Option<String>,
+    pub deferred_until: Option<DateTime<Utc>>,
+    pub outcome: String,
+    pub error: Option<ApiFailureSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ResourceEconomySnapshot {
+    pub queue_depth_max_recent: usize,
+    pub api_concurrency_max_recent: usize,
+    pub state_bytes_recent: u64,
+    pub coalesced_warning_count_recent: usize,
+    pub latest_measurement_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,6 +177,9 @@ pub struct CoverageSummary {
     pub failed_count: usize,
     pub unresolved_count: usize,
     pub unresolved_items: Vec<UnresolvedExposureItem>,
+    pub stopped_early_reason: Option<String>,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub warning_summaries: Vec<WarningSummary>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,6 +190,35 @@ pub struct UnresolvedExposureItem {
     pub age_seconds: Option<i64>,
     pub reason: String,
     pub next_action: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WarningSummary {
+    pub class: String,
+    pub api_code: Option<String>,
+    pub http_status: Option<u16>,
+    pub content_type: Option<String>,
+    pub retryable: bool,
+    pub retry_after_seconds: Option<u64>,
+    pub operation: String,
+    pub count: usize,
+    pub sample_titles: Vec<String>,
+    pub message: String,
+    pub stopped_early: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BenchmarkRun {
+    pub test_page_title: String,
+    pub run_id: String,
+    pub edit_count: usize,
+    pub bot_marked: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub smoke_only: bool,
+    pub unresolved_items: Vec<UnresolvedExposureItem>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -283,6 +373,8 @@ mod tests {
         assert_eq!(loaded.reconciliation.phase, None);
         assert_eq!(loaded.realtime.state, "unknown");
         assert_eq!(loaded.realtime.stale_threshold_seconds, 10);
+        assert!(loaded.realtime.latest_recovery_warnings.is_empty());
+        assert!(loaded.realtime.backoff_until.is_none());
     }
 
     #[test]
@@ -292,6 +384,7 @@ mod tests {
             dry_run: false,
             last_notice: Some("ok".to_string()),
             last_notice_at: Some(Utc::now()),
+            resource_economy: None,
             realtime: RealtimeRuntimeStatus {
                 state: "healthy".to_string(),
                 queue_depth: 3,
@@ -316,6 +409,122 @@ mod tests {
         assert_eq!(
             loaded.realtime.latest_outcome.unwrap().outcome.as_str(),
             "hidden"
+        );
+    }
+
+    #[test]
+    fn runtime_status_round_trips_recovery_error_and_resource_fields() {
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            dry_run: false,
+            last_notice: Some("source refresh catchup-started".to_string()),
+            last_notice_at: Some(Utc::now()),
+            resource_economy: Some(ResourceEconomySnapshot {
+                queue_depth_max_recent: 3,
+                coalesced_warning_count_recent: 42,
+                latest_measurement_at: Some(Utc::now()),
+                ..ResourceEconomySnapshot::default()
+            }),
+            realtime: RealtimeRuntimeStatus {
+                latest_error: Some(ApiFailureSnapshot {
+                    class: "api-json-error".to_string(),
+                    api_code: Some("badtimestamp".to_string()),
+                    http_status: Some(200),
+                    retryable: false,
+                    retry_after_seconds: Some(30),
+                    operation: "fetch-revisions".to_string(),
+                    sample_title: Some("Title".to_string()),
+                    message: "invalid timestamp".to_string(),
+                    occurred_at: Some(Utc::now()),
+                    ..ApiFailureSnapshot::default()
+                }),
+                last_source_refresh: Some(SourceListRefresh {
+                    trigger_title: "Удзельнік:Wizardist/SuppressionList".to_string(),
+                    new_titles_count: 2,
+                    catchup_triggered: true,
+                    catchup_title_scope: Some("new-titles".to_string()),
+                    outcome: "catchup-started".to_string(),
+                    ..SourceListRefresh::default()
+                }),
+                latest_recovery_summary: Some(CoverageSummary {
+                    stopped_early_reason: Some("rate-limited".to_string()),
+                    warning_summaries: vec![WarningSummary {
+                        class: "api-json-error".to_string(),
+                        api_code: Some("badtimestamp".to_string()),
+                        operation: "fetch-revisions".to_string(),
+                        retry_after_seconds: Some(30),
+                        count: 1427,
+                        sample_titles: vec!["Title".to_string()],
+                        stopped_early: true,
+                        ..WarningSummary::default()
+                    }],
+                    ..CoverageSummary::default()
+                }),
+                latest_recovery_warnings: vec![WarningSummary {
+                    class: "api-json-error".to_string(),
+                    api_code: Some("badtimestamp".to_string()),
+                    operation: "fetch-revisions".to_string(),
+                    retry_after_seconds: Some(30),
+                    count: 1427,
+                    sample_titles: vec!["Title".to_string()],
+                    stopped_early: true,
+                    ..WarningSummary::default()
+                }],
+                ..RealtimeRuntimeStatus::default()
+            },
+            reconciliation: ReconciliationRuntimeStatus::default(),
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_error
+                .as_ref()
+                .and_then(|error| error.api_code.as_deref()),
+            Some("badtimestamp")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_error
+                .as_ref()
+                .and_then(|error| error.retry_after_seconds),
+            Some(30)
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .last_source_refresh
+                .as_ref()
+                .map(|refresh| refresh.new_titles_count),
+            Some(2)
+        );
+        assert_eq!(
+            loaded
+                .resource_economy
+                .as_ref()
+                .map(|snapshot| snapshot.coalesced_warning_count_recent),
+            Some(42)
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_recovery_summary
+                .as_ref()
+                .and_then(|summary| summary.warning_summaries.first())
+                .map(|warning| warning.count),
+            Some(1427)
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_recovery_warnings
+                .first()
+                .and_then(|warning| warning.retry_after_seconds),
+            Some(30)
         );
     }
 }

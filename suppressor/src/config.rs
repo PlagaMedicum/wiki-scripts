@@ -44,6 +44,8 @@ pub struct SuppressionListConfig {
     pub title: String,
     pub cache_file: String,
     pub metadata_recheck_seconds: u64,
+    #[serde(default = "default_request_pages")]
+    pub request_pages: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -94,6 +96,16 @@ pub struct CatchupConfig {
     pub default_window_seconds: i64,
     pub max_window_seconds: i64,
     pub max_revisions_per_run: usize,
+    #[serde(default = "default_warning_sample_limit")]
+    pub warning_sample_limit: usize,
+    #[serde(default = "default_source_refresh_title_scope_limit")]
+    pub source_refresh_title_scope_limit: usize,
+    #[serde(default = "default_rate_limit_backoff_default_seconds")]
+    pub rate_limit_backoff_default_seconds: u64,
+    #[serde(default = "default_rate_limit_stop_after_failures")]
+    pub rate_limit_stop_after_failures: usize,
+    #[serde(default = "default_unresolved_sample_limit")]
+    pub unresolved_sample_limit: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -156,6 +168,30 @@ const DEFAULT_LOG_FILTER: &str =
 const DEFAULT_VERBOSE_LOG_FILTER: &str =
     "warn,suppressor=debug,hyper=warn,hyper_util=warn,h2=warn,reqwest=info";
 
+fn default_request_pages() -> Vec<String> {
+    vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()]
+}
+
+fn default_warning_sample_limit() -> usize {
+    5
+}
+
+fn default_source_refresh_title_scope_limit() -> usize {
+    250
+}
+
+fn default_rate_limit_backoff_default_seconds() -> u64 {
+    30
+}
+
+fn default_rate_limit_stop_after_failures() -> usize {
+    3
+}
+
+fn default_unresolved_sample_limit() -> usize {
+    25
+}
+
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
@@ -184,6 +220,21 @@ impl AppConfig {
         }
         if config.catchup.max_revisions_per_run == 0 {
             bail!("catchup.max_revisions_per_run must be greater than zero");
+        }
+        if config.catchup.warning_sample_limit == 0 {
+            bail!("catchup.warning_sample_limit must be greater than zero");
+        }
+        if config.catchup.source_refresh_title_scope_limit == 0 {
+            bail!("catchup.source_refresh_title_scope_limit must be greater than zero");
+        }
+        if config.catchup.rate_limit_backoff_default_seconds == 0 {
+            bail!("catchup.rate_limit_backoff_default_seconds must be greater than zero");
+        }
+        if config.catchup.rate_limit_stop_after_failures == 0 {
+            bail!("catchup.rate_limit_stop_after_failures must be greater than zero");
+        }
+        if config.catchup.unresolved_sample_limit == 0 {
+            bail!("catchup.unresolved_sample_limit must be greater than zero");
         }
         Ok(config)
     }
@@ -581,5 +632,91 @@ mod tests {
             paths.pid_file,
             PathBuf::from("/tmp/suppressor/./state/daemon.pid")
         );
+    }
+
+    #[test]
+    fn production_config_includes_bounded_recovery_defaults() {
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+
+        assert_eq!(
+            config.suppression_list.request_pages,
+            vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()]
+        );
+        assert_eq!(config.catchup.warning_sample_limit, 5);
+        assert_eq!(config.catchup.source_refresh_title_scope_limit, 250);
+        assert_eq!(config.catchup.rate_limit_backoff_default_seconds, 30);
+        assert_eq!(config.catchup.rate_limit_stop_after_failures, 3);
+        assert_eq!(config.catchup.unresolved_sample_limit, 25);
+    }
+
+    #[test]
+    fn old_configs_load_new_recovery_defaults() {
+        let raw = include_str!("../config.toml")
+            .lines()
+            .filter(|line| {
+                !line.starts_with("request_pages")
+                    && !line.starts_with("warning_sample_limit")
+                    && !line.starts_with("source_refresh_title_scope_limit")
+                    && !line.starts_with("rate_limit_backoff_default_seconds")
+                    && !line.starts_with("rate_limit_stop_after_failures")
+                    && !line.starts_with("unresolved_sample_limit")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let config: AppConfig = toml::from_str(&raw).unwrap();
+
+        assert_eq!(
+            config.suppression_list.request_pages,
+            vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()]
+        );
+        assert_eq!(config.catchup.warning_sample_limit, 5);
+        assert_eq!(config.catchup.source_refresh_title_scope_limit, 250);
+        assert_eq!(config.catchup.rate_limit_backoff_default_seconds, 30);
+        assert_eq!(config.catchup.rate_limit_stop_after_failures, 3);
+        assert_eq!(config.catchup.unresolved_sample_limit, 25);
+    }
+
+    #[test]
+    fn rejects_unbounded_warning_sample_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let raw = include_str!("../config.toml")
+            .replace("warning_sample_limit = 5", "warning_sample_limit = 0");
+        fs::write(&config_path, raw).unwrap();
+
+        let error = AppConfig::load(&config_path).unwrap_err().to_string();
+
+        assert!(error.contains("catchup.warning_sample_limit"));
+    }
+
+    #[test]
+    fn rejects_zero_rate_limit_stop_after_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let raw = include_str!("../config.toml").replace(
+            "rate_limit_stop_after_failures = 3",
+            "rate_limit_stop_after_failures = 0",
+        );
+        fs::write(&config_path, raw).unwrap();
+
+        let error = AppConfig::load(&config_path).unwrap_err().to_string();
+
+        assert!(error.contains("catchup.rate_limit_stop_after_failures"));
+    }
+
+    #[test]
+    fn rejects_zero_unresolved_sample_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let raw = include_str!("../config.toml").replace(
+            "unresolved_sample_limit = 25",
+            "unresolved_sample_limit = 0",
+        );
+        fs::write(&config_path, raw).unwrap();
+
+        let error = AppConfig::load(&config_path).unwrap_err().to_string();
+
+        assert!(error.contains("catchup.unresolved_sample_limit"));
     }
 }

@@ -3,7 +3,7 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Data model for real-time suppression recovery.
-  source: speckit-plan on 2026-04-24
+  source: speckit-plan on 2026-04-28
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -106,6 +106,7 @@ Fields:
 - `http_status`: HTTP status code when available.
 - `content_type`: Response content type when available.
 - `retryable`: Whether the daemon considers the failure transient.
+- `retry_after_seconds`: Optional retry delay derived from `Retry-After` or a local throttle policy.
 - `operation`: `fetch-revisions`, `fetch-page-content`, `fetch-source-metadata`, `revisiondelete`, `login`, `csrf-token`, `userinfo`, or `freshness-probe`.
 - `sample_title`: Optional page title associated with the failure.
 - `sample_revid`: Optional revision ID associated with the failure.
@@ -116,7 +117,32 @@ Validation rules:
 
 - Must not store full response bodies, hidden text, raw comments, credentials, tokens, cookies, or session material.
 - Decode and non-JSON failures must preserve enough metadata to tell whether the daemon contacted MediaWiki and what kind of response came back.
+- `HTTP 429` or equivalent throttle responses should preserve `retry_after_seconds` when available so the TUI and recovery loops can agree on when work may resume.
 - Repeated failures with the same class/code may be aggregated in summaries while retaining a small safe sample.
+
+## WarningSummary
+
+Represents an aggregated repeated-failure root cause captured during catch-up, coverage, or reconciliation.
+
+Fields:
+
+- `class`: Classified failure class from `ApiFailureSnapshot`.
+- `api_code`: Optional API error code when the repeated cause is a MediaWiki JSON error.
+- `http_status`: Optional HTTP status when the repeated cause comes from transport or edge throttling.
+- `operation`: Operation affected, such as `fetch-revisions`.
+- `retryable`: Whether the repeated cause is currently considered retryable.
+- `count`: Number of repeated failures aggregated into the summary.
+- `sample_titles`: Small bounded sample of affected titles.
+- `sample_revids`: Small bounded sample of affected revision IDs when safe and useful.
+- `first_occurred_at`: Time the repeated cause was first observed in the run.
+- `last_occurred_at`: Time the repeated cause was last observed in the run.
+- `stopped_early`: Whether the run paused or stopped because this repeated cause reached the configured limit.
+
+Validation rules:
+
+- Sample lists must remain bounded.
+- One repeated root cause must not expand into one warning record per watched page.
+- `stopped_early=true` means aggregate counts may exceed the number of sampled unresolved items retained in durable state.
 
 ## SourceListRefresh
 
@@ -135,12 +161,14 @@ Fields:
 - `redirects_reused`: Whether existing redirect expansion was preserved.
 - `catchup_triggered`: Whether immediate bounded catch-up was started.
 - `catchup_title_scope`: `new-titles`, `request-window`, or `all-watched`.
-- `outcome`: `unchanged`, `refreshed`, `refresh-failed`, `catchup-started`, `catchup-failed`, or `completed`.
+- `deferred_until`: Optional timestamp when immediate catch-up is postponed by a throttle or shared backoff state.
+- `outcome`: `unchanged`, `refreshed`, `refresh-failed`, `catchup-started`, `catchup-deferred`, `catchup-failed`, or `completed`.
 - `error`: Optional `ApiFailureSnapshot`.
 
 Validation rules:
 
 - A successful source-list refresh that adds titles must trigger immediate bounded catch-up over those titles unless an operator explicitly runs report-only mode.
+- If a shared throttle/backoff state prevents immediate catch-up, the refresh must persist `catchup-deferred` with `deferred_until` and a clear reason instead of pretending the refresh completed normally.
 - Refresh failures must be visible as unhealthy or actionable notices; they must not be silently ignored.
 - Routine automated benchmarks must not edit the production source list.
 
@@ -162,6 +190,27 @@ Validation rules:
 
 - Accident-window reports must account for every checked eligible edit with one of these outcomes.
 - `unresolved` and `blocked` outcomes must be visible to the operator.
+
+## RuntimeStatusSurface
+
+Represents the daemon-owned machine-readable status surface used by the TUI and operator diagnostics.
+
+Fields:
+
+- `daemon_state`: Current daemon lifecycle state such as `running` or `stopped`.
+- `dry_run`: Whether the daemon is currently configured not to issue live hides.
+- `last_notice`: Latest compact operator notice from the daemon-owned runtime surface.
+- `last_notice_at`: Time the latest daemon notice was recorded.
+- `resource_economy`: Optional `ResourceEconomySnapshot` for recent bounded resource measurements.
+- `compatibility_notice`: Optional `CompatibilityNotice` when the previously documented operator setup, persisted state shape, or launch-path assumption is no longer safe to trust without operator action.
+- `realtime`: Current `RealtimeHealth` snapshot.
+- `reconciliation`: Existing bounded reconciliation status persisted alongside realtime state.
+
+Validation rules:
+
+- The long-running daemon is the only writer for this surface; one-shot commands may read it but must not overwrite or impersonate it.
+- A blocking or `migration-required` `CompatibilityNotice` must prevent the overall operator surface from appearing fully healthy or production-ready.
+- Missing newer fields in older persisted files must degrade safely through documented defaults rather than a false healthy interpretation.
 
 ## RealtimeHealth
 
@@ -185,18 +234,69 @@ Fields:
 - `last_recovery_started_at`: Last time bounded recovery started.
 - `last_recovery_completed_at`: Last time bounded recovery completed.
 - `last_reconnect_reason`: Latest reconnect or stream-failure reason suitable for operator display.
+- `last_freshness_probe_at`: Last time the bounded freshness probe ran.
+- `last_freshness_probe_source`: `stream`, `api-probe`, or `unknown`.
 - `catchup_active`: Whether bounded catch-up is running.
+- `backoff_until`: Optional time until recovery work should remain paused because of throttling.
 - `latest_error_code`: Compact latest actionable error.
 - `latest_error`: Optional `ApiFailureSnapshot` or source-list failure summary.
+- `latest_outcome`: Optional compact summary of the latest `SuppressionAction`, including its `mode`, `outcome`, `reason_code`, and safe timestamps.
+- `latest_recovery_warnings`: Bounded list of `WarningSummary` items from the most recent recovery run.
 - `latest_notice`: Operator-facing current status.
 - `last_source_refresh`: Optional `SourceListRefresh` summary.
 
 Validation rules:
 
 - A running daemon cannot report `healthy` while realtime observation is stale beyond the configured threshold and recovery has not completed.
+- A running daemon cannot report `healthy` while `backoff_until` is still active for required recovery work.
+- A running daemon cannot report `healthy` only because the stream is fresh when the latest live suppression outcome is still `failed`, `unresolved`, or `blocked` without a compensating recovery result.
+- `state=catching-up` requires either an active catch-up run, an active recovery backoff, or a still-incomplete recovery decision; otherwise the state must converge to `healthy`, `unhealthy`, `reconnecting`, or `blocked`.
 - Rights/session failures set `state` to `blocked`.
+- The daemon's realtime status surface is authoritative for live health; one-shot operator commands and reports must not overwrite it.
+- `last_recovery_trigger=startup` is reserved for true daemon bootstrap or an explicit bootstrap recovery decision, not every ordinary stream reopen.
 - TUI rendering must expose the state and latest notice without requiring log inspection.
 - Repeated API failures must be summarized by class and count so one root cause cannot flood the operator terminal.
+- Compact operator surfaces should prioritize active realtime failure, throttle, or backoff context over lower-priority reconciliation details.
+- Operator surfaces should distinguish stream freshness from live hide effectiveness so `current_lag_seconds=0` cannot mask ineffective suppression.
+
+## CompatibilityNotice
+
+Represents a bounded machine-readable diagnostic that the previously documented operator setup is no longer safe to trust without migration or explicit verification.
+
+Fields:
+
+- `scope`: `runtime-status`, `command-report`, `pid-file`, `launch-path`, `supervisor-output`, or another explicit operator-facing surface.
+- `severity`: `info`, `warning`, or `migration-required`.
+- `detected_at`: Time the incompatibility or drift was detected.
+- `previous_value`: Previous documented assumption or surface when it is safe to name, such as a systemd unit or older report shape.
+- `expected_value`: Current authoritative surface or required shape.
+- `summary`: Compact human-readable explanation suitable for the TUI or release notes.
+- `operator_action`: Exact next action required before trusting the current setup.
+- `blocking`: Whether this notice should prevent a healthy/ready interpretation until acted on.
+
+Validation rules:
+
+- The notice must stay compact and omit hidden text, raw comments, credentials, tokens, cookies, and response bodies.
+- `severity=migration-required` or `blocking=true` means the operator surface must not silently present the system as healthy or production-ready.
+- The daemon may attach the notice to runtime status, and one-shot commands may emit the same structure in their own bounded reports, but command notices must not masquerade as daemon realtime truth.
+- If the previously documented setup remains valid, no notice is emitted.
+
+## ResourceEconomySnapshot
+
+Represents bounded resource measurements kept in runtime status for low-spec verification and regression checks.
+
+Fields:
+
+- `queue_depth_max_recent`: Highest queue depth observed in the recent measurement window.
+- `api_concurrency_max_recent`: Highest API concurrency observed in the recent measurement window.
+- `state_bytes_recent`: Approximate bytes across the main runtime state surfaces or the currently measured state file.
+- `coalesced_warning_count_recent`: Count of repeated warnings folded into summaries during the recent measurement window.
+- `latest_measurement_at`: Time the snapshot was last updated.
+
+Validation rules:
+
+- The snapshot is a compact recent summary, not a long-term timeseries.
+- Resource measurements must remain bounded and cheap enough for continuous local use.
 
 ## CoverageWindow
 
@@ -215,11 +315,34 @@ Fields:
 - `failed_count`: Count with terminal failure.
 - `unresolved_count`: Count requiring follow-up.
 - `unresolved_items`: Compact list of page title, revision ID, age, reason, and next action.
+- `warning_summaries`: Optional bounded list of `WarningSummary` items captured during the run.
 
 Validation rules:
 
 - Every checked eligible edit must be counted exactly once.
+- Persisted unresolved detail must stay bounded even when `unresolved_count` is large.
 - Reports must not include hidden text, full edit comments, credentials, or tokens.
+
+## OperatorCommandRun
+
+Represents a bounded one-shot operator command launched from the CLI or TUI.
+
+Fields:
+
+- `command_name`: `check-auth`, `print-config`, `emergency-catchup`, `coverage-report`, `benchmark`, or `resource-economy`.
+- `started_at`: Command start time.
+- `completed_at`: Command completion time.
+- `dry_run`: Whether the command ran in dry-run mode.
+- `report_only`: Whether the command intentionally avoided state-changing actions.
+- `exit_status`: `success`, `failed`, or `cancelled`.
+- `output_channel`: `stdout`, `stderr`, `tui-background-log`, or another explicit local operator surface.
+- `summary_lines`: Small bounded list of safe summary lines for operator review.
+
+Validation rules:
+
+- One-shot command runs must not overwrite the daemon-owned realtime status contract.
+- TUI rendering must label command output distinctly from daemon output.
+- Summary lines remain bounded and omit hidden text, credentials, tokens, cookies, and raw response bodies.
 
 ## BenchmarkRun
 
@@ -253,7 +376,7 @@ Represents a microservice-like module boundary inside the single suppressor daem
 
 Fields:
 
-- `name`: Boundary name such as `stream-ingestion`, `source-refresh`, `catchup`, `mw-api`, `revdel-worker`, `runtime-state`, `metrics`, or `tui-status`.
+- `name`: Boundary name such as `stream-ingestion`, `source-refresh`, `catchup`, `mw-api`, `revdel-worker`, `runtime-state`, `operator-commands`, `metrics`, or `tui-status`.
 - `owner_module`: Primary Rust module or module tree that owns the boundary.
 - `input_contracts`: Typed structs, enums, channels, or function inputs accepted by the boundary.
 - `output_contracts`: Typed outputs, status updates, metrics, or queued actions emitted by the boundary.
@@ -267,6 +390,7 @@ Validation rules:
 - A boundary must not require a separate deployed OS process, public network endpoint, or new operator supervisor for this feature.
 - Cross-boundary communication must prefer typed data over raw strings for stable contracts.
 - Every boundary that performs IO, buffering, retries, or background work must document its resource bound and failure contract.
+- `operator-commands` may read daemon status or emit standalone reports, but it must not masquerade as the daemon's realtime state writer.
 
 ## ResourceEconomySnapshot
 

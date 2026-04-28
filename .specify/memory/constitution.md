@@ -10,13 +10,16 @@ docmeta:
 
 <!--
 Sync Impact Report
-Version change: 1.4.0 -> 1.5.0
+Version change: 1.5.0 -> 1.6.0
 Modified principles:
-- Added VI. Resource Economy, Robustness, And Durable Lessons
-- Language And Deployment Policy (expanded resource-boundary guidance)
-- Workflow And Quality Gates (expanded resource, recovery, and lesson-preservation gates)
+- Added V. Compatibility, Non-Destructive Change, And Explicit Approval
+- IV. Deterministic Documentation, Safe Writes, And Honest Status (expanded overwrite and
+  truthful-surface boundaries)
+- VI. Spec Kit First For Non-Trivial Work (expanded disruptive-change planning requirements)
+- VII. Resource Economy, Robustness, And Durable Lessons (renumbered after new principle)
+- Workflow And Quality Gates (expanded compatibility, migration, and approval requirements)
 Added sections:
-- VI. Resource Economy, Robustness, And Durable Lessons
+- V. Compatibility, Non-Destructive Change, And Explicit Approval
 Removed sections:
 - None
 Templates requiring updates:
@@ -25,10 +28,9 @@ Templates requiring updates:
 - ✅ .specify/templates/tasks-template.md
 - ✅ README.md
 - ✅ specs/000-repo-governance/spec.md
-- ✅ specs/000-repo-governance/plan.md
 - ✅ specs/000-repo-governance/quickstart.md
 - ✅ .specify/extensions/docs/README.md
-- ✅ .specify/extensions/docs/commands/speckit.docs.md
+- ✅ reviewed, no update required: .specify/extensions/docs/commands/speckit.docs.md
 - ⚠ `.specify/templates/commands/*.md` is not present in this repo; repo-local command guidance was checked in `.specify/extensions/docs/commands/` instead
 Follow-up TODOs:
 - None
@@ -72,16 +74,31 @@ cleaned out of temporary files instead of kept as a second archive. Maintained s
 docs MUST NOT retain inline TODO-style review comments once that feedback has been captured in an
 authoritative temporary surface. Broad docs-maintenance rewrites MUST offer an inspectable or
 narrowed execution path before mutation, and feature-generation steps MUST NOT overwrite filled
-artifacts unless an explicit overwrite action is requested. Docs MUST distinguish current behavior
-from future direction.
+artifacts unless an explicit overwrite action is requested. Docs and operator surfaces MUST
+distinguish current behavior from future direction, and they MUST NOT silently imply that an old
+verification path or setup is still authoritative when it is not.
 
-### V. Spec Kit First For Non-Trivial Work
+### V. Compatibility, Non-Destructive Change, And Explicit Approval
+
+Repository work MUST default to additive, non-destructive, backward-compatible changes when it
+touches user work surfaces, configs, state files, schemas, CLIs, operator reports, launch paths,
+or other established workflows. Destructive edits, mass rewrites, major refactors that invalidate
+current setups, incompatible schema/config/state/report changes, and any change that can disrupt
+previous setups MUST NOT be applied silently or on assumption; they require explicit human approval
+before execution. When such a change is approved, the active spec, plan, tasks, and affected docs
+MUST name the impacted surface, compatibility strategy, migration steps, fallback or rollback
+path, and the operator-visible prompt or diagnostic that prevents false healthy, false compatible,
+or false complete readings. Reliability-sensitive automation MUST prefer preview, dry-run,
+compatibility fixtures, and guarded migration paths over blind mutation.
+
+### VI. Spec Kit First For Non-Trivial Work
 
 New tools, major refactors, service splits, workflow changes, doc-governance changes, and
-high-risk operational changes MUST use Spec Kit. The required path is `spec.md`, then `plan.md`,
-then `tasks.md`, then implementation, then the explicit docs gate.
+high-risk operational changes MUST use Spec Kit. Destructive or setup-invalidating changes MUST
+also use Spec Kit. The required path is `spec.md`, then `plan.md`, then `tasks.md`, then
+implementation, then the explicit docs gate.
 
-### VI. Resource Economy, Robustness, And Durable Lessons
+### VII. Resource Economy, Robustness, And Durable Lessons
 
 Operational tools MUST be designed for low-spec local machines by default. Plans for performance-,
 reliability-, or safety-sensitive work MUST state concrete resource goals for CPU, memory, disk,
@@ -125,6 +142,9 @@ in tests, operator docs, code comments, or governance docs before the feature cl
 - Docs-maintenance runs and feature-generation runs are separate write surfaces. Use preview/scope
   controls for broad metadata sync, and require an explicit overwrite action before replacing a
   filled artifact such as `plan.md`.
+- Feature generation, docs maintenance, schema/state/config migrations, CLI/report-surface
+  rewrites, and broad refactors MUST use an inspectable scope, preview, or dry-run whenever
+  practical before mutation.
 - When standing-governance review produces unresolved follow-up, move it into
   `specs/000-repo-governance/research.md` or a new scoped feature instead of leaving inline TODO
   markers in maintained governance docs.
@@ -132,6 +152,10 @@ in tests, operator docs, code comments, or governance docs before the feature cl
   where relevant.
 - When vision, acceptance criteria, or review requirements are unclear enough to risk wrong work,
   the human owner MUST be asked directly instead of letting the docs drift on assumption.
+- When a change can invalidate previous setups, stored state, schemas, configs, operator surfaces,
+  authoritative launch paths, or other established workflows, the spec and plan MUST state the
+  compatibility strategy, migration steps, fallback or rollback path, required human approval
+  point, and any operator-visible prompt or diagnostic before implementation begins.
 - Generated text is proposal text until human-reviewed. Stable decisions MUST be fixed in code,
   tests, governance docs, or explicit comments that preserve lessons learned.
 - When durable lessons are lifted from a feature or review, maintainers SHOULD preserve a light
@@ -141,6 +165,9 @@ in tests, operator docs, code comments, or governance docs before the feature cl
 - Safety-, reliability-, or performance-sensitive specs and plans MUST include resource goals,
   bounded concurrency/state/logging decisions, recovery/status behavior, and test or benchmark
   evidence scaled to the risk.
+- Task lists SHOULD include compatibility fixtures, migration verification, rollback/fallback
+  checks, and setup-preservation checks whenever prior setups or machine-readable surfaces are at
+  risk.
 - Implementation task lists SHOULD include low-spec verification whenever CPU, memory, disk,
   network, or queue growth could affect correctness, latency, or operator trust.
 - Incident fixes MUST capture the lesson in tests, docs, or narrowly useful comments so the repo
@@ -159,6 +186,8 @@ Amendment rules:
 
 - update the constitution
 - update `specs/000-repo-governance/` as needed
+- update affected templates or workflow guidance when the principle changes how work is planned,
+  specified, or task-tracked
 - update affected README or project docs
 - run the explicit docs gate
 
@@ -173,4 +202,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.5.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-25
+**Version**: 1.6.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-28

@@ -29,6 +29,7 @@ docmeta:
 **Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app, or explicitly unknown]  
 **Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps, or explicitly unknown]  
 **Resource Goals**: [CPU, memory, disk, network, queue, polling, and log-volume budgets or explicitly unknown]
+**Compatibility/Migration**: [existing setup, config/state/schema/CLI/operator-surface/launch-path impact, migration path, rollback/fallback, or explicitly none]
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable, or explicitly unknown]  
 **Architecture Constraints**: [internal service boundaries, process boundaries, dependency limits, or explicitly unknown]
 **Minimalism Constraints**: [what must stay simple, local, bounded, or low-overhead, or explicitly unknown]
@@ -56,6 +57,12 @@ Include document impact in this check:
 - whether `.specify/doc-registry.json` changes
 - whether standing-governance review follow-up must move out of maintained docs and into an
   authoritative temporary surface
+- whether the change deletes, invalidates, or silently rewrites previous setups, schemas, state,
+  configs, operator surfaces, or authoritative launch paths
+- whether explicit human approval is required before destructive mutation, broad rewrite, major
+  refactor, incompatible schema/surface change, or another setup-invalidating change
+- whether compatibility strategy, migration steps, fallback/rollback, and operator-visible
+  diagnostics are documented before implementation
 - whether safety-, reliability-, or performance-sensitive work states resource goals, bounded
   concurrency/state/logging, and recovery/status behavior
 - whether resource economy preserves performance targets and documentation completeness instead of

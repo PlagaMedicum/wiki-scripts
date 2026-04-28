@@ -85,4 +85,6 @@ Frontmatter is authoritative when both frontmatter and legacy `DOCMETA` are pres
 maintained contract.
 
 Broad metadata sync and feature-generation are different write surfaces. Use scope or dry-run for
-the former, and explicit overwrite actions for the latter.
+the former, and explicit overwrite actions for the latter. If a broad rewrite can invalidate local
+workflow assumptions or previous setup expectations, require explicit operator confirmation before
+the mutating run.

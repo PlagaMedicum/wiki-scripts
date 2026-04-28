@@ -44,6 +44,9 @@ Safety-, reliability-, or performance-sensitive changes must state resource goal
 concurrency bounded, avoid unnecessary services or dependencies, and verify that economy does not
 come at the cost of correctness, performance, recovery, operator-visible status, or durable
 documentation.
+Changes that can delete work, invalidate previous setups, break schemas or operator surfaces, or
+otherwise disrupt established workflows must be called out explicitly, planned through Spec Kit,
+and approved by the human owner before the disruptive step runs.
 
 ## Where To Look Next
 

@@ -78,6 +78,10 @@ docmeta:
 
 - What happens when [boundary condition]?
 - How does system handle [error scenario]?
+- What happens when the feature encounters older config/state/schema/artifact shapes from a
+  previous setup?
+- If the change can invalidate a previous setup or workflow, what migration, rollback, or operator
+  prompt is required?
 
 ## Requirements *(mandatory)*
 
@@ -97,6 +101,9 @@ docmeta:
   clarification note instead of inventing policy.
 - If a direct human answer or approval is still needed, record it in `questions.md` or another
   feature-local file instead of relying only on chat context.
+- If the change can invalidate previous setups, schemas, configs, state files, machine-readable
+  surfaces, or authoritative launch paths, include explicit requirements for compatibility,
+  migration, rollback/fallback, and required human approval before disruptive execution.
 - For safety-, reliability-, or performance-sensitive work, include requirements for low-spec
   operation, bounded queues/concurrency/state/logging, recovery behavior, and operator-visible
   status where those constraints affect correctness or trust. Resource economy must not weaken
@@ -158,8 +165,10 @@ docmeta:
   - specs/000-repo-governance/quickstart.md
   - specs/000-repo-governance/plan.md
   - specs/000-repo-governance/tasks.md
-  - project-local README/docs
-  - resource, recovery, status, benchmark, or low-spec operation notes for affected tools
+- project-local README/docs
+- migration notes, compatibility diagnostics, and operator prompts when previous setups or surfaces
+  can be invalidated
+- resource, recovery, status, benchmark, or low-spec operation notes for affected tools
   - tests/docs/comments that preserve durable lessons from incidents or reviews
   - .specify/memory/constitution.md (only if the workflow rules or governance change)
   - .specify/doc-registry.json (if a managed doc is added, renamed, or reclassified)

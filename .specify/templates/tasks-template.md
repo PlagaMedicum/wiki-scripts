@@ -70,6 +70,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T009 Setup environment configuration management
 - [ ] T010 Define bounded queues, concurrency limits, durable-state limits, and log-volume controls
 - [ ] T011 Add operator-visible status or diagnostics for recovery, backlog, and resource pressure
+- [ ] T012 Add compatibility fixtures, migration guardrails, and explicit approval checkpoints for
+  schema/config/state/CLI/operator-surface changes
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -155,6 +157,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX [P] Documentation updates in README.md, `specs/000-repo-governance/`, and affected project-local docs
 - [ ] TXXX Reconcile `.specify/doc-registry.json` if a managed doc was added, renamed, reclassified, or had durable review state changed
 - [ ] TXXX Move unresolved standing-governance review follow-up into `specs/000-repo-governance/research.md` instead of leaving inline TODO markers in maintained docs
+- [ ] TXXX Add migration notes, compatibility verification, rollback/fallback checks, and
+  operator prompts for any change that can invalidate a previous setup or machine-readable surface
 - [ ] TXXX Run `make docs` or `python3 tools/doc_workflow.py all`
 - [ ] TXXX Update `specs/000-repo-governance/spec.md` or `research.md` if the change affects repo policy
 - [ ] TXXX Code cleanup and refactoring
@@ -259,6 +263,8 @@ With multiple developers:
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
+- Avoid: silent destructive edits, unapproved setup-breaking refactors, incompatible schema/state
+  rewrites without migration steps, or changes that disrupt prior setups without explicit approval
 - Avoid: unbounded queues, busy loops, unlimited log spam, unnecessary long-running processes, and
   new dependencies that do not pay for their resource and failure-mode cost
 - Avoid: treating resource economy as permission to lower performance targets or omit durable

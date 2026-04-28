@@ -68,6 +68,14 @@ tradeoffs.
 - Non-trivial changes use Spec Kit.
 - The required sequence is `spec.md`, then `plan.md`, then `tasks.md`, then implementation, then
   the explicit docs gate.
+- Changes should default to additive, non-destructive, backward-compatible behavior across configs,
+  state files, schemas, operator surfaces, and launch paths.
+- Destructive edits, broad rewrites, major refactors that invalidate current setups, incompatible
+  schema/config/state/report changes, and any change that can disrupt previous setups require
+  explicit human approval before execution.
+- When incompatibility is necessary, the active spec, plan, tasks, and affected docs must name the
+  impacted surface, compatibility strategy, migration steps, fallback/rollback path, and any
+  operator-visible prompt or diagnostic before implementation begins.
 - The explicit docs gate is `make docs`, `python3 tools/doc_workflow.py all`, or the repo-local
   Spec Kit command `/speckit.docs`.
 - When a feature needs direct human approval, comment, or answer, record that need in feature-local
@@ -82,6 +90,8 @@ tradeoffs.
   recovery/status behavior, low-spec verification, and durable lessons captured in tests or docs.
 - Resource constraints must not be used to lower performance goals or skip documentation of evidence,
   operational checks, and lessons learned.
+- Compatibility and migration checks should be treated as correctness work when machine-readable
+  surfaces, stored state, or operator workflows can break across versions.
 
 ### Biblio
 
@@ -130,6 +140,9 @@ tradeoffs.
 - Generated docs are convenience output only and must not invent scope, guarantees, review state,
   or product direction.
 - Docs must distinguish current behavior from future direction explicitly.
+- Broad metadata rewrites or feature-generation writes should offer preview or narrowed scope before
+  mutation, and must not silently replace filled artifacts or imply that an old setup remains valid
+  when it does not.
 - Open matters that still need a decision belong in [`research.md`](research.md), not mixed into
   accepted decisions.
 - Accepted decisions should be moved out of temporary research or question files once the durable docs

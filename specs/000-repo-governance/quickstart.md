@@ -29,6 +29,9 @@ specify check
    needed, keep them in feature-local files such as `questions.md` or `review-queue.md`.
    If the unresolved point is repo-level governance rather than feature-scoped work, move it into
    `specs/000-repo-governance/research.md`.
+   If the change can invalidate previous setups, schemas, configs, state files, machine-readable
+   surfaces, or authoritative launch paths, document the compatibility strategy, migration steps,
+   fallback/rollback, and the required human approval point before implementation.
    For safety-, reliability-, or performance-sensitive work, state resource goals, bounded
    concurrency/state/logging, recovery/status behavior, low-spec verification, and how incident
    lessons will be preserved.
@@ -83,6 +86,9 @@ python3 tools/doc_workflow.py all
 - Do not trade away correctness, recovery, or operator-visible status for resource economy. Make any
   cost, latency, throughput, safety, robustness, or documentation tradeoff explicit in the active
   spec or plan.
+- Do not execute destructive edits, broad rewrites, setup-breaking refactors, or incompatible
+  schema/state/surface changes on assumption. Get explicit human approval and record the migration
+  path first.
 
 ## Repo-Local Refresh
 

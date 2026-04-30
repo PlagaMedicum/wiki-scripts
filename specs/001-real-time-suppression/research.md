@@ -200,6 +200,44 @@ early under one repeated root cause, and retain only bounded unresolved samples.
 - Disable verification under any throttle condition. Rejected because bounded resume is still
   required.
 
+## Decision: Treat scheduled verification failure and full-recheck freshness as protection-trust evidence
+
+**Rationale**: The latest runtime artifacts showed a failed scheduled reconciliation after only a
+small amount of progress, `last_daytime_verification_at=null`, `last_nightly_full_recheck_at=null`,
+and a checkpoint map whose oldest full-check timestamps are years old. That means operator trust is
+not determined by stream freshness alone. The design must treat two things as first-class evidence:
+
+- whether the latest daytime or nightly verification succeeded
+- how stale the full watched-set checkpoint map currently is
+
+The operator surface therefore needs explicit freshness evidence such as oldest full-check age,
+oldest sample title, and stale-page count, and a failed scheduled verification must remain visible
+as a real issue until a later successful run clears it.
+
+**Alternatives considered**:
+
+- Keep scheduled verification failure in raw logs only. Rejected because the operator already could
+  not see the lag clearly enough from the current surface.
+- Show only the number of checkpoint pages. Rejected because `1427` checkpoint pages says nothing
+  about whether the newest full check is today or years old.
+- Clear degradation as soon as the stream reopens. Rejected because healthy stream transport does
+  not prove nightly or daytime verification actually caught up.
+
+## Decision: Cross-check daemon runtime truth against the live process path
+
+**Rationale**: The latest runtime inspection also showed a persisted `daemon_state="running"` and a
+PID file for a process that no longer existed. The plan must therefore preserve the daemon-owned
+status surface, but verification and operator guidance must still cross-check it against the actual
+live process path so stale artifacts cannot masquerade as current protection.
+
+**Alternatives considered**:
+
+- Trust `runtime_status.json` unconditionally. Rejected because stale files can outlive the daemon.
+- Trust the PID file only. Rejected because the status surface still carries the higher-level
+  recovery and verification truth when the process is actually alive.
+- Move all truth into external supervisor logs. Rejected because the feature still requires a
+  machine-readable local runtime contract.
+
 ## Decision: Preserve one binary with microservice-like internal boundaries
 
 **Rationale**: The operator asked for a better architecture, but the repo constitution and local

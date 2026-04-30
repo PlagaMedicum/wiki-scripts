@@ -17,7 +17,9 @@ operator evidence. Recovery must anchor on the last recorded successful hide, da
 must recheck a rolling last 24 hours window at randomized intervals, nightly fallback must perform
 a randomized full watched-set recheck, and the operator surface must clearly show whether
 protection is working now, what recovery or verification is active, what the last meaningful hide
-was, and what problem requires action. The implementation should preserve the current single local
+was, what problem requires action, and whether full watched-set coverage is becoming stale. A
+failed scheduled verification or an overdue full watched-set checkpoint map must not disappear
+behind a later healthy stream reopen. The implementation should preserve the current single local
 daemon plus TUI deployment, keep status and command surfaces backward-compatible where practical,
 and emit explicit migration or fallback guidance when compatibility cannot be preserved.
 
@@ -41,7 +43,9 @@ be.wikipedia.org
 5 seconds under normal availability; stale or ineffective protection surfaced within 10 seconds;
 recovery from missed edits since the last successful hide completed or reported unresolved within 2
 minutes for gaps up to 30 minutes; at least one randomized daytime rolling-24h verification and
-one randomized nightly full recheck recorded per uninterrupted 24-hour daemon period  
+one randomized nightly full recheck recorded per uninterrupted 24-hour daemon period; failed
+scheduled verification or stale full watched-set coverage surfaced to the operator within 10
+seconds of status inspection  
 **Resource Goals**: Bounded queues, bounded API concurrency, bounded unresolved samples, bounded
 warning summaries, compact status/report state, no busy loops, no unbounded title or revision
 retention, and low enough idle or active CPU and memory for one daemon plus one TUI on a low-spec
@@ -246,6 +250,8 @@ No constitution violations identified.
   default verification route.
 - Record the currently shipped config, runtime-status, command-report, and PID-file shapes as the
   compatibility baseline for additive changes and migration fixtures.
+- Confirm how runtime truth is cross-checked against the live process and launched binary so a
+  stale PID file or stale `runtime_status.json` cannot masquerade as current protection evidence.
 - Confirm which existing state fields already persist `last_successful_hide_at`,
   `latest_recovery_summary`, compatibility notices, and command-report isolation so the design adds
   fields rather than replacing the surface wholesale.
@@ -266,16 +272,23 @@ No constitution violations identified.
   invalidating existing configs that currently provide a single start time.
 - Make every recovery or verification run record its exact covered window or scope and expose that
   window to the operator surface.
+- Define how full watched-set freshness is measured from checkpoints or additive runtime fields:
+  at minimum oldest full-check age, oldest sample title, stale-page count against the nightly
+  target, and the latest failed daytime or nightly verification result.
 
 ### Phase 2 - Operator-First Runtime Contract And TUI Layout
 
 - Preserve the daemon-owned `runtime_status.json` surface, but extend it additively with the status
   objects needed for operator-first rendering: uptime, current task, recovery window, last
-  successful hide, latest actionable issue, recent offline/stalled interval, and revision URLs.
+  successful hide, latest actionable issue, recent offline/stalled interval, revision URLs, and
+  reconciliation freshness evidence.
 - Remove raw resume cursors, internal counters, and bookkeeping rows from the primary TUI status
   view. They may remain available as secondary diagnostics or machine-readable fields.
 - Distinguish stream freshness from live hide effectiveness so fresh recentchange input cannot mask
   a failed or unresolved live suppression path.
+- Keep failed scheduled verification and stale full watched-set coverage visible as actionable
+  degraded-trust evidence until a later successful verification or full recheck clears them; a
+  stream reopen alone must not clear that state.
 - Report lag as a wall-clock duration that keeps sub-second precision when the value is below one
   second, and use bounded API freshness probing only when the stream is silent enough that freshness
   is ambiguous.
@@ -300,9 +313,11 @@ No constitution violations identified.
 
 - Add regression tests for last-successful-hide recovery anchoring, rolling last-24h scheduling,
   randomized nightly full recheck selection, compatibility loading of older state shapes, command
-  isolation, plain-language TUI status rows, revision-link rendering, and lag precision.
+  isolation, plain-language TUI status rows, revision-link rendering, lag precision, and failed
+  scheduled-verification truth.
 - Add controlled tests for repeated throttle behavior, recovery convergence, source-triggered catch
-  up under backoff, and the `Last 24 hours` preset.
+  up under backoff, the `Last 24 hours` preset, and checkpoint-freshness summaries with stale-page
+  coverage age.
 - Run suppressor tests, docs workflow, and controlled benchmark checks. Restart the real deployment
   path in use and verify the TUI plus runtime surfaces reflect the new fields and layout.
 - Before release trust is claimed for any incompatible surface change, produce explicit evidence of:

@@ -116,7 +116,18 @@ diagnostics.
     "active": false,
     "mode": "nightly-full",
     "phase": "idle",
-    "queued_mode": null
+    "queued_mode": null,
+    "freshness": {
+      "target_hours": 24,
+      "total_pages": 1465,
+      "pages_older_than_target": 0,
+      "oldest_full_check_at": "2026-04-29T02:17:18Z",
+      "oldest_full_check_title": "Касцёл Святога Сымона і Святой Алены",
+      "oldest_full_check_age_seconds": 2475,
+      "last_daytime_verification_result": "completed",
+      "last_nightly_full_recheck_result": "completed",
+      "computed_at": "2026-04-29T09:10:03Z"
+    }
   }
 }
 ```
@@ -142,7 +153,9 @@ The primary view should therefore render, in priority order:
 5. `Last observed watched edit` or `Last observed target-wiki event`, whichever best explains the
    current state.
 6. `Latest issue`: plain-language issue summary with next action when needed.
-7. `Compatibility` or `migration` notice when present.
+7. `Full recheck freshness`: oldest full-check age, stale-page count, and last failed scheduled
+   verification result when that evidence affects trust.
+8. `Compatibility` or `migration` notice when present.
 
 The primary view should not spend its first rows on:
 
@@ -159,6 +172,9 @@ The primary view should not spend its first rows on:
   - live recentchange freshness is within threshold
   - no required recovery or verification is currently incomplete
   - no active throttle backoff blocks required recovery
+  - scheduled verification evidence is not overdue for the current uninterrupted daemon period
+  - the latest scheduled verification or full watched-set recheck has not failed without a still
+    visible actionable issue
   - the latest live hide outcome is not failed, unresolved, or blocked without a compensating
     successful retry or recovery result
 - `state=recovering` or `state=catching-up` means an actual recovery, verification, or throttle
@@ -188,6 +204,9 @@ The primary view should not spend its first rows on:
   `latest_error` remains available as secondary diagnostic detail.
 - `last_daytime_verification_*` and `last_nightly_full_recheck_at` provide operator evidence that
   the scheduled verification duties are actually running.
+- `reconciliation.freshness` is the compact operator-facing summary of full watched-set coverage
+  age. It must summarize checkpoint staleness rather than merely expose checkpoint file size or
+  page count.
 
 ## TUI Requirements
 
@@ -259,6 +278,36 @@ Rules:
 - Stopped-early runs are not healthy outcomes and must remain operator-visible until resolved or
   superseded.
 - Daytime and nightly scheduled runs must remain distinct in naming and evidence.
+
+## Scheduled Verification Freshness Contract
+
+When runtime status or the derived operator surface summarizes full watched-set coverage freshness,
+it may include:
+
+```json
+{
+  "target_hours": 24,
+  "total_pages": 1427,
+  "pages_older_than_target": 1427,
+  "oldest_full_check_at": "2018-01-12T20:19:50Z",
+  "oldest_full_check_title": "Хартыя’97",
+  "oldest_full_check_age_seconds": 261756000,
+  "last_daytime_verification_result": "failed: non-json-response",
+  "last_nightly_full_recheck_result": "not-yet-recorded",
+  "computed_at": "2026-04-30T10:45:00Z"
+}
+```
+
+Rules:
+
+- This summary may be persisted directly in `runtime_status.json` or derived from
+  `nightly_sweep_progress.json` plus runtime status, but the operator surface must treat it as
+  first-class evidence.
+- `pages_older_than_target > 0` means the operator does not currently have proof of a recent full
+  watched-set recheck.
+- A failed daytime or nightly verification result must feed `latest_actionable_issue` or another
+  equally visible degraded-trust row until a later successful run clears it.
+- Raw checkpoint-page counts are not an acceptable substitute for freshness age.
 
 ## Compatibility Notice Contract
 

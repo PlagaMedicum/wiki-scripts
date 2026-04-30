@@ -184,6 +184,7 @@ Required output:
 
 - Label `Full watched-set recheck`.
 - Progress and final counts.
+- Updated full-recheck freshness evidence, including whether stale-page count returned to zero.
 - Any backoff or stop-early reason.
 
 ### Check auth

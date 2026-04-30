@@ -80,6 +80,10 @@ Before trusting a new version in the operator environment:
    authoritative evidence.
 4. Confirm `runtime_status.json` is the daemon-owned realtime surface and `command_report.json` is
    only the last bounded one-shot command result.
+5. Confirm the PID named by the active runtime surface actually exists, and when possible confirm it
+   matches the expected suppressor binary path for this workspace.
+6. If the PID is gone or the runtime file clearly predates the last process exit, treat the status
+   evidence as stale and fail verification immediately.
 
 ## Realtime Protection Check
 
@@ -115,6 +119,8 @@ Before trusting a new version in the operator environment:
 3. Confirm the operator surface records the exact covered window and distinguishes it from other
    recovery work.
 4. Confirm the run remains bounded under repeated throttling and preserves compact warning summaries.
+5. If the run fails or stops early, confirm the primary status view keeps that failure visible as a
+   current issue instead of clearing back to `healthy` after an unrelated stream reopen.
 
 ## Nightly Full Recheck Check
 
@@ -124,6 +130,19 @@ Before trusting a new version in the operator environment:
    verification.
 4. Confirm compatibility remains intact if new scheduler fields were added; otherwise confirm a
    migration notice exists.
+
+## Reconciliation Freshness Truth Check
+
+1. Inspect the operator surface after startup and after any scheduled verification attempt.
+2. Confirm it exposes:
+   - the latest daytime verification result
+   - the latest full watched-set recheck result
+   - oldest full-check age
+   - stale-page count against the nightly target
+3. Confirm a checkpoint map with stale pages does not read as “fully covered” merely because the
+   daemon is currently idle or the stream is fresh.
+4. Confirm a failed scheduled verification remains operator-visible until a later successful run
+   clears it.
 
 ## Emergency Catch-Up Check
 
@@ -191,6 +210,7 @@ Do not treat the fix as production-ready until all of the following are true:
 - recovery-from-last-successful-hide checks pass
 - rolling last-24h daytime verification checks pass
 - randomized nightly full recheck checks pass
+- reconciliation freshness truth checks pass
 - emergency catch-up and `Last 24 hours` preset checks pass
 - source-refresh checks pass
 - throttle and backoff checks pass

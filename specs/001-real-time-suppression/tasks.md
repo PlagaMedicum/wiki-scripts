@@ -91,12 +91,14 @@ without manual action, and source-page triggers start immediate bounded follow-u
 
 **Goal**: A running daemon that is stale, gapped, throttled, or otherwise ineffective becomes
 visibly non-healthy, recovers from the last successful hide where possible, performs the approved
-scheduled verification work, and presents operator-first truthful status.
+scheduled verification work, keeps failed verification or stale full watched-set coverage visible
+as trust problems, and presents operator-first truthful status.
 
 **Independent Test**: Simulate silent starvation, reconnect noise, a true gap, throttled recovery,
-and stale prior artifacts; verify the daemon recovers from the correct anchor, scheduled
-verification runs are recorded truthfully, and the primary status view shows accurate protection
-state and next action.
+stale prior artifacts, a failed scheduled verification, and an overdue checkpoint map; verify the
+daemon recovers from the correct anchor, scheduled verification runs are recorded truthfully,
+failed verification does not clear on an unrelated stream reopen, and the primary status view shows
+accurate protection state, next action, and full watched-set freshness evidence.
 
 ### Tests for User Story 2
 
@@ -104,7 +106,7 @@ state and next action.
 - [X] T021 [P] [US2] Add recovery-anchor and stale-state convergence tests for `last_successful_hide_at` recovery and fallback-anchor reporting in `suppressor/src/catchup.rs` and `suppressor/src/runtime.rs`
 - [X] T022 [P] [US2] Add bounded API freshness-probe, precise lag calculation, and MediaWiki timestamp plus `badtimestamp` classification tests in `suppressor/src/mw_api.rs` and `suppressor/src/runtime.rs`
 - [X] T023 [P] [US2] Add scheduler and overlap tests for rolling last-24h daytime verification, randomized nightly full recheck, and overlap with source-triggered or manual recovery in `suppressor/src/scheduler.rs` and `suppressor/src/reconcile.rs`
-- [X] T024 [P] [US2] Add TUI operator-surface tests for primary status rows, latest actionable issue, compatibility notices, shared throttle or backoff visibility, coalesced warning-summary readability, daemon-vs-command truth, and wrapped-row latest-follow behavior in `suppressor/src/tui_view.rs`, `suppressor/src/tui_status.rs`, and `suppressor/src/tui.rs`
+- [ ] T024 [P] [US2] Extend TUI and runtime-derivation tests for failed scheduled-verification visibility, checkpoint-freshness summaries, stale PID/runtime truth, latest actionable issue persistence, daemon-vs-command truth, and wrapped-row latest-follow behavior in `suppressor/src/tui_view.rs`, `suppressor/src/tui_status.rs`, and `suppressor/src/runtime.rs`
 
 ### Implementation for User Story 2
 
@@ -113,14 +115,15 @@ state and next action.
 - [X] T027 [US2] Gate startup, reconnect-noise, true gap recovery, and ordinary reopen transitions in `suppressor/src/stream.rs` and `suppressor/src/runtime.rs`
 - [X] T028 [US2] Implement randomized rolling last-24h daytime verification and randomized nightly full recheck scheduling with shared backoff awareness in `suppressor/src/scheduler.rs`, `suppressor/src/reconcile.rs`, and `suppressor/src/config.rs`
 - [X] T029 [US2] Persist explicit current-task, recovery-window, recent offline interval, and latest actionable issue fields in `suppressor/src/runtime.rs` and `suppressor/src/state.rs`
-- [X] T030 [US2] Redesign the primary TUI status panel around operator-first rows and de-emphasize bookkeeping fields in `suppressor/src/tui_status.rs` and `suppressor/src/tui_view.rs`
-- [ ] T031 [US2] Surface compatibility or migration-needed diagnostics, approval text, and rollback or fallback guidance for invalid prior setup in `suppressor/src/runtime.rs`, `suppressor/src/state.rs`, and `suppressor/src/tui_view.rs`
+- [ ] T030 [US2] Extend the primary TUI status panel and derived runtime view with full watched-set freshness evidence, latest failed daytime or nightly verification outcome, and degraded-trust rows that de-emphasize bookkeeping fields in `suppressor/src/tui_status.rs` and `suppressor/src/tui_view.rs`
+- [ ] T031 [US2] Surface compatibility or migration-needed diagnostics, approval text, rollback or fallback guidance, and stale PID/runtime cross-checks for invalid prior setup in `suppressor/src/runtime.rs`, `suppressor/src/state.rs`, and `suppressor/src/tui_view.rs`
 - [ ] T032 [US2] Make latest-follow log rendering row-accurate and keep daemon and command logs visibly distinct in `suppressor/src/tui.rs` and `suppressor/src/tui_view.rs`
-- [ ] T033 [US2] Share throttle or backoff state across live lookups, gap recovery, source-refresh catch-up, scheduled verification, reconciliation, and command surfaces, keep degraded live protection and coalesced failure summaries visible while that state is active, and force state convergence once recovery clears in `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_status.rs`
+- [ ] T033 [US2] Share throttle or backoff state across live lookups, gap recovery, source-refresh catch-up, scheduled verification, reconciliation, and command surfaces, keep degraded live protection, failed scheduled verification, stale full watched-set coverage, and coalesced failure summaries visible while that state is active, and prevent stream reopen from clearing that state until a later successful verification or recovery does so in `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_status.rs`
 
 **Checkpoint**: User Story 2 is complete when stale or throttled protection cannot appear healthy,
-recovery starts from the last successful hide, scheduled verification is truthful, and the primary
-status view answers the operator’s core questions.
+recovery starts from the last successful hide, scheduled verification is truthful, stale full
+watched-set coverage is surfaced explicitly, and the primary status view answers the operator’s
+core questions.
 
 ---
 
@@ -159,12 +162,12 @@ final compatibility approval evidence.
 
 - [ ] T042 [P] Add benchmark safety, burst-of-10 controlled-event, and allow-list tests for `Удзельнік:Plaga med Bot/suppressor/tests` in `suppressor/src/commands.rs`, `suppressor/tests/api_integration.rs`, and `suppressor/tests/config_and_state.rs`
 - [ ] T043 [P] Implement benchmark and low-spec verification entry points in `suppressor/src/commands.rs`, `suppressor/src/cli.rs`, and `suppressor/src/app.rs`
-- [ ] T044 [P] Update operator docs for live states, recovery anchor, last-24h preset, randomized verification, and authoritative launch-path guidance in `suppressor/README.md` and `suppressor/docs/operations.md`
-- [ ] T045 [P] Update implementation and runtime-boundary docs for scheduler semantics, status contracts, compatibility loading, bounded state, and operator-first TUI design in `suppressor/docs/implementation.md` and `suppressor/docs/runtime-boundaries.md`
-- [ ] T046 [P] Update testing strategy and quickstart verification for anchor recovery, scheduler runs, operator-first TUI, benchmark safety, and compatibility approval checks in `suppressor/docs/testing-strategy.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T044 [P] Update operator docs for live states, recovery anchor, last-24h preset, randomized verification, reconciliation freshness evidence, and authoritative launch-path guidance in `suppressor/README.md` and `suppressor/docs/operations.md`
+- [ ] T045 [P] Update implementation and runtime-boundary docs for scheduler semantics, status contracts, stale-runtime cross-checks, checkpoint-freshness evidence, bounded state, and operator-first TUI design in `suppressor/docs/implementation.md` and `suppressor/docs/runtime-boundaries.md`
+- [ ] T046 [P] Update testing strategy and quickstart verification for anchor recovery, scheduler runs, operator-first TUI, reconciliation freshness truth, benchmark safety, and compatibility approval checks in `suppressor/docs/testing-strategy.md` and `specs/001-real-time-suppression/quickstart.md`
 - [ ] T047 Run `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` and `rtk cargo test --manifest-path suppressor/Cargo.toml`, fixing regressions in `suppressor/tests/config_and_state.rs` and `suppressor/tests/api_integration.rs`
 - [ ] T048 Run `rtk python3 tools/doc_workflow.py all` and record the docs-gate result in `specs/001-real-time-suppression/quickstart.md`
-- [ ] T049 Restart the daemon through the actual launch path, run the benchmark and low-spec checks, and capture compatibility approval evidence plus release-readiness results in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T049 Restart the daemon through the actual launch path, verify PID/binary/runtime truth alignment, run the benchmark and low-spec checks, and capture compatibility approval evidence plus reconciliation-freshness and release-readiness results in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
 - [ ] T050 Evaluate whether the compatibility or migration-warning pattern should be generalized and, if so, document it in `specs/000-repo-governance/research.md`
 - [ ] T051 [P] Add controlled rights/session failure reporting tests for live hiding and operator surfaces in `suppressor/src/worker.rs`, `suppressor/src/runtime.rs`, and `suppressor/tests/api_integration.rs`
 
@@ -207,8 +210,8 @@ final compatibility approval evidence.
 - Phase 2 tasks T005, T007, and T009 can run in parallel across fixtures, scheduler tests, and
   runtime contract tests.
 - US1 test tasks T011 through T013 can run in parallel.
-- US2 test tasks T020 through T024 can run in parallel across stream, catch-up, API, scheduler, and
-  TUI surfaces.
+- US2 test tasks T020 through T024 can run in parallel across stream, catch-up, API, scheduler,
+  reconciliation-freshness, and TUI surfaces.
 - US3 test tasks T034 through T036 can run in parallel across commands and TUI surfaces.
 - Polish tasks T042 through T046 and T051 can run in parallel once the code paths stabilize.
 
@@ -228,7 +231,7 @@ Task: "T013 [US1] Add source-refresh trigger tests for suppression-list deltas a
 Task: "T020 [US2] Add stream watchdog tests for silent starvation, reconnect, invalid resume, and ordinary reopen without false startup recovery in suppressor/src/stream.rs"
 Task: "T022 [US2] Add bounded API freshness-probe and precise lag calculation tests in suppressor/src/mw_api.rs and suppressor/src/runtime.rs"
 Task: "T023 [US2] Add scheduler and overlap tests for rolling last-24h daytime verification, randomized nightly full recheck, and overlap with source-triggered or manual recovery in suppressor/src/scheduler.rs and suppressor/src/reconcile.rs"
-Task: "T024 [US2] Add TUI operator-surface tests for primary status rows, latest actionable issue, compatibility notices, daemon-vs-command truth, and wrapped-row latest-follow behavior in suppressor/src/tui_view.rs, suppressor/src/tui_status.rs, and suppressor/src/tui.rs"
+Task: "T024 [US2] Extend TUI and runtime-derivation tests for failed scheduled-verification visibility, checkpoint-freshness summaries, stale PID/runtime truth, latest actionable issue persistence, daemon-vs-command truth, and wrapped-row latest-follow behavior in suppressor/src/tui_view.rs, suppressor/src/tui_status.rs, and suppressor/src/runtime.rs"
 ```
 
 ## Parallel Example: User Story 3

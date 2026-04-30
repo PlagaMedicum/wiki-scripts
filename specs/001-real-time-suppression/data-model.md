@@ -161,6 +161,34 @@ Relationships:
 - Uses zero or one `RecoveryAnchor`.
 - Produces zero or more `ObservedEdit` outcomes.
 
+## RecheckFreshnessSnapshot
+
+Represents the current trustworthiness of full watched-set checkpoint coverage.
+
+Fields:
+
+- `target_hours`: Expected freshness target for full watched-set coverage, normally one night.
+- `total_pages`: Count of watched pages represented in the checkpoint map.
+- `pages_older_than_target`: Count of watched pages whose last full check is older than the target.
+- `oldest_full_check_at`: Oldest known full watched-set checkpoint timestamp.
+- `oldest_full_check_title`: Safe sample title for the oldest full-check entry.
+- `oldest_full_check_age_seconds`: Computed age of the oldest full-check entry.
+- `last_daytime_verification_result`: Compact result of the latest daytime rolling verification.
+- `last_nightly_full_recheck_result`: Compact result of the latest nightly full recheck.
+- `computed_at`: Time the freshness snapshot was derived.
+
+Validation rules:
+
+- A stale-page count greater than zero means the operator surface must not imply recent full
+  watched-set coverage.
+- A failed scheduled verification result must remain visible until a later successful run
+  supersedes it.
+- Raw checkpoint-page count without freshness age is not sufficient operator evidence.
+
+Relationships:
+
+- Derived from `VerificationRun` results plus persisted watched-set checkpoint state.
+
 ## VerificationCounts
 
 Represents the bounded counts summary for a recovery or verification run.
@@ -247,6 +275,7 @@ Fields:
 - `lag_millis`: Additive precise lag value for sub-second operator display.
 - `lag_source`: `stream` or `api-probe`.
 - `recent_offline_interval`: Optional `OfflineInterval`.
+- `recheck_freshness`: Optional `RecheckFreshnessSnapshot`.
 - `compatibility_notice`: Optional `CompatibilityNotice`.
 
 Validation rules:
@@ -254,6 +283,9 @@ Validation rules:
 - The primary view must answer current operator questions before showing internal counters.
 - Raw transport cursors, processed-ring sizes, and checkpoint-page counts are secondary diagnostics,
   not primary status.
+- The primary view must not report healthy protection while `recheck_freshness` shows a failed
+  scheduled verification or obviously stale full watched-set coverage that still needs operator
+  attention.
 
 ## OperatorTaskStatus
 

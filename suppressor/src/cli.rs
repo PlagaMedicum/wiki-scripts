@@ -33,6 +33,8 @@ pub enum Command {
         #[arg(long)]
         end: Option<String>,
         #[arg(long)]
+        allow_large_window: bool,
+        #[arg(long)]
         dry_run: bool,
         #[arg(long)]
         report_only: bool,
@@ -42,6 +44,15 @@ pub enum Command {
         start: String,
         #[arg(long)]
         end: Option<String>,
+        #[arg(long)]
+        allow_large_window: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        report_only: bool,
+    },
+    #[command(name = "coverage-last-24h")]
+    CoverageLast24h {
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -112,11 +123,13 @@ mod tests {
             Command::EmergencyCatchup {
                 start,
                 end,
+                allow_large_window,
                 dry_run,
                 report_only,
             } => {
                 assert_eq!(start.as_deref(), Some("2026-04-24T16:00:00Z"));
                 assert_eq!(end.as_deref(), Some("2026-04-24T16:30:00Z"));
+                assert!(!allow_large_window);
                 assert!(dry_run);
                 assert!(!report_only);
             }
@@ -138,14 +151,52 @@ mod tests {
             Command::CoverageReport {
                 start,
                 end,
+                allow_large_window,
                 dry_run,
                 report_only,
             } => {
                 assert_eq!(start, "2026-04-24T16:00:00Z");
                 assert!(end.is_none());
+                assert!(!allow_large_window);
                 assert!(!dry_run);
                 assert!(report_only);
             }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_last_24h_coverage_command() {
+        let cli =
+            Cli::try_parse_from(["suppressor", "coverage-last-24h", "--report-only"]).unwrap();
+        match cli.command {
+            Command::CoverageLast24h {
+                dry_run,
+                report_only,
+            } => {
+                assert!(!dry_run);
+                assert!(report_only);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_large_window_override_for_coverage_report() {
+        let cli = Cli::try_parse_from([
+            "suppressor",
+            "coverage-report",
+            "--start",
+            "2026-04-24T16:00:00Z",
+            "--end",
+            "2026-04-24T18:30:00Z",
+            "--allow-large-window",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::CoverageReport {
+                allow_large_window, ..
+            } => assert!(allow_large_window),
             other => panic!("unexpected command: {other:?}"),
         }
     }

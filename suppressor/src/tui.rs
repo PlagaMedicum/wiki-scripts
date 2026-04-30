@@ -21,7 +21,7 @@ use crate::config::{AppConfig, RuntimePaths};
 use crate::signals;
 use crate::tui_process::{build_child_command, build_child_command_owned, spawn_pipe_reader};
 use crate::tui_status::{StatusSnapshot, collect_status};
-use crate::tui_view::{draw_ui, log_view_capacity};
+use crate::tui_view::{draw_ui, log_view_capacity, log_view_content_width, log_viewport};
 
 const MAX_LOG_LINES: usize = 500;
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -71,11 +71,11 @@ impl UiAction {
             UiAction::StopDaemon => "Stop daemon",
             UiAction::CheckAuth => "Check auth",
             UiAction::PrintConfig => "Print config",
-            UiAction::ReloadCache => "Post reload signal",
+            UiAction::ReloadCache => "Reload watched pages",
             UiAction::EmergencyCatchup => "Emergency catch-up",
-            UiAction::CoverageReport => "Coverage report",
-            UiAction::SweepNow => "Queue nightly reconciliation",
-            UiAction::RefreshStatus => "Refresh status",
+            UiAction::CoverageReport => "Coverage: Last 24 hours",
+            UiAction::SweepNow => "Run full watched-set recheck",
+            UiAction::RefreshStatus => "Reread local status",
             UiAction::Quit => "Quit",
         }
     }
@@ -87,17 +87,21 @@ impl UiAction {
             UiAction::StopDaemon => "Stops the managed daemon or sends SIGTERM to a running PID.",
             UiAction::CheckAuth => "Checks login and rights without starting the daemon.",
             UiAction::PrintConfig => "Shows the effective config with secrets redacted.",
-            UiAction::ReloadCache => "Signals the running daemon to reload the source list cache.",
+            UiAction::ReloadCache => {
+                "Reloads the watched-page cache. The status panel will show the source refresh result once the daemon finishes."
+            }
             UiAction::EmergencyCatchup => {
-                "Checks the recent watched-page window and queues unresolved eligible edits."
+                "Checks from the last successful hide when available and hides unresolved watched-page edits."
             }
             UiAction::CoverageReport => {
-                "Reports the recent watched-page window without hiding so unresolved exposure is visible."
+                "Reports the rolling Last 24 hours window without hiding so unresolved exposure is visible."
             }
             UiAction::SweepNow => {
-                "Signals the running daemon to queue the same reconciliation family used by the nightly job."
+                "Queues the full watched-set fallback recheck used by the randomized nightly job."
             }
-            UiAction::RefreshStatus => "Refreshes the status pane from local state files.",
+            UiAction::RefreshStatus => {
+                "Rereads daemon-owned status and command-report files. It does not repair protection."
+            }
             UiAction::Quit => "Closes the control center. Managed sessions are stopped on exit.",
         }
     }
@@ -190,6 +194,17 @@ impl ControlApp {
         };
     }
 
+    fn wrapped_log_rows(line: &str, width: usize) -> usize {
+        line.chars().count().max(1).div_ceil(width.max(1))
+    }
+
+    fn total_log_rows(&self, width: usize) -> usize {
+        self.logs
+            .iter()
+            .map(|line| Self::wrapped_log_rows(line, width))
+            .sum()
+    }
+
     fn focus_actions(&mut self) {
         self.focus = FocusPane::Actions;
     }
@@ -205,35 +220,37 @@ impl ControlApp {
         };
     }
 
-    fn log_max_top(&self, visible_lines: usize) -> usize {
-        self.logs.len().saturating_sub(visible_lines.max(1))
+    fn log_max_top(&self, visible_lines: usize, line_width: usize) -> usize {
+        self.total_log_rows(line_width)
+            .saturating_sub(visible_lines.max(1))
     }
 
-    pub(crate) fn current_log_top(&self, visible_lines: usize) -> usize {
+    pub(crate) fn current_log_top(&self, visible_lines: usize, line_width: usize) -> usize {
         if self.follow_logs {
-            self.log_max_top(visible_lines)
+            self.log_max_top(visible_lines, line_width)
         } else {
-            self.log_top.min(self.log_max_top(visible_lines))
+            self.log_top
+                .min(self.log_max_top(visible_lines, line_width))
         }
     }
 
-    fn scroll_logs_up(&mut self, visible_lines: usize, amount: usize) {
+    fn scroll_logs_up(&mut self, visible_lines: usize, line_width: usize, amount: usize) {
         if self.logs.is_empty() {
             return;
         }
         self.follow_logs = false;
         self.log_top = self
-            .current_log_top(visible_lines)
+            .current_log_top(visible_lines, line_width)
             .saturating_sub(amount.max(1));
     }
 
-    fn scroll_logs_down(&mut self, visible_lines: usize, amount: usize) {
+    fn scroll_logs_down(&mut self, visible_lines: usize, line_width: usize, amount: usize) {
         if self.logs.is_empty() {
             return;
         }
-        let max_top = self.log_max_top(visible_lines);
+        let max_top = self.log_max_top(visible_lines, line_width);
         let next = self
-            .current_log_top(visible_lines)
+            .current_log_top(visible_lines, line_width)
             .saturating_add(amount.max(1))
             .min(max_top);
         self.log_top = next;
@@ -245,8 +262,8 @@ impl ControlApp {
         self.log_top = 0;
     }
 
-    fn scroll_logs_latest(&mut self, visible_lines: usize) {
-        self.log_top = self.log_max_top(visible_lines);
+    fn scroll_logs_latest(&mut self, visible_lines: usize, line_width: usize) {
+        self.log_top = self.log_max_top(visible_lines, line_width);
         self.follow_logs = true;
     }
 
@@ -434,17 +451,23 @@ impl ControlApp {
 
     fn post_reload_signal(&mut self) {
         match signals::send_reload(&self.paths.pid_file) {
-            Ok(()) => self.push_control_log("Posted cache reload signal."),
-            Err(error) => self.push_control_log(format!("Failed to post reload signal: {error:#}")),
+            Ok(()) => self.push_control_log(
+                "Requested watched-page reload. Wait for the status panel to show the refresh result.",
+            ),
+            Err(error) => self.push_control_log(format!(
+                "Failed to request watched-page reload: {error:#}"
+            )),
         }
         self.refresh_status();
     }
 
     fn post_sweep_signal(&mut self) {
         match signals::send_manual_sweep(&self.paths.pid_file) {
-            Ok(()) => self.push_control_log("Queued nightly reconciliation signal."),
+            Ok(()) => self.push_control_log(
+                "Requested full watched-set recheck. Progress will appear in Current work.",
+            ),
             Err(error) => self.push_control_log(format!(
-                "Failed to queue nightly reconciliation signal: {error:#}"
+                "Failed to request full watched-set recheck: {error:#}"
             )),
         }
         self.refresh_status();
@@ -489,8 +512,8 @@ fn background_command_for_action(action: UiAction) -> Option<(&'static str, Vec<
             Some(("emergency-catchup", vec!["emergency-catchup".to_string()]))
         }
         UiAction::CoverageReport => Some((
-            "coverage-report",
-            vec!["coverage-report".to_string(), "--dry-run".to_string()],
+            "coverage-last-24h",
+            vec!["coverage-last-24h".to_string(), "--report-only".to_string()],
         )),
         _ => None,
     }
@@ -516,7 +539,7 @@ impl ControlApp {
             UiAction::SweepNow => self.post_sweep_signal(),
             UiAction::RefreshStatus => {
                 self.refresh_status();
-                self.push_control_log("Status refreshed.");
+                self.push_control_log("Reread local status files.");
             }
             UiAction::Quit => self.should_quit = true,
         }
@@ -555,28 +578,32 @@ pub async fn run(config_path: PathBuf, verbose: bool) -> Result<()> {
                 continue;
             }
             let size = terminal.size()?;
-            let visible_logs = log_view_capacity(Rect::new(0, 0, size.width, size.height));
+            let log_area = log_viewport(Rect::new(0, 0, size.width, size.height));
+            let visible_logs = log_view_capacity(log_area);
+            let log_width = log_view_content_width(log_area);
             match key.code {
                 KeyCode::Tab => app.toggle_focus(),
                 KeyCode::Left => app.focus_actions(),
                 KeyCode::Right => app.focus_output(),
                 KeyCode::Up => match app.focus {
                     FocusPane::Actions => app.previous_action(),
-                    FocusPane::Output => app.scroll_logs_up(visible_logs, 1),
+                    FocusPane::Output => app.scroll_logs_up(visible_logs, log_width, 1),
                 },
                 KeyCode::Down => match app.focus {
                     FocusPane::Actions => app.next_action(),
-                    FocusPane::Output => app.scroll_logs_down(visible_logs, 1),
+                    FocusPane::Output => app.scroll_logs_down(visible_logs, log_width, 1),
                 },
-                KeyCode::PageUp => app.scroll_logs_up(visible_logs, visible_logs.max(5)),
-                KeyCode::PageDown => app.scroll_logs_down(visible_logs, visible_logs.max(5)),
+                KeyCode::PageUp => app.scroll_logs_up(visible_logs, log_width, visible_logs.max(5)),
+                KeyCode::PageDown => {
+                    app.scroll_logs_down(visible_logs, log_width, visible_logs.max(5))
+                }
                 KeyCode::Home => app.scroll_logs_oldest(),
-                KeyCode::End => app.scroll_logs_latest(visible_logs),
+                KeyCode::End => app.scroll_logs_latest(visible_logs, log_width),
                 KeyCode::Enter => app.execute_selected_action(),
                 KeyCode::Char('q') => app.should_quit = true,
                 KeyCode::Char('r') => {
                     app.refresh_status();
-                    app.push_control_log("Status refreshed.");
+                    app.push_control_log("Reread local status files.");
                 }
                 _ => {}
             }
@@ -624,11 +651,19 @@ mod tests {
     fn coverage_report_uses_its_own_command() {
         let (label, args) = background_command_for_action(UiAction::CoverageReport).unwrap();
 
-        assert_eq!(label, "coverage-report");
+        assert_eq!(label, "coverage-last-24h");
         assert_eq!(
             args,
-            vec!["coverage-report".to_string(), "--dry-run".to_string()]
+            vec!["coverage-last-24h".to_string(), "--report-only".to_string()]
         );
+    }
+
+    #[test]
+    fn emergency_catchup_uses_its_own_command() {
+        let (label, args) = background_command_for_action(UiAction::EmergencyCatchup).unwrap();
+
+        assert_eq!(label, "emergency-catchup");
+        assert_eq!(args, vec!["emergency-catchup".to_string()]);
     }
 
     #[test]
@@ -641,5 +676,31 @@ mod tests {
             app.logs.back().map(String::as_str),
             Some("[control] Status refreshed.")
         );
+    }
+
+    #[test]
+    fn latest_mode_tracks_newest_raw_lines() {
+        let mut app = ControlApp::new(test_paths(), PathBuf::from("/tmp/suppressor"), false);
+        app.logs.clear();
+
+        for index in 0..6 {
+            app.push_raw_log(format!("line-{index} {}", "x".repeat(120)));
+        }
+
+        assert!(app.follow_logs);
+        assert_eq!(app.current_log_top(3, 200), 3);
+    }
+
+    #[test]
+    fn latest_mode_tracks_newest_wrapped_rows() {
+        let mut app = ControlApp::new(test_paths(), PathBuf::from("/tmp/suppressor"), false);
+        app.logs.clear();
+
+        for index in 0..3 {
+            app.push_raw_log(format!("line-{index} {}", "x".repeat(40)));
+        }
+
+        assert!(app.follow_logs);
+        assert_eq!(app.current_log_top(3, 10), 12);
     }
 }

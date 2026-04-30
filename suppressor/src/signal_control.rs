@@ -28,7 +28,12 @@ pub fn spawn_signal_control_loop(runtime: Arc<AppRuntime>) {
             tokio::select! {
                 _ = reload_signal.recv() => {
                     info!("received manual cache reload signal");
-                    runtime.reconcile.record_notice("received manual cache reload signal; realtime stream is unchanged").await;
+                    runtime
+                        .reconcile
+                        .record_notice(
+                            "reload watched pages requested; realtime protection is unchanged while the cache refresh runs",
+                        )
+                        .await;
                     if let Err(error) = refresh_cache(
                         &runtime.cache,
                         &runtime.client,
@@ -39,18 +44,25 @@ pub fn spawn_signal_control_loop(runtime: Arc<AppRuntime>) {
                     ).await {
                         runtime
                             .reconcile
-                            .record_notice(format!("manual cache reload failed: {error}"))
+                            .record_notice(format!("reload watched pages failed: {error}"))
                             .await;
                         warn!("manual cache reload failed: {error:#}");
                     } else {
-                        runtime.reconcile.record_notice("manual cache reload completed; realtime health is reported separately").await;
+                        runtime
+                            .reconcile
+                            .record_notice(
+                                "reload watched pages completed; see the source refresh row for title changes and catch-up state",
+                            )
+                            .await;
                     }
                 }
                 _ = sweep_signal.recv() => {
                     info!("received manual reconciliation signal");
                     runtime
                         .reconcile
-                        .record_notice("received manual nightly reconciliation signal; this is a fallback, not realtime recovery")
+                        .record_notice(
+                            "full watched-set recheck requested; this is fallback verification, not the primary realtime path",
+                        )
                         .await;
                     runtime.reconcile.request_run(ReconcileMode::Full).await;
                 }

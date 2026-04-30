@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 
+use chrono::Utc;
+
 use crate::cache::SuppressionListCache;
 use crate::config::RuntimePaths;
 use crate::state::{
-    NightlySweepProgress, ProcessedRevidsState, RuntimeStatus, load_json, load_text,
+    CommandReportSurface, CompatibilityNotice, NightlySweepProgress, ProcessedRevidsState,
+    RuntimeStatus, compatibility_notice_for_unreadable_surface, load_json, load_text,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -20,11 +23,34 @@ pub(crate) struct StatusSnapshot {
     pub processed_revids: usize,
     pub checkpoint_pages: usize,
     pub runtime_status: Option<RuntimeStatus>,
+    pub command_report: Option<CommandReportSurface>,
+    pub compatibility_notice: Option<CompatibilityNotice>,
     pub status_error: Option<String>,
 }
 
 fn compact_status_error(scope: &str, detail: impl std::fmt::Display) -> String {
     format!("st.err {scope}: {detail}")
+}
+
+fn stale_pid_notice(paths: &RuntimePaths, pid: i32) -> CompatibilityNotice {
+    CompatibilityNotice {
+        scope: "pid-file".to_string(),
+        severity: "warning".to_string(),
+        detected_at: Some(Utc::now()),
+        previous_value: Some(paths.pid_file.display().to_string()),
+        expected_value: Some("running daemon pid plus runtime_status.json".to_string()),
+        summary: format!("pid file points to a non-running process ({pid})"),
+        operator_action:
+            "remove the stale pid marker or restart suppressor through the active supervisor before trusting healthy status"
+                .to_string(),
+        blocking: true,
+    }
+}
+
+fn record_surface_notice(snapshot: &mut StatusSnapshot, notice: CompatibilityNotice) {
+    if snapshot.compatibility_notice.is_none() {
+        snapshot.compatibility_notice = Some(notice);
+    }
 }
 
 pub(crate) fn collect_status(
@@ -43,6 +69,9 @@ pub(crate) fn collect_status(
             Ok(pid) if pid > 0 => {
                 snapshot.daemon_pid = Some(pid);
                 snapshot.daemon_running = PathBuf::from(format!("/proc/{pid}")).exists();
+                if !snapshot.daemon_running {
+                    snapshot.compatibility_notice = Some(stale_pid_notice(paths, pid));
+                }
             }
             Ok(_) => snapshot.status_error = Some(compact_status_error("pid", "non-positive pid")),
             Err(error) => {
@@ -88,14 +117,181 @@ pub(crate) fn collect_status(
     }
 
     match load_json::<RuntimeStatus>(&paths.runtime_status_file) {
-        Ok(Some(runtime_status)) => snapshot.runtime_status = Some(runtime_status),
+        Ok(Some(mut runtime_status)) => {
+            populate_runtime_derivatives(&mut runtime_status);
+            snapshot.runtime_status = Some(runtime_status);
+        }
         Ok(None) => {}
         Err(error) => {
+            record_surface_notice(
+                &mut snapshot,
+                compatibility_notice_for_unreadable_surface(
+                    "runtime-status",
+                    &paths.runtime_status_file,
+                    "readable runtime_status.json surface",
+                    "replace or remove the unreadable runtime status file before trusting suppressor status",
+                ),
+            );
             snapshot.status_error = Some(compact_status_error("runtime", format!("{error:#}")))
         }
     }
 
+    match load_json::<CommandReportSurface>(&paths.command_report_file()) {
+        Ok(Some(command_report)) => snapshot.command_report = Some(command_report),
+        Ok(None) => {}
+        Err(error) => {
+            record_surface_notice(
+                &mut snapshot,
+                compatibility_notice_for_unreadable_surface(
+                    "command-report",
+                    &paths.command_report_file(),
+                    "bounded command-report surface",
+                    "rerun the command or remove the unreadable command report file before trusting the last command summary",
+                ),
+            );
+            snapshot.status_error =
+                Some(compact_status_error("command-report", format!("{error:#}")))
+        }
+    }
+
     snapshot
+}
+
+fn populate_runtime_derivatives(status: &mut RuntimeStatus) {
+    let now = Utc::now();
+    if let Some(observed_at) = status.realtime.last_event_observed_at {
+        let lag_millis = (now - observed_at).num_milliseconds().max(0);
+        status.realtime.current_lag_seconds = Some(lag_millis / 1000);
+        status.realtime.current_lag_millis = Some(lag_millis);
+        if status.realtime.current_lag_source.is_none() {
+            status.realtime.current_lag_source = Some("stream".to_string());
+        }
+    }
+
+    populate_live_outcome_derivatives(status);
+
+    if should_surface_live_queue_snapshot(&status.realtime)
+        && let Some(outcome) = status.realtime.latest_outcome.as_ref()
+    {
+        status.realtime.current_task = Some(crate::state::CurrentTaskSnapshot {
+            task_kind: "live-hide".to_string(),
+            label: format!("hiding watched edit {}", outcome.title),
+            progress_done: Some(0),
+            progress_total: Some(1),
+            window_start: None,
+            window_end: None,
+            started_at: outcome.queued_at.or(status.realtime.last_action_queued_at),
+            expected_resume_at: None,
+        });
+    }
+
+    if status.realtime.current_task.is_none() {
+        let (task_kind, label, started_at) = if status.reconciliation.active {
+            (
+                "background".to_string(),
+                status
+                    .reconciliation
+                    .mode
+                    .clone()
+                    .unwrap_or_else(|| "background verification".to_string()),
+                status
+                    .reconciliation
+                    .last_started_at
+                    .or(status.realtime.daemon_started_at),
+            )
+        } else if status.realtime.backoff_until.is_some() {
+            (
+                "backoff".to_string(),
+                "waiting for backoff to expire".to_string(),
+                status
+                    .realtime
+                    .last_recovery_completed_at
+                    .or(status.realtime.daemon_started_at),
+            )
+        } else {
+            (
+                "idle".to_string(),
+                "waiting for watched-page edits".to_string(),
+                status.realtime.daemon_started_at,
+            )
+        };
+        status.realtime.current_task = Some(crate::state::CurrentTaskSnapshot {
+            task_kind,
+            label,
+            progress_done: Some(status.reconciliation.phase_completed)
+                .filter(|_| status.reconciliation.active),
+            progress_total: Some(
+                status
+                    .reconciliation
+                    .phase_total
+                    .max(status.reconciliation.total_titles),
+            )
+            .filter(|total| status.reconciliation.active && *total > 0),
+            window_start: status.realtime.last_daytime_verification_window_start,
+            window_end: status.realtime.last_daytime_verification_window_end,
+            started_at,
+            expected_resume_at: status.realtime.backoff_until,
+        });
+    }
+}
+
+fn populate_live_outcome_derivatives(status: &mut RuntimeStatus) {
+    let Some(outcome) = status.realtime.latest_outcome.as_ref() else {
+        return;
+    };
+    if outcome.mode != "live" {
+        return;
+    }
+
+    if status.realtime.last_action_queued_at.is_none() {
+        status.realtime.last_action_queued_at = outcome.queued_at;
+    }
+    if status.realtime.last_action_completed_at.is_none() {
+        status.realtime.last_action_completed_at = outcome.completed_at;
+    }
+
+    if let Some(observed_at) = outcome.observed_at {
+        if status.realtime.last_matching_edit_at.is_none() {
+            status.realtime.last_matching_edit_at = Some(observed_at);
+        }
+        if status.realtime.last_matching_title.is_none() && !outcome.title.is_empty() {
+            status.realtime.last_matching_title = Some(outcome.title.clone());
+        }
+        if status.realtime.last_matching_revid.is_none() && outcome.revid > 0 {
+            status.realtime.last_matching_revid = Some(outcome.revid);
+        }
+        if status.realtime.last_matching_revid_url.is_none() {
+            status.realtime.last_matching_revid_url = outcome.revision_url.clone();
+        }
+    }
+
+    if matches!(outcome.outcome.as_str(), "hidden" | "already-hidden") {
+        if status.realtime.last_successful_hide_at.is_none() {
+            status.realtime.last_successful_hide_at = outcome.completed_at;
+        }
+        if status.realtime.last_successful_hide_title.is_none() && !outcome.title.is_empty() {
+            status.realtime.last_successful_hide_title = Some(outcome.title.clone());
+        }
+        if status.realtime.last_successful_hide_revid.is_none() && outcome.revid > 0 {
+            status.realtime.last_successful_hide_revid = Some(outcome.revid);
+        }
+        if status.realtime.last_successful_hide_url.is_none() {
+            status.realtime.last_successful_hide_url = outcome.revision_url.clone();
+        }
+    }
+}
+
+fn should_surface_live_queue_snapshot(status: &crate::state::RealtimeRuntimeStatus) -> bool {
+    matches!(
+        status.latest_outcome.as_ref(),
+        Some(outcome)
+            if outcome.mode == "live"
+                && outcome.outcome == "queued"
+                && !matches!(
+                    status.current_task.as_ref(),
+                    Some(task) if task.task_kind == "live-hide"
+                )
+    )
 }
 
 #[cfg(test)]
@@ -108,8 +304,9 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, RuntimePaths};
     use crate::state::{
-        PageCheckpoint, ReconciliationRuntimeStatus, RuntimeStatus, save_json_atomic,
-        save_text_atomic,
+        CommandReportCounts, CommandReportSurface, CommandReportWindow, CurrentTaskSnapshot,
+        PageCheckpoint, RealtimeRuntimeStatus, ReconciliationRuntimeStatus, RuntimeStatus,
+        SuppressionOutcomeSnapshot, save_json_atomic, save_text_atomic,
     };
 
     #[test]
@@ -160,8 +357,27 @@ mod tests {
                 last_notice: Some("ok".to_string()),
                 last_notice_at: Some(Utc::now()),
                 resource_economy: None,
+                compatibility_notice: None,
                 realtime: crate::state::RealtimeRuntimeStatus::default(),
                 reconciliation: ReconciliationRuntimeStatus::default(),
+            },
+        )
+        .unwrap();
+        save_json_atomic(
+            &paths.command_report_file(),
+            &CommandReportSurface {
+                command: "coverage-report".to_string(),
+                counts: CommandReportCounts {
+                    checked: 4,
+                    hidden: 1,
+                    unresolved: 1,
+                    ..CommandReportCounts::default()
+                },
+                window: CommandReportWindow {
+                    start: Some(Utc::now()),
+                    end: Some(Utc::now()),
+                },
+                ..CommandReportSurface::default()
             },
         )
         .unwrap();
@@ -182,6 +398,13 @@ mod tests {
                 .map(|status| status.daemon_state.as_str()),
             Some("running")
         );
+        assert_eq!(
+            snapshot
+                .command_report
+                .as_ref()
+                .map(|report| report.command.as_str()),
+            Some("coverage-report")
+        );
     }
 
     #[test]
@@ -199,6 +422,277 @@ mod tests {
         assert_eq!(
             snapshot.status_error.as_deref(),
             Some("st.err pid: non-positive pid")
+        );
+    }
+
+    #[test]
+    fn collect_status_emits_stale_pid_notice() {
+        let temp = tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let paths = RuntimePaths::resolve(&config_path, &config);
+
+        save_text_atomic(&paths.pid_file, "999999").unwrap();
+
+        let snapshot = collect_status(&paths, None);
+
+        assert_eq!(snapshot.daemon_pid, Some(999999));
+        assert!(!snapshot.daemon_running);
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("pid-file")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.severity.as_str()),
+            Some("warning")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.blocking),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn collect_status_maps_unreadable_runtime_status_to_migration_notice() {
+        let temp = tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let paths = RuntimePaths::resolve(&config_path, &config);
+        std::fs::create_dir_all(&paths.state_dir).unwrap();
+        std::fs::write(&paths.runtime_status_file, "{").unwrap();
+
+        let snapshot = collect_status(&paths, None);
+
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("runtime-status")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.severity.as_str()),
+            Some("migration-required")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.blocking),
+            Some(true)
+        );
+        assert!(
+            snapshot
+                .status_error
+                .as_deref()
+                .is_some_and(|value| value.contains("st.err runtime"))
+        );
+    }
+
+    #[test]
+    fn collect_status_maps_unreadable_command_report_to_migration_notice() {
+        let temp = tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let paths = RuntimePaths::resolve(&config_path, &config);
+        std::fs::create_dir_all(&paths.state_dir).unwrap();
+        std::fs::write(paths.command_report_file(), "{").unwrap();
+
+        let snapshot = collect_status(&paths, None);
+
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("command-report")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.severity.as_str()),
+            Some("migration-required")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.blocking),
+            Some(true)
+        );
+        assert!(
+            snapshot
+                .status_error
+                .as_deref()
+                .is_some_and(|value| value.contains("st.err command-report"))
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_restores_live_queue_snapshot() {
+        let observed_at = Utc::now();
+        let queued_at = observed_at + chrono::TimeDelta::milliseconds(250);
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                current_task: Some(CurrentTaskSnapshot {
+                    task_kind: "idle".to_string(),
+                    label: "waiting for watched-page edits".to_string(),
+                    ..CurrentTaskSnapshot::default()
+                }),
+                latest_outcome: Some(SuppressionOutcomeSnapshot {
+                    title: "Sensitive".to_string(),
+                    revid: 77,
+                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/77".to_string()),
+                    outcome: "queued".to_string(),
+                    mode: "live".to_string(),
+                    source_label: "live hiding".to_string(),
+                    observed_at: Some(observed_at),
+                    queued_at: Some(queued_at),
+                    ..SuppressionOutcomeSnapshot::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status);
+
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.task_kind.as_str()),
+            Some("live-hide")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.label.as_str()),
+            Some("hiding watched edit Sensitive")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .and_then(|task| task.started_at),
+            Some(queued_at)
+        );
+        assert_eq!(status.realtime.last_action_queued_at, Some(queued_at));
+        assert_eq!(status.realtime.last_matching_edit_at, Some(observed_at));
+        assert_eq!(
+            status.realtime.last_matching_title.as_deref(),
+            Some("Sensitive")
+        );
+        assert_eq!(status.realtime.last_matching_revid, Some(77));
+        assert_eq!(
+            status.realtime.last_matching_revid_url.as_deref(),
+            Some("https://be.wikipedia.org/wiki/Special:Diff/77")
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_restores_last_successful_hide_snapshot() {
+        let observed_at = Utc::now();
+        let completed_at = observed_at + chrono::TimeDelta::milliseconds(800);
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                latest_outcome: Some(SuppressionOutcomeSnapshot {
+                    title: "Sensitive".to_string(),
+                    revid: 88,
+                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/88".to_string()),
+                    outcome: "hidden".to_string(),
+                    mode: "live".to_string(),
+                    source_label: "live hiding".to_string(),
+                    observed_at: Some(observed_at),
+                    completed_at: Some(completed_at),
+                    ..SuppressionOutcomeSnapshot::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status);
+
+        assert_eq!(status.realtime.last_action_completed_at, Some(completed_at));
+        assert_eq!(status.realtime.last_successful_hide_at, Some(completed_at));
+        assert_eq!(
+            status.realtime.last_successful_hide_title.as_deref(),
+            Some("Sensitive")
+        );
+        assert_eq!(status.realtime.last_successful_hide_revid, Some(88));
+        assert_eq!(
+            status.realtime.last_successful_hide_url.as_deref(),
+            Some("https://be.wikipedia.org/wiki/Special:Diff/88")
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_surfaces_backoff_as_current_work() {
+        let backoff_until = Utc::now() + chrono::TimeDelta::seconds(45);
+        let completed_at = Utc::now();
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                backoff_until: Some(backoff_until),
+                last_recovery_completed_at: Some(completed_at),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status);
+
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.task_kind.as_str()),
+            Some("backoff")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.label.as_str()),
+            Some("waiting for backoff to expire")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .and_then(|task| task.expected_resume_at),
+            Some(backoff_until)
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .and_then(|task| task.started_at),
+            Some(completed_at)
         );
     }
 }

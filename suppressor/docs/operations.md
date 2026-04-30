@@ -18,6 +18,31 @@ docmeta:
 5. Run `make dry-run`.
 6. Move to `make run` or the systemd unit only after the dry run is clean.
 
+## Authoritative Launch-Path Baseline
+
+Treat the active supervisor path on this host as the source of truth for whether protection is
+running.
+
+- The normal local operator workflow is `make tui`, which starts and supervises a TUI-managed child
+  daemon.
+- `systemd` remains supported as an optional launch path, but it is not the default verification
+  route unless this host is actually using it.
+- `runtime_status.json` is daemon-owned realtime truth for the running daemon.
+- `command_report.json` is only the bounded result of the last one-shot operator command. It does
+  not prove that the daemon is healthy, current, or even running.
+- A stale PID file or unreadable status/report surface must be treated as a warning or
+  migration-needed condition, not as healthy protection.
+
+## Current Operator Workflow
+
+For day-to-day use:
+
+1. Start or attach through `make tui`.
+2. Trust the primary status rows before the raw log pane.
+3. Use one-shot commands only for bounded manual verification or catch-up.
+4. Treat `command_report.json` and command log lines as separate evidence from daemon-owned
+   realtime protection state.
+
 ## Auth Contract
 
 Required variables:
@@ -80,9 +105,61 @@ Current runtime state lives under `state/`:
 
 These are local machine files, not source-of-truth docs.
 
+## 2026-04-28 Baseline Evidence
+
+The current local state footprint is:
+
+- `runtime_status.json`: `3780` bytes
+- `nightly_sweep_progress.json`: `393436` bytes
+- `processed_revids.json`: `24116` bytes
+- `suppression_list_cache.json`: `168984` bytes
+- `last_event_id.txt`: `149` bytes
+- `daemon.pid`: `6` bytes
+
+The measured total for `state/` is `590471` bytes. `nightly_sweep_progress.json` and
+`suppression_list_cache.json` are the dominant files; `runtime_status.json` is small by comparison.
+The current `resource_economy.state_bytes_recent` field is still `0`, so resource-byte accounting is
+not yet reflecting the real on-disk total.
+
+The current runtime snapshot on disk shows the remaining status-integrity problems that the recovery
+work is closing:
+
+- `realtime.state="catching-up"` with `catchup_active=true` and `backoff_until=null`
+- `last_event_observed_at="2026-04-28T19:00:45.173840784Z"` with `current_lag_seconds=0`
+- `last_freshness_probe_at=null`
+- `latest_outcome.mode="live"` and `latest_outcome.outcome="blocked"` with `reason_code="auth-session"`
+- `latest_recovery_warnings=[]` and `latest_recovery_summary.unresolved_items=[]`
+- `reconciliation.last_result="failed: non-json-response: Failed to decode JSON response: expected value at line 1 column 1"`
+
+This means the persisted baseline currently shows a fresh stream event, no retained unresolved sample,
+no persisted warning summary growth, and a still-mixed operational picture where the realtime state can
+remain in `catching-up` while the latest actionable live outcome is already blocked for another reason.
+
+Older runtime-status artifacts currently load safely when new fields are missing. The regression test in
+`src/state.rs` proves that older JSON without the newer realtime fields falls back to
+`realtime.state="unknown"`, `stale_threshold_seconds=10`, empty recovery warnings, and no backoff
+instead of failing to deserialize.
+
+The TUI currently runs one-shot operator actions as their own commands:
+
+- `Emergency catch-up` runs `emergency-catchup`
+- `Coverage report` runs `coverage-report --dry-run`
+- control-center messages are labeled with the `[control]` prefix
+
+That output separation is real in the TUI, but it is not yet full daemon-status isolation. The current
+`emergency-catchup` and `coverage-report` paths still bootstrap the shared `AppRuntime`, so they still
+share `runtime_status.json` with the daemon until the command-report isolation work is finished.
+
+The live-output pane now avoids the wrapped-row follow bug by not wrapping log lines at all. Follow mode
+tracks raw logical lines, so the newest visible entry stays aligned with the newest stored entry. The
+tradeoff is that long log lines are clipped by terminal width instead of reflowing; only the status
+panes still use wrapped paragraph rendering.
+
 ## Operational Notes
 
 - use `make tui` for local supervision
+- use `make coverage-last-24h` or the TUI `Coverage: Last 24 hours` action for the rolling daily
+  verification preset
 - keep logs free of secrets and suppressed payloads
 - use `make reload-cache` only for watched-list cache diagnostics
 - use `make emergency-catchup ARGS="--dry-run"` for a bounded recent recovery check
@@ -102,6 +179,23 @@ These are local machine files, not source-of-truth docs.
 - catch up the default 30-minute window within the configured recovery target where wiki/API health allows it
 - stop the service on missing rights, broken auth, persistent API failure, or malformed
   suppression-list input
+
+## Primary Status Questions
+
+The first status rows must answer these questions without making the operator decode internal
+bookkeeping:
+
+- Is protection working now, and which PID or supervisor path is carrying it?
+- What exact work is active right now: idle, live recovery, `Last 24 hours` verification, nightly
+  full watched-set recheck, watched-page reload follow-up, or backoff?
+- What is the truthful wall-clock lag right now?
+- When was the last successful hide, and which revision was it?
+- What is the latest actionable issue and the next operator step?
+- How long has this daemon session been continuously protecting edits?
+
+Rows such as raw resume cursors, processed-revision ring sizes, checkpoint counts, or vague
+verification-path wording are secondary diagnostics only. They should never displace the primary
+protection rows.
 
 ## Incident Response Flow
 

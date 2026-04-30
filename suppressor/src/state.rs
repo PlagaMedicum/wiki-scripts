@@ -111,7 +111,9 @@ pub struct RealtimeRuntimeStatus {
     pub last_daytime_verification_at: Option<DateTime<Utc>>,
     pub last_daytime_verification_window_start: Option<DateTime<Utc>>,
     pub last_daytime_verification_window_end: Option<DateTime<Utc>>,
+    pub last_daytime_verification_result: Option<String>,
     pub last_nightly_full_recheck_at: Option<DateTime<Utc>>,
+    pub last_nightly_full_recheck_result: Option<String>,
 }
 
 impl Default for RealtimeRuntimeStatus {
@@ -161,7 +163,9 @@ impl Default for RealtimeRuntimeStatus {
             last_daytime_verification_at: None,
             last_daytime_verification_window_start: None,
             last_daytime_verification_window_end: None,
+            last_daytime_verification_result: None,
             last_nightly_full_recheck_at: None,
+            last_nightly_full_recheck_result: None,
         }
     }
 }
@@ -182,6 +186,7 @@ pub struct CurrentTaskSnapshot {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ActionableIssueSnapshot {
+    pub source: String,
     pub severity: String,
     pub summary: String,
     pub next_action: String,
@@ -357,6 +362,7 @@ pub struct ReconciliationRuntimeStatus {
     pub mode: Option<String>,
     pub phase: Option<String>,
     pub queued_mode: Option<String>,
+    pub freshness: Option<RecheckFreshnessSnapshot>,
     pub total_titles: usize,
     pub completed_titles: usize,
     pub phase_total: usize,
@@ -365,6 +371,20 @@ pub struct ReconciliationRuntimeStatus {
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_completed_at: Option<DateTime<Utc>>,
     pub last_result: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RecheckFreshnessSnapshot {
+    pub target_hours: u64,
+    pub total_pages: usize,
+    pub pages_older_than_target: usize,
+    pub oldest_full_check_at: Option<DateTime<Utc>>,
+    pub oldest_full_check_title: Option<String>,
+    pub oldest_full_check_age_seconds: Option<i64>,
+    pub last_daytime_verification_result: Option<String>,
+    pub last_nightly_full_recheck_result: Option<String>,
+    pub computed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -706,6 +726,7 @@ mod tests {
                     expected_resume_at: None,
                 }),
                 latest_actionable_issue: Some(ActionableIssueSnapshot {
+                    source: "stream".to_string(),
                     severity: "error".to_string(),
                     summary: "stream stale while newer wiki edits exist".to_string(),
                     next_action: "watch the recovery window".to_string(),

@@ -137,7 +137,7 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                             .mark_stream_gap_detected(
                                 trigger.clone(),
                                 "stream-silent".to_string(),
-                                stream_silence_notice(read_timeout.as_secs()),
+                                probe_outcome.reason,
                             )
                             .await;
                         spawn_bounded_catchup_if_needed(Arc::clone(&runtime), trigger.clone())
@@ -145,7 +145,10 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                         use_since_recovery = true;
                     } else {
                         runtime
-                            .mark_stream_quiet_without_gap(read_timeout.as_secs())
+                            .mark_stream_quiet_without_gap(
+                                read_timeout.as_secs(),
+                                probe_outcome.reason,
+                            )
                             .await;
                         use_since_recovery = false;
                     }
@@ -694,10 +697,6 @@ pub fn should_use_since_recovery(
         || rendered.contains("invalid")
 }
 
-pub fn stream_silence_notice(seconds: u64) -> String {
-    format!("real-time stream silent for {seconds}s")
-}
-
 fn is_request_page_trigger(normalized_title: &str, request_pages: &[String]) -> bool {
     request_pages
         .iter()
@@ -744,11 +743,6 @@ mod tests {
             Some("abc"),
             &"temporary network timeout"
         ));
-    }
-
-    #[test]
-    fn stream_starvation_notice_is_actionable() {
-        assert_eq!(stream_silence_notice(10), "real-time stream silent for 10s");
     }
 
     #[test]

@@ -184,6 +184,7 @@ fn build_status_lines(paths: &RuntimePaths, status: &StatusSnapshot) -> Vec<Line
             runtime_status,
             paths,
         )));
+        lines.extend(render_recheck_freshness_lines(runtime_status));
         if let Some(warning) = runtime_status.realtime.latest_recovery_warnings.first() {
             lines.push(Line::from(render_recovery_warning_line(
                 warning,
@@ -201,30 +202,6 @@ fn build_status_lines(paths: &RuntimePaths, status: &StatusSnapshot) -> Vec<Line
                     .as_ref()
                     .map(render_short_timestamp)
                     .unwrap_or_else(|| "none".to_string())
-            )));
-        }
-        if let Some(at) = runtime_status.realtime.last_daytime_verification_at {
-            lines.push(Line::from(format!(
-                "Last 24 hours verification: {} [{} -> {}]",
-                render_short_timestamp(&at),
-                runtime_status
-                    .realtime
-                    .last_daytime_verification_window_start
-                    .as_ref()
-                    .map(render_short_timestamp)
-                    .unwrap_or_else(|| "unknown".to_string()),
-                runtime_status
-                    .realtime
-                    .last_daytime_verification_window_end
-                    .as_ref()
-                    .map(render_short_timestamp)
-                    .unwrap_or_else(|| "unknown".to_string())
-            )));
-        }
-        if let Some(at) = runtime_status.realtime.last_nightly_full_recheck_at {
-            lines.push(Line::from(format!(
-                "Last full watched-set recheck: {}",
-                render_short_timestamp(&at)
             )));
         }
         lines.push(Line::from(format!(
@@ -412,6 +389,75 @@ fn render_latest_issue(
     "Latest issue: none".to_string()
 }
 
+fn render_recheck_freshness_lines(
+    runtime_status: &crate::state::RuntimeStatus,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(freshness) = runtime_status.reconciliation.freshness.as_ref() {
+        let oldest = freshness
+            .oldest_full_check_at
+            .as_ref()
+            .map(render_short_timestamp)
+            .or_else(|| freshness.oldest_full_check_age_seconds.map(render_age_seconds))
+            .unwrap_or_else(|| "unknown".to_string());
+        let oldest_title = freshness
+            .oldest_full_check_title
+            .as_deref()
+            .unwrap_or("unknown page");
+        lines.push(Line::from(format!(
+            "Full recheck freshness: {}/{} pages older than {}h; oldest {} ({})",
+            freshness.pages_older_than_target,
+            freshness.total_pages,
+            freshness.target_hours,
+            oldest,
+            oldest_title
+        )));
+    }
+
+    let mut verification_parts = Vec::new();
+    if runtime_status.realtime.last_daytime_verification_at.is_some()
+        || runtime_status
+            .realtime
+            .last_daytime_verification_result
+            .is_some()
+    {
+        verification_parts.push(format!(
+            "Last 24 hours {}",
+            render_verification_outcome(
+                runtime_status
+                    .realtime
+                    .last_daytime_verification_result
+                    .as_deref(),
+                runtime_status.realtime.last_daytime_verification_at,
+            )
+        ));
+    }
+    if runtime_status.realtime.last_nightly_full_recheck_at.is_some()
+        || runtime_status
+            .realtime
+            .last_nightly_full_recheck_result
+            .is_some()
+    {
+        verification_parts.push(format!(
+            "full watched-set {}",
+            render_verification_outcome(
+                runtime_status
+                    .realtime
+                    .last_nightly_full_recheck_result
+                    .as_deref(),
+                runtime_status.realtime.last_nightly_full_recheck_at,
+            )
+        ));
+    }
+    if !verification_parts.is_empty() {
+        lines.push(Line::from(format!(
+            "Scheduled verification: {}",
+            verification_parts.join("; ")
+        )));
+    }
+    lines
+}
+
 fn render_recovery_warning_line(warning: &WarningSummary, warning_count: usize) -> String {
     let mut details = vec![format!("{} x{}", warning.class, warning.count)];
     if let Some(status) = warning.http_status {
@@ -439,6 +485,23 @@ fn render_recovery_warning_line(warning: &WarningSummary, warning_count: usize) 
 
 fn render_short_timestamp(value: &chrono::DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
+fn render_age_seconds(age_seconds: i64) -> String {
+    format!("{} ago", format_duration(chrono::TimeDelta::seconds(age_seconds.max(0))))
+}
+
+fn render_verification_outcome(
+    result: Option<&str>,
+    completed_at: Option<chrono::DateTime<Utc>>,
+) -> String {
+    match (result, completed_at) {
+        (Some("completed"), Some(at)) => format!("completed at {}", render_short_timestamp(&at)),
+        (Some(result), Some(at)) => format!("{result} at {}", render_short_timestamp(&at)),
+        (Some(result), None) => result.to_string(),
+        (None, Some(at)) => format!("completed at {}", render_short_timestamp(&at)),
+        (None, None) => "not recorded yet".to_string(),
+    }
 }
 
 fn format_duration(duration: chrono::TimeDelta) -> String {
@@ -507,22 +570,6 @@ fn centered_bottom(area: Rect, height: u16) -> Rect {
         width: area.width,
         height,
     }
-}
-
-fn render_verification_path_line(status: &crate::tui_status::StatusSnapshot) -> String {
-    if let Some(managed) = status.managed_session.as_deref() {
-        return format!(
-            "Verification path: TUI-managed child [{}] + runtime_status.json",
-            managed
-        );
-    }
-    if status.daemon_pid.is_some() && !status.daemon_running {
-        return "Verification path: stale pid marker only".to_string();
-    }
-    if status.daemon_running {
-        return "Verification path: external daemon pid file + runtime_status.json".to_string();
-    }
-    "Verification path: runtime files only".to_string()
 }
 
 fn render_compatibility_notice_lines(
@@ -636,69 +683,6 @@ fn render_command_report_lines(report: &CommandReportSurface) -> Vec<Line<'stati
     lines
 }
 
-fn render_reconcile_line(status: &crate::state::ReconciliationRuntimeStatus) -> String {
-    if status.active {
-        let mode = status.mode.as_deref().unwrap_or("unknown");
-        let progress = render_progress_bar(
-            status.phase_completed,
-            status.phase_total.max(status.total_titles),
-            16,
-        );
-        format!(
-            "Reconciliation: active [{}] {}/{} {}",
-            mode,
-            status.phase_completed,
-            status.phase_total.max(status.total_titles),
-            progress
-        )
-    } else if let Some(result) = status.last_result.as_deref() {
-        let mode = status.mode.as_deref().unwrap_or("last");
-        format!("Reconciliation: idle [{}] {}", mode, result)
-    } else {
-        "Reconciliation: idle".to_string()
-    }
-}
-
-fn render_realtime_line(status: &crate::state::RealtimeRuntimeStatus) -> Line<'static> {
-    let state = if status.state.is_empty() {
-        "unknown"
-    } else {
-        status.state.as_str()
-    };
-    let style = match state {
-        "healthy" => Style::default().fg(Color::Green),
-        "catching-up" | "reconnecting" => Style::default().fg(Color::Yellow),
-        "stale" | "unhealthy" | "blocked" => {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        }
-        _ => Style::default().fg(Color::Gray),
-    };
-    let notice = status
-        .latest_notice
-        .clone()
-        .unwrap_or_else(|| "no realtime notice".to_string());
-    Line::from(vec![
-        Span::styled("Realtime: ", Style::default().fg(Color::Gray)),
-        Span::styled(state.to_string(), style),
-        Span::raw(format!(
-            " (stale>{}s) {}",
-            status.stale_threshold_seconds, notice
-        )),
-    ])
-}
-
-fn render_progress_bar(done: usize, total: usize, width: usize) -> String {
-    if total == 0 || width == 0 {
-        return "[no work]".to_string();
-    }
-    let filled = ((done.saturating_mul(width)) / total).min(width);
-    format!(
-        "[{}{}]",
-        "#".repeat(filled),
-        ".".repeat(width.saturating_sub(filled))
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -731,65 +715,6 @@ mod tests {
             runtime_status_file: "/tmp/state/runtime.json".into(),
             pid_file: "/tmp/state/pid".into(),
         }
-    }
-
-    #[test]
-    fn realtime_line_renders_unhealthy_state_and_notice() {
-        let line = render_realtime_line(&RealtimeRuntimeStatus {
-            state: "stale".to_string(),
-            stale_threshold_seconds: 10,
-            latest_notice: Some("real-time stream silent for 10s".to_string()),
-            ..RealtimeRuntimeStatus::default()
-        });
-        let rendered = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-
-        assert!(rendered.contains("stale"));
-        assert!(rendered.contains("silent"));
-    }
-
-    #[test]
-    fn realtime_line_renders_expected_states() {
-        for state in ["healthy", "stale", "reconnecting", "catching-up", "blocked"] {
-            let line = render_realtime_line(&RealtimeRuntimeStatus {
-                state: state.to_string(),
-                stale_threshold_seconds: 10,
-                latest_notice: Some("state check".to_string()),
-                ..RealtimeRuntimeStatus::default()
-            });
-            let rendered = line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-
-            assert!(rendered.contains(state));
-        }
-    }
-
-    #[test]
-    fn verification_path_prefers_managed_child() {
-        let line = render_verification_path_line(&StatusSnapshot {
-            daemon_running: true,
-            managed_session: Some("daemon".to_string()),
-            ..StatusSnapshot::default()
-        });
-
-        assert!(line.contains("TUI-managed child [daemon]"));
-    }
-
-    #[test]
-    fn verification_path_marks_stale_pid_only() {
-        let line = render_verification_path_line(&StatusSnapshot {
-            daemon_pid: Some(4242),
-            daemon_running: false,
-            ..StatusSnapshot::default()
-        });
-
-        assert!(line.contains("stale pid marker only"));
     }
 
     #[test]
@@ -843,7 +768,6 @@ mod tests {
             &StatusSnapshot {
                 daemon_pid: Some(55),
                 daemon_running: true,
-                managed_session: Some("daemon".to_string()),
                 compatibility_notice: Some(CompatibilityNotice {
                     scope: "pid-file".to_string(),
                     severity: "warning".to_string(),
@@ -882,6 +806,7 @@ mod tests {
                             expected_resume_at: None,
                         }),
                         latest_actionable_issue: Some(crate::state::ActionableIssueSnapshot {
+                            source: "live-hide".to_string(),
                             severity: "error".to_string(),
                             summary: "live hide failed".to_string(),
                             next_action: "watch the recovery window".to_string(),
@@ -905,7 +830,29 @@ mod tests {
                             "https://be.wikipedia.org/wiki/Special:Diff/77".to_string(),
                         ),
                         latest_notice: Some("observed target-wiki event".to_string()),
+                        last_daytime_verification_at: Some(Utc::now()),
+                        last_daytime_verification_result: Some(
+                            "failed: non-json-response".to_string(),
+                        ),
+                        last_nightly_full_recheck_at: Some(Utc::now()),
+                        last_nightly_full_recheck_result: Some("completed".to_string()),
                         ..RealtimeRuntimeStatus::default()
+                    },
+                    reconciliation: crate::state::ReconciliationRuntimeStatus {
+                        freshness: Some(crate::state::RecheckFreshnessSnapshot {
+                            target_hours: 24,
+                            total_pages: 20,
+                            pages_older_than_target: 4,
+                            oldest_full_check_at: Some(Utc::now() - chrono::TimeDelta::days(2)),
+                            oldest_full_check_title: Some("Old page".to_string()),
+                            oldest_full_check_age_seconds: Some(172800),
+                            last_daytime_verification_result: Some(
+                                "failed: non-json-response".to_string(),
+                            ),
+                            last_nightly_full_recheck_result: Some("completed".to_string()),
+                            computed_at: Some(Utc::now()),
+                        }),
+                        ..crate::state::ReconciliationRuntimeStatus::default()
                     },
                     ..RuntimeStatus::default()
                 }),
@@ -948,6 +895,18 @@ mod tests {
             line_texts
                 .iter()
                 .any(|line| line.contains("Latest issue: live hide failed"))
+        );
+        assert!(
+            line_texts
+                .iter()
+                .any(|line| line.contains("Full recheck freshness: 4/20 pages older than 24h"))
+        );
+        assert!(
+            line_texts.iter().any(|line| {
+                line.contains(
+                    "Scheduled verification: Last 24 hours failed: non-json-response",
+                )
+            })
         );
         assert!(
             line_texts

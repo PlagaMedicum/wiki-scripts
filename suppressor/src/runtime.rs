@@ -308,7 +308,6 @@ impl ActionDispatcher {
                 started_at: queued_at,
                 expected_resume_at: None,
             });
-            status.realtime.latest_actionable_issue = None;
         }
         if self.runtime_status_surface_mode.persists_runtime_status()
             && let Err(error) = save_json_atomic(&self.runtime_status_file, &*status)
@@ -864,11 +863,11 @@ impl AppRuntime {
             if backoff_until.is_none() && next_state == "healthy" {
                 status.realtime.latest_error_code = None;
                 status.realtime.latest_error = None;
-                status.realtime.latest_actionable_issue = None;
+                clear_actionable_issue_if_source(&mut status.realtime, &["stream"]);
             } else if backoff_until.is_none()
                 && matches!(next_state.as_str(), "unhealthy" | "blocked")
             {
-                restore_live_outcome_issue(status, now);
+                restore_persistent_issue(status, now);
             }
             if next_state != "reconnecting"
                 && next_state != "catching-up"
@@ -988,7 +987,7 @@ impl AppRuntime {
         .await;
     }
 
-    pub async fn mark_stream_quiet_without_gap(&self, silence_seconds: u64) {
+    pub async fn mark_stream_quiet_without_gap(&self, silence_seconds: u64, notice: String) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
             let next_state = converged_realtime_state_after_stream_event(&status.realtime, now);
@@ -999,9 +998,9 @@ impl AppRuntime {
             if next_state == "healthy" {
                 status.realtime.latest_error_code = None;
                 status.realtime.latest_error = None;
-                status.realtime.latest_actionable_issue = None;
+                clear_actionable_issue_if_source(&mut status.realtime, &["stream"]);
             } else if matches!(next_state.as_str(), "unhealthy" | "blocked") {
-                restore_live_outcome_issue(status, now);
+                restore_persistent_issue(status, now);
             }
             status.realtime.last_recovery_trigger = None;
             status.realtime.last_reconnect_reason = None;
@@ -1012,10 +1011,14 @@ impl AppRuntime {
                     idle_task("waiting for watched-page edits", now),
                 );
             }
-            let notice = format!(
-                "stream quiet for {}s; freshness probe found no newer target-wiki edits",
-                silence_seconds
-            );
+            let notice = if notice.is_empty() {
+                format!(
+                    "stream quiet for {}s; freshness probe found no newer target-wiki edits",
+                    silence_seconds
+                )
+            } else {
+                notice
+            };
             status.realtime.latest_notice = Some(notice.clone());
             status.last_notice = Some(notice);
             status.last_notice_at = Some(now);
@@ -1038,6 +1041,7 @@ impl AppRuntime {
             status.realtime.latest_error_code = Some(error_code);
             begin_offline_interval_if_needed(&mut status.realtime, now);
             status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: "stream".to_string(),
                 severity: "error".to_string(),
                 summary: notice.clone(),
                 next_action: "wait for the stream to reopen and verify the next watched edit"
@@ -1075,6 +1079,7 @@ impl AppRuntime {
             status.realtime.latest_error_code = Some(error_code);
             begin_offline_interval_if_needed(&mut status.realtime, now);
             status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: "stream".to_string(),
                 severity: "warning".to_string(),
                 summary: notice.clone(),
                 next_action: "watch the recovery window and the next successful hide".to_string(),
@@ -1108,6 +1113,7 @@ impl AppRuntime {
                 begin_offline_interval_if_needed(&mut status.realtime, now);
             }
             status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: "recovery".to_string(),
                 severity: "error".to_string(),
                 summary: notice.clone(),
                 next_action: "watch the recovery window and confirm the next successful hide"
@@ -1157,6 +1163,7 @@ impl AppRuntime {
                     status.realtime.last_offline_started_at = Some(now);
                 }
                 status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "stream".to_string(),
                     severity: if state == "stale" {
                         "warning".to_string()
                     } else {
@@ -1202,6 +1209,7 @@ impl AppRuntime {
                     .unwrap_or("error")
             ));
             status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: snapshot.operation.clone(),
                 severity: if snapshot.retryable {
                     "warning".to_string()
                 } else {
@@ -1251,6 +1259,7 @@ impl AppRuntime {
                 status.realtime.state = "unhealthy".to_string();
                 status.realtime.last_state_changed_at = Some(now);
                 status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "source-refresh".to_string(),
                     severity: "error".to_string(),
                     summary: "watched-page reload failed".to_string(),
                     next_action: "check the latest reload log and rerun reload watched pages"
@@ -1398,6 +1407,7 @@ impl AppRuntime {
             }
             status.realtime.latest_actionable_issue = if let Some(until) = backoff_until {
                 Some(ActionableIssueSnapshot {
+                    source: "recovery".to_string(),
                     severity: "warning".to_string(),
                     summary: render_recovery_notice(&summary),
                     next_action: format!(
@@ -1408,6 +1418,7 @@ impl AppRuntime {
                 })
             } else if summary.unresolved_count > 0 {
                 Some(ActionableIssueSnapshot {
+                    source: "recovery".to_string(),
                     severity: "error".to_string(),
                     summary: format!(
                         "{} unresolved revisions remain after {}",
@@ -1481,6 +1492,7 @@ impl AppRuntime {
                 status.realtime.state = "blocked".to_string();
                 status.realtime.last_state_changed_at = Some(completed_at);
                 status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
                     severity: "error".to_string(),
                     summary: format!("cannot hide revid {} because protection is blocked", revid),
                     next_action: "check auth and wiki-side rights immediately".to_string(),
@@ -1492,6 +1504,7 @@ impl AppRuntime {
                 status.realtime.state = "unhealthy".to_string();
                 status.realtime.last_state_changed_at = Some(completed_at);
                 status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
                     severity: "error".to_string(),
                     summary: format!("live hide failed for revid {}", revid),
                     next_action: "watch the recovery window and confirm a later successful hide"
@@ -1503,14 +1516,25 @@ impl AppRuntime {
                 && !status.realtime.catchup_active
                 && backoff_until.is_none()
             {
-                status.realtime.state = "healthy".to_string();
+                let next_state = converged_realtime_state_after_stream_event(
+                    &status.realtime,
+                    completed_at,
+                );
+                status.realtime.state = next_state.clone();
                 status.realtime.last_state_changed_at = Some(completed_at);
-                status.realtime.latest_error_code = None;
-                status.realtime.latest_error = None;
-                status.realtime.latest_actionable_issue = None;
-                if !status.reconciliation.active {
-                    status.realtime.current_task =
-                        Some(idle_task("waiting for watched-page edits", completed_at));
+                if next_state == "healthy" {
+                    status.realtime.latest_error_code = None;
+                    status.realtime.latest_error = None;
+                    clear_actionable_issue_if_source(
+                        &mut status.realtime,
+                        &["live-hide", "stream", "recovery"],
+                    );
+                    if !status.reconciliation.active {
+                        status.realtime.current_task =
+                            Some(idle_task("waiting for watched-page edits", completed_at));
+                    }
+                } else {
+                    restore_persistent_issue(status, completed_at);
                 }
             }
             status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
@@ -1678,6 +1702,7 @@ fn apply_reconciliation_started_status(
         status,
         reconciliation_task(mode, started_at, daytime_window_start),
     );
+    status.reconciliation.freshness = None;
     status.last_notice = Some(format!("{} started", mode.operator_label()));
     status.last_notice_at = Some(started_at);
 }
@@ -1690,11 +1715,12 @@ fn apply_reconciliation_completed_status(
     last_result: String,
     notice: String,
 ) {
+    let verification_failed = last_result.starts_with("failed:");
     status.reconciliation.active = false;
     status.reconciliation.phase = Some("idle".to_string());
     status.reconciliation.current_title = None;
     status.reconciliation.last_completed_at = Some(completed_at);
-    status.reconciliation.last_result = Some(last_result);
+    status.reconciliation.last_result = Some(last_result.clone());
     set_background_current_task(
         status,
         idle_task("waiting for watched-page edits", completed_at),
@@ -1703,8 +1729,36 @@ fn apply_reconciliation_completed_status(
         status.realtime.last_daytime_verification_at = Some(completed_at);
         status.realtime.last_daytime_verification_window_start = daytime_window_start;
         status.realtime.last_daytime_verification_window_end = Some(completed_at);
+        status.realtime.last_daytime_verification_result = Some(last_result.clone());
     } else {
         status.realtime.last_nightly_full_recheck_at = Some(completed_at);
+        status.realtime.last_nightly_full_recheck_result = Some(last_result.clone());
+    }
+    if verification_failed {
+        status.realtime.state = "unhealthy".to_string();
+        status.realtime.last_state_changed_at = Some(completed_at);
+        status.realtime.latest_actionable_issue = Some(verification_failure_issue_for_mode(
+            mode,
+            &last_result,
+            completed_at,
+        ));
+    } else if !status.realtime.catchup_active
+        && active_backoff_until(status.realtime.backoff_until, completed_at).is_none()
+        && !latest_live_outcome_is_degraded(&status.realtime)
+        && !latest_recovery_summary_is_degraded(&status.realtime)
+        && !has_scheduled_verification_failure(&status.realtime)
+    {
+        status.realtime.state = "healthy".to_string();
+        status.realtime.last_state_changed_at = Some(completed_at);
+        clear_actionable_issue_if_source(
+            &mut status.realtime,
+            &[
+                "last-24h-verification",
+                "full-watched-set-recheck",
+                "recovery",
+                "stream",
+            ],
+        );
     }
     status.last_notice = Some(notice);
     status.last_notice_at = Some(completed_at);
@@ -1722,15 +1776,61 @@ fn latest_live_outcome_is_degraded(status: &crate::state::RealtimeRuntimeStatus)
     )
 }
 
-fn restore_live_outcome_issue(status: &mut RuntimeStatus, detected_at: DateTime<Utc>) {
+fn latest_recovery_summary_is_degraded(status: &crate::state::RealtimeRuntimeStatus) -> bool {
+    status
+        .latest_recovery_summary
+        .as_ref()
+        .is_some_and(|summary| {
+            summary.unresolved_count > 0 || summary.stopped_early_reason.is_some()
+        })
+}
+
+fn has_scheduled_verification_failure(status: &crate::state::RealtimeRuntimeStatus) -> bool {
+    status
+        .last_daytime_verification_result
+        .as_deref()
+        .is_some_and(|result| result.starts_with("failed:"))
+        || status
+            .last_nightly_full_recheck_result
+            .as_deref()
+            .is_some_and(|result| result.starts_with("failed:"))
+}
+
+fn clear_actionable_issue_if_source(
+    status: &mut crate::state::RealtimeRuntimeStatus,
+    clearable_sources: &[&str],
+) {
+    if status
+        .latest_actionable_issue
+        .as_ref()
+        .is_some_and(|issue| clearable_sources.contains(&issue.source.as_str()))
+    {
+        status.latest_actionable_issue = None;
+    }
+}
+
+fn restore_persistent_issue(status: &mut RuntimeStatus, detected_at: DateTime<Utc>) {
     let Some(outcome) = status.realtime.latest_outcome.as_ref() else {
+        if latest_recovery_summary_is_degraded(&status.realtime) {
+            if let Some(summary) = status.realtime.latest_recovery_summary.as_ref() {
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "recovery".to_string(),
+                    severity: "error".to_string(),
+                    summary: render_recovery_notice(summary),
+                    next_action: "review the recovery window and rerun catch-up if needed"
+                        .to_string(),
+                    detected_at: Some(detected_at),
+                });
+            }
+        } else if let Some(issue) = scheduled_verification_failure_issue(&status.realtime, detected_at)
+        {
+            status.realtime.latest_actionable_issue = Some(issue);
+        }
         return;
     };
-    if outcome.mode != RevDelMode::Live.label() {
-        return;
-    }
-    if outcome.outcome == "blocked" {
+    if outcome.mode == RevDelMode::Live.label() && outcome.outcome == "blocked" {
         status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+            source: "live-hide".to_string(),
             severity: "error".to_string(),
             summary: format!(
                 "cannot hide revid {} because protection is blocked",
@@ -1739,17 +1839,99 @@ fn restore_live_outcome_issue(status: &mut RuntimeStatus, detected_at: DateTime<
             next_action: "check auth and wiki-side rights immediately".to_string(),
             detected_at: Some(detected_at),
         });
-    } else if matches!(
-        outcome.outcome.as_str(),
-        "failed" | "retrying" | "throttled" | "unresolved"
-    ) {
+    } else if outcome.mode == RevDelMode::Live.label()
+        && matches!(
+            outcome.outcome.as_str(),
+            "failed" | "retrying" | "throttled" | "unresolved"
+        )
+    {
         status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+            source: "live-hide".to_string(),
             severity: "error".to_string(),
             summary: format!("live hide failed for revid {}", outcome.revid),
             next_action: "watch the recovery window and confirm a later successful hide"
                 .to_string(),
             detected_at: Some(detected_at),
         });
+    } else if latest_recovery_summary_is_degraded(&status.realtime) {
+        if let Some(summary) = status.realtime.latest_recovery_summary.as_ref() {
+            status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: "recovery".to_string(),
+                severity: "error".to_string(),
+                summary: render_recovery_notice(summary),
+                next_action: "review the recovery window and rerun catch-up if needed".to_string(),
+                detected_at: Some(detected_at),
+            });
+        }
+    } else if let Some(issue) = scheduled_verification_failure_issue(&status.realtime, detected_at) {
+        status.realtime.latest_actionable_issue = Some(issue);
+    }
+}
+
+fn verification_failure_issue_for_mode(
+    mode: ReconcileMode,
+    result: &str,
+    detected_at: DateTime<Utc>,
+) -> ActionableIssueSnapshot {
+    let (source, label, next_action) = match mode {
+        ReconcileMode::CurrentDay => (
+            "last-24h-verification",
+            "Last 24 hours verification",
+            "inspect the latest verification log or rerun Last 24 hours verification",
+        ),
+        ReconcileMode::Full => (
+            "full-watched-set-recheck",
+            "full watched-set recheck",
+            "inspect the latest recheck log or rerun the full watched-set recheck",
+        ),
+    };
+    ActionableIssueSnapshot {
+        source: source.to_string(),
+        severity: "error".to_string(),
+        summary: format!("{label} {}", result),
+        next_action: next_action.to_string(),
+        detected_at: Some(detected_at),
+    }
+}
+
+fn scheduled_verification_failure_issue(
+    status: &crate::state::RealtimeRuntimeStatus,
+    detected_at: DateTime<Utc>,
+) -> Option<ActionableIssueSnapshot> {
+    let daytime = status
+        .last_daytime_verification_result
+        .as_deref()
+        .filter(|result| result.starts_with("failed:"))
+        .map(|result| {
+            (
+                status.last_daytime_verification_at,
+                verification_failure_issue_for_mode(
+                    ReconcileMode::CurrentDay,
+                    result,
+                    detected_at,
+                ),
+            )
+        });
+    let nightly = status
+        .last_nightly_full_recheck_result
+        .as_deref()
+        .filter(|result| result.starts_with("failed:"))
+        .map(|result| {
+            (
+                status.last_nightly_full_recheck_at,
+                verification_failure_issue_for_mode(ReconcileMode::Full, result, detected_at),
+            )
+        });
+    match (daytime, nightly) {
+        (Some((daytime_at, daytime_issue)), Some((nightly_at, nightly_issue))) => {
+            if nightly_at >= daytime_at {
+                Some(nightly_issue)
+            } else {
+                Some(daytime_issue)
+            }
+        }
+        (Some((_, issue)), None) | (None, Some((_, issue))) => Some(issue),
+        (None, None) => None,
     }
 }
 
@@ -1770,6 +1952,9 @@ fn converged_realtime_state_after_stream_open(
         return "blocked".to_string();
     }
     if latest_live_outcome_is_degraded(status) {
+        return "unhealthy".to_string();
+    }
+    if latest_recovery_summary_is_degraded(status) || has_scheduled_verification_failure(status) {
         return "unhealthy".to_string();
     }
     if status.last_event_observed_at.is_none() && status.state == "starting" {
@@ -1798,6 +1983,9 @@ fn converged_realtime_state_after_stream_event(
         return "blocked".to_string();
     }
     if latest_live_outcome_is_degraded(status) {
+        return "unhealthy".to_string();
+    }
+    if latest_recovery_summary_is_degraded(status) || has_scheduled_verification_failure(status) {
         return "unhealthy".to_string();
     }
     "healthy".to_string()
@@ -2451,6 +2639,7 @@ mod tests {
                     ..SuppressionOutcomeSnapshot::default()
                 });
                 status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
                     severity: "error".to_string(),
                     summary: "live hide failed for revid 42".to_string(),
                     next_action: "watch the recovery window".to_string(),
@@ -2478,6 +2667,52 @@ mod tests {
                 .latest_actionable_issue
                 .as_ref()
                 .is_some_and(|issue| issue.summary.contains("live hide failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_open_keeps_failed_scheduled_verification_unhealthy() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .update_runtime_status(|status| {
+                status.realtime.last_daytime_verification_at = Some(Utc::now());
+                status.realtime.last_daytime_verification_result =
+                    Some("failed: non-json-response".to_string());
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "last-24h-verification".to_string(),
+                    severity: "error".to_string(),
+                    summary: "Last 24 hours verification failed: non-json-response".to_string(),
+                    next_action: "rerun Last 24 hours verification".to_string(),
+                    detected_at: Some(Utc::now()),
+                });
+            })
+            .await;
+        runtime
+            .mark_stream_reconnecting(
+                "stream-error".to_string(),
+                "temporary network timeout".to_string(),
+                "real-time stream reconnecting after error".to_string(),
+            )
+            .await;
+
+        runtime.mark_realtime_stream_open().await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .is_some_and(|issue| issue.source == "last-24h-verification")
+        );
+        assert!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .is_some_and(|issue| issue.summary.contains("Last 24 hours verification failed"))
         );
     }
 
@@ -2526,6 +2761,7 @@ mod tests {
                 status.realtime.catchup_active = true;
                 status.realtime.latest_actionable_issue =
                     Some(crate::state::ActionableIssueSnapshot {
+                        source: "stream".to_string(),
                         severity: "warning".to_string(),
                         summary: "stream went stale".to_string(),
                         next_action: "watch the recovery window".to_string(),
@@ -2628,7 +2864,13 @@ mod tests {
         let temp = tempdir().unwrap();
         let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
 
-        runtime.mark_stream_quiet_without_gap(10).await;
+        runtime
+            .mark_stream_quiet_without_gap(
+                10,
+                "stream quiet for 10s; freshness probe found no newer target-wiki edits"
+                    .to_string(),
+            )
+            .await;
 
         let status = runtime.reconcile.runtime_status.lock().await.clone();
         assert_eq!(status.realtime.state, "healthy");
@@ -2661,7 +2903,13 @@ mod tests {
             )
             .await;
 
-        runtime.mark_stream_quiet_without_gap(10).await;
+        runtime
+            .mark_stream_quiet_without_gap(
+                10,
+                "stream quiet for 10s; freshness probe found no newer target-wiki edits"
+                    .to_string(),
+            )
+            .await;
 
         let status = runtime.reconcile.runtime_status.lock().await.clone();
         assert_eq!(status.realtime.state, "healthy");

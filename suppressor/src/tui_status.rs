@@ -6,15 +6,14 @@ use crate::cache::SuppressionListCache;
 use crate::config::RuntimePaths;
 use crate::state::{
     CommandReportSurface, CompatibilityNotice, NightlySweepProgress, ProcessedRevidsState,
-    RuntimeStatus, compatibility_notice_for_unreadable_surface, load_json, load_text,
+    RecheckFreshnessSnapshot, RuntimeStatus, compatibility_notice_for_unreadable_surface,
+    load_json, load_text,
 };
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StatusSnapshot {
     pub daemon_pid: Option<i32>,
     pub daemon_running: bool,
-    pub managed_session: Option<String>,
-    pub env_file: PathBuf,
     pub pid_file: PathBuf,
     pub last_event_id: Option<String>,
     pub source_title: Option<String>,
@@ -55,14 +54,13 @@ fn record_surface_notice(snapshot: &mut StatusSnapshot, notice: CompatibilityNot
 
 pub(crate) fn collect_status(
     paths: &RuntimePaths,
-    managed_session: Option<&str>,
+    _managed_session: Option<&str>,
 ) -> StatusSnapshot {
     let mut snapshot = StatusSnapshot {
-        env_file: paths.env_file.clone(),
         pid_file: paths.pid_file.clone(),
-        managed_session: managed_session.map(str::to_string),
         ..StatusSnapshot::default()
     };
+    let mut checkpoint_progress = None;
 
     match load_text(&paths.pid_file) {
         Ok(Some(raw)) => match raw.parse::<i32>() {
@@ -109,7 +107,10 @@ pub(crate) fn collect_status(
     }
 
     match load_json::<NightlySweepProgress>(&paths.nightly_sweep_progress_file) {
-        Ok(Some(progress)) => snapshot.checkpoint_pages = progress.pages.len(),
+        Ok(Some(progress)) => {
+            snapshot.checkpoint_pages = progress.pages.len();
+            checkpoint_progress = Some(progress);
+        }
         Ok(None) => {}
         Err(error) => {
             snapshot.status_error = Some(compact_status_error("checkpoints", format!("{error:#}")))
@@ -118,7 +119,11 @@ pub(crate) fn collect_status(
 
     match load_json::<RuntimeStatus>(&paths.runtime_status_file) {
         Ok(Some(mut runtime_status)) => {
-            populate_runtime_derivatives(&mut runtime_status);
+            populate_runtime_derivatives(
+                &mut runtime_status,
+                checkpoint_progress.as_ref(),
+                snapshot.watched_titles,
+            );
             snapshot.runtime_status = Some(runtime_status);
         }
         Ok(None) => {}
@@ -157,7 +162,11 @@ pub(crate) fn collect_status(
     snapshot
 }
 
-fn populate_runtime_derivatives(status: &mut RuntimeStatus) {
+fn populate_runtime_derivatives(
+    status: &mut RuntimeStatus,
+    checkpoint_progress: Option<&NightlySweepProgress>,
+    watched_titles: usize,
+) {
     let now = Utc::now();
     if let Some(observed_at) = status.realtime.last_event_observed_at {
         let lag_millis = (now - observed_at).num_milliseconds().max(0);
@@ -169,6 +178,7 @@ fn populate_runtime_derivatives(status: &mut RuntimeStatus) {
     }
 
     populate_live_outcome_derivatives(status);
+    populate_recheck_freshness_derivatives(status, checkpoint_progress, watched_titles, now);
 
     if should_surface_live_queue_snapshot(&status.realtime)
         && let Some(outcome) = status.realtime.latest_outcome.as_ref()
@@ -232,6 +242,179 @@ fn populate_runtime_derivatives(status: &mut RuntimeStatus) {
             started_at,
             expected_resume_at: status.realtime.backoff_until,
         });
+    }
+}
+
+fn populate_recheck_freshness_derivatives(
+    status: &mut RuntimeStatus,
+    checkpoint_progress: Option<&NightlySweepProgress>,
+    watched_titles: usize,
+    now: chrono::DateTime<Utc>,
+) {
+    let Some(progress) = checkpoint_progress else {
+        return;
+    };
+    let freshness = derive_recheck_freshness(progress, status, watched_titles, now);
+    let verification_failed = freshness
+        .last_daytime_verification_result
+        .as_deref()
+        .is_some_and(|result| result.starts_with("failed:"))
+        || freshness
+            .last_nightly_full_recheck_result
+            .as_deref()
+            .is_some_and(|result| result.starts_with("failed:"));
+    let stale_coverage =
+        freshness.total_pages > 0 && freshness.pages_older_than_target > 0;
+    status.reconciliation.freshness = Some(freshness.clone());
+
+    if verification_failed || stale_coverage {
+        let should_replace_issue = status
+            .realtime
+            .latest_actionable_issue
+            .as_ref()
+            .is_none_or(|issue| {
+                matches!(
+                    issue.source.as_str(),
+                    "" | "last-24h-verification"
+                        | "full-watched-set-recheck"
+                        | "full-watched-set-freshness"
+                )
+            });
+        if should_replace_issue {
+            status.realtime.latest_actionable_issue = if let Some(issue) =
+                scheduled_verification_issue(&freshness, now)
+            {
+                Some(issue)
+            } else {
+                Some(full_recheck_freshness_issue(&freshness, now))
+            };
+        }
+        if matches!(status.realtime.state.as_str(), "" | "unknown" | "healthy") {
+            status.realtime.state = "unhealthy".to_string();
+            status.realtime.last_state_changed_at = Some(now);
+        }
+    }
+}
+
+fn derive_recheck_freshness(
+    progress: &NightlySweepProgress,
+    status: &RuntimeStatus,
+    watched_titles: usize,
+    now: chrono::DateTime<Utc>,
+) -> RecheckFreshnessSnapshot {
+    let target_hours = 24u64;
+    let target_age = chrono::TimeDelta::hours(target_hours as i64);
+    let target_before = now - target_age;
+    let checkpoint_pages = progress.pages.len();
+    let total_pages = watched_titles.max(checkpoint_pages);
+    let mut pages_older_than_target = watched_titles.saturating_sub(checkpoint_pages);
+    let mut oldest_full_check_at = None;
+    let mut oldest_full_check_title = None;
+    let mut oldest_full_check_age_seconds = None;
+
+    for (title, checkpoint) in &progress.pages {
+        let is_stale = checkpoint
+            .last_full_check_at
+            .is_none_or(|at| at < target_before);
+        if is_stale {
+            pages_older_than_target += 1;
+        }
+        match (oldest_full_check_at, checkpoint.last_full_check_at) {
+            (None, Some(at)) => {
+                oldest_full_check_at = Some(at);
+                oldest_full_check_title = Some(title.clone());
+                oldest_full_check_age_seconds = Some((now - at).num_seconds().max(0));
+            }
+            (Some(previous), Some(at)) if at < previous => {
+                oldest_full_check_at = Some(at);
+                oldest_full_check_title = Some(title.clone());
+                oldest_full_check_age_seconds = Some((now - at).num_seconds().max(0));
+            }
+            (None, None) if oldest_full_check_title.is_none() => {
+                oldest_full_check_title = Some(title.clone());
+            }
+            _ => {}
+        }
+    }
+
+    RecheckFreshnessSnapshot {
+        target_hours,
+        total_pages,
+        pages_older_than_target,
+        oldest_full_check_at,
+        oldest_full_check_title,
+        oldest_full_check_age_seconds,
+        last_daytime_verification_result: status
+            .realtime
+            .last_daytime_verification_result
+            .clone()
+            .or_else(|| {
+                status
+                    .realtime
+                    .last_daytime_verification_at
+                    .map(|_| "completed".to_string())
+            }),
+        last_nightly_full_recheck_result: status
+            .realtime
+            .last_nightly_full_recheck_result
+            .clone()
+            .or_else(|| {
+                status
+                    .realtime
+                    .last_nightly_full_recheck_at
+                    .map(|_| "completed".to_string())
+            }),
+        computed_at: Some(now),
+    }
+}
+
+fn scheduled_verification_issue(
+    freshness: &RecheckFreshnessSnapshot,
+    detected_at: chrono::DateTime<Utc>,
+) -> Option<crate::state::ActionableIssueSnapshot> {
+    let daytime = freshness
+        .last_daytime_verification_result
+        .as_deref()
+        .filter(|result| result.starts_with("failed:"))
+        .map(|result| crate::state::ActionableIssueSnapshot {
+            source: "last-24h-verification".to_string(),
+            severity: "error".to_string(),
+            summary: format!("Last 24 hours verification {result}"),
+            next_action:
+                "inspect the latest verification log or rerun Last 24 hours verification"
+                    .to_string(),
+            detected_at: Some(detected_at),
+        });
+    let nightly = freshness
+        .last_nightly_full_recheck_result
+        .as_deref()
+        .filter(|result| result.starts_with("failed:"))
+        .map(|result| crate::state::ActionableIssueSnapshot {
+            source: "full-watched-set-recheck".to_string(),
+            severity: "error".to_string(),
+            summary: format!("full watched-set recheck {result}"),
+            next_action:
+                "inspect the latest recheck log or rerun the full watched-set recheck"
+                    .to_string(),
+            detected_at: Some(detected_at),
+        });
+    nightly.or(daytime)
+}
+
+fn full_recheck_freshness_issue(
+    freshness: &RecheckFreshnessSnapshot,
+    detected_at: chrono::DateTime<Utc>,
+) -> crate::state::ActionableIssueSnapshot {
+    crate::state::ActionableIssueSnapshot {
+        source: "full-watched-set-freshness".to_string(),
+        severity: "warning".to_string(),
+        summary: format!(
+            "full watched-set coverage is stale for {}/{} pages",
+            freshness.pages_older_than_target, freshness.total_pages
+        ),
+        next_action: "run the full watched-set recheck and confirm stale-page count returns to zero"
+            .to_string(),
+        detected_at: Some(detected_at),
     }
 }
 
@@ -384,7 +567,6 @@ mod tests {
 
         let snapshot = collect_status(&paths, Some("daemon"));
 
-        assert_eq!(snapshot.managed_session.as_deref(), Some("daemon"));
         assert!(snapshot.daemon_running);
         assert_eq!(snapshot.last_event_id.as_deref(), Some("evt-1"));
         assert_eq!(snapshot.processed_revids, 3);
@@ -571,7 +753,7 @@ mod tests {
             ..RuntimeStatus::default()
         };
 
-        populate_runtime_derivatives(&mut status);
+        populate_runtime_derivatives(&mut status, None, 0);
 
         assert_eq!(
             status
@@ -632,7 +814,7 @@ mod tests {
             ..RuntimeStatus::default()
         };
 
-        populate_runtime_derivatives(&mut status);
+        populate_runtime_derivatives(&mut status, None, 0);
 
         assert_eq!(status.realtime.last_action_completed_at, Some(completed_at));
         assert_eq!(status.realtime.last_successful_hide_at, Some(completed_at));
@@ -660,7 +842,7 @@ mod tests {
             ..RuntimeStatus::default()
         };
 
-        populate_runtime_derivatives(&mut status);
+        populate_runtime_derivatives(&mut status, None, 0);
 
         assert_eq!(
             status
@@ -693,6 +875,87 @@ mod tests {
                 .as_ref()
                 .and_then(|task| task.started_at),
             Some(completed_at)
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_derives_checkpoint_freshness_issue() {
+        let now = Utc::now();
+        let stale_checkpoint = NightlySweepProgress {
+            pages: BTreeMap::from([(
+                "Old page".to_string(),
+                PageCheckpoint {
+                    last_full_check_at: Some(now - chrono::TimeDelta::days(2)),
+                    ..PageCheckpoint::default()
+                },
+            )]),
+        };
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                state: "healthy".to_string(),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status, Some(&stale_checkpoint), 2);
+
+        let freshness = status.reconciliation.freshness.as_ref().unwrap();
+        assert_eq!(freshness.total_pages, 2);
+        assert_eq!(freshness.pages_older_than_target, 2);
+        assert_eq!(freshness.oldest_full_check_title.as_deref(), Some("Old page"));
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("full-watched-set-freshness")
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_restores_failed_scheduled_verification_issue() {
+        let now = Utc::now();
+        let checkpoint = NightlySweepProgress {
+            pages: BTreeMap::from([(
+                "Fresh page".to_string(),
+                PageCheckpoint {
+                    last_full_check_at: Some(now),
+                    ..PageCheckpoint::default()
+                },
+            )]),
+        };
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                state: "healthy".to_string(),
+                last_daytime_verification_at: Some(now),
+                last_daytime_verification_result: Some(
+                    "failed: non-json-response".to_string(),
+                ),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status, Some(&checkpoint), 1);
+
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("last-24h-verification")
+        );
+        assert!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .is_some_and(|issue| issue.summary.contains("Last 24 hours verification failed"))
         );
     }
 }

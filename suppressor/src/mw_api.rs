@@ -42,6 +42,13 @@ pub struct RevisionRecord {
     pub comment_hidden: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecentChangeProbe {
+    pub title: Option<String>,
+    pub timestamp: DateTime<Utc>,
+    pub revid: Option<u64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ApiUserInfo {
     pub name: String,
@@ -270,6 +277,32 @@ impl MediaWikiClient {
             .collect())
     }
 
+    pub async fn fetch_latest_recent_change(&self) -> Result<Option<RecentChangeProbe>> {
+        let value = self
+            .get_json(&[
+                ("action", "query"),
+                ("list", "recentchanges"),
+                ("rclimit", "1"),
+                ("rctype", "edit|new"),
+                ("rcprop", "title|timestamp|ids"),
+            ])
+            .await?;
+        let Some(change) = value["query"]["recentchanges"]
+            .as_array()
+            .and_then(|changes| changes.first())
+        else {
+            return Ok(None);
+        };
+        let Some(timestamp) = change["timestamp"].as_str() else {
+            return Ok(None);
+        };
+        Ok(Some(RecentChangeProbe {
+            title: change["title"].as_str().map(str::to_string),
+            timestamp: parse_timestamp(timestamp)?,
+            revid: change["revid"].as_u64(),
+        }))
+    }
+
     pub async fn resolve_redirect_target(&self, title: &str) -> Result<Option<String>> {
         let value = self
             .get_json(&[("action", "query"), ("titles", title), ("redirects", "1")])
@@ -401,6 +434,10 @@ impl MediaWikiClient {
         }
         Ok(url)
     }
+}
+
+pub fn revision_url(server_name: &str, revid: u64) -> String {
+    format!("https://{server_name}/wiki/Special:Diff/{revid}")
 }
 
 pub fn mediawiki_timestamp(timestamp: DateTime<Utc>) -> String {
@@ -651,7 +688,22 @@ impl std::error::Error for ApiTransportError {}
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_env(api_url: String) -> crate::config::EnvConfig {
+        crate::config::EnvConfig {
+            api_url,
+            stream_url: "https://stream.wikimedia.org/v2/stream/recentchange".to_string(),
+            bot_username: "Bot@password".to_string(),
+            bot_password: "secret".to_string(),
+            user_agent: "test-agent".to_string(),
+            env_file: std::path::PathBuf::from(".env"),
+        }
+    }
 
     #[test]
     fn mediawiki_timestamp_uses_utc_second_precision_without_fractionals() {
@@ -724,5 +776,184 @@ mod tests {
     fn parses_retry_after_seconds_header_value() {
         let header = reqwest::header::HeaderValue::from_static("120");
         assert_eq!(parse_retry_after_seconds(&header), Some(120));
+    }
+
+    #[tokio::test]
+    async fn classifies_non_json_429_with_retry_after_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("content-type", "text/plain; charset=utf-8")
+                    .insert_header("retry-after", "30")
+                    .set_body_string("too many requests"),
+            )
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new(&env).unwrap();
+        let error = client.get_json(&[("action", "query")]).await.unwrap_err();
+
+        let snapshot = classify_api_failure(&error, "fetch-revisions", Some("Title"), Some(42));
+
+        assert_eq!(snapshot.class, "non-json-response");
+        assert_eq!(snapshot.http_status, Some(429));
+        assert!(
+            snapshot
+                .content_type
+                .as_deref()
+                .is_some_and(|value| value.starts_with("text/plain"))
+        );
+        assert_eq!(snapshot.retry_after_seconds, Some(30));
+        assert!(snapshot.retryable);
+        assert_eq!(snapshot.sample_title.as_deref(), Some("Title"));
+        assert_eq!(snapshot.sample_revid, Some(42));
+    }
+
+    #[tokio::test]
+    async fn classifies_json_decode_failures_from_json_content_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw("{not valid json", "application/json; charset=utf-8"),
+            )
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new(&env).unwrap();
+        let error = client.get_json(&[("action", "query")]).await.unwrap_err();
+
+        let snapshot = classify_api_failure(&error, "fetch-page", None, None);
+
+        assert_eq!(snapshot.class, "decode-error");
+        assert_eq!(snapshot.http_status, Some(200));
+        assert_eq!(
+            snapshot.content_type.as_deref(),
+            Some("application/json; charset=utf-8")
+        );
+        assert!(!snapshot.retryable);
+    }
+
+    #[tokio::test]
+    async fn classifies_http_status_failures_even_when_body_is_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .insert_header("content-type", "application/json")
+                    .set_body_raw(r#"{"batchcomplete":true}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new(&env).unwrap();
+        let error = client.get_json(&[("action", "query")]).await.unwrap_err();
+
+        let snapshot = classify_api_failure(&error, "fetch-page", None, None);
+
+        assert_eq!(snapshot.class, "http-status");
+        assert_eq!(snapshot.http_status, Some(503));
+        assert_eq!(snapshot.content_type.as_deref(), Some("application/json"));
+        assert!(snapshot.retryable);
+    }
+
+    #[tokio::test]
+    async fn classifies_reqwest_timeout_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/timeout"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(100))
+                    .set_body_raw(r#"{"ok":true}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let error = reqwest::Client::builder()
+            .timeout(Duration::from_millis(10))
+            .build()
+            .unwrap()
+            .get(format!("{}/timeout", server.uri()))
+            .send()
+            .await
+            .unwrap_err();
+
+        let snapshot = classify_api_failure(&anyhow::Error::new(error), "fetch-page", None, None);
+
+        assert_eq!(snapshot.class, "timeout");
+        assert!(snapshot.retryable);
+        assert_eq!(snapshot.http_status, None);
+    }
+
+    #[tokio::test]
+    async fn classifies_reqwest_network_errors() {
+        let error = reqwest::Client::new()
+            .get("http://127.0.0.1:1")
+            .send()
+            .await
+            .unwrap_err();
+
+        let snapshot = classify_api_failure(&anyhow::Error::new(error), "fetch-page", None, None);
+
+        assert_eq!(snapshot.class, "network");
+        assert!(snapshot.retryable);
+        assert_eq!(snapshot.http_status, None);
+    }
+
+    #[tokio::test]
+    async fn fetches_latest_recent_change_probe() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+                  "query": {
+                    "recentchanges": [
+                      {
+                        "title": "Fixture Page",
+                        "timestamp": "2026-04-29T09:10:02Z",
+                        "revid": 5133571
+                      }
+                    ]
+                  }
+                }"#,
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new(&env).unwrap();
+        let probe = client.fetch_latest_recent_change().await.unwrap().unwrap();
+
+        assert_eq!(probe.title.as_deref(), Some("Fixture Page"));
+        assert_eq!(probe.revid, Some(5133571));
+        assert_eq!(probe.timestamp.to_rfc3339(), "2026-04-29T09:10:02+00:00");
+    }
+
+    #[tokio::test]
+    async fn latest_recent_change_probe_allows_empty_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(r#"{"query":{"recentchanges":[]}}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new(&env).unwrap();
+
+        assert!(client.fetch_latest_recent_change().await.unwrap().is_none());
     }
 }

@@ -15,7 +15,9 @@ pub struct CatchupRequest {
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     pub trigger: String,
+    pub scope_label: String,
     pub report_only: bool,
+    pub allow_large_window: bool,
     pub title_scope: Option<Vec<String>>,
 }
 
@@ -24,14 +26,16 @@ pub async fn run_default_catchup(
     trigger: String,
 ) -> Result<CoverageSummary> {
     let end = Utc::now();
-    let start = end - TimeDelta::seconds(runtime.config.catchup.default_window_seconds);
+    let window = runtime.default_recovery_window(end).await;
     run_catchup_window(
         runtime,
         CatchupRequest {
-            start,
+            start: window.start,
             end,
             trigger,
+            scope_label: window.scope_label,
             report_only: false,
+            allow_large_window: window.allow_large_window,
             title_scope: None,
         },
     )
@@ -44,14 +48,16 @@ pub async fn run_title_scoped_catchup(
     titles: Vec<String>,
 ) -> Result<CoverageSummary> {
     let end = Utc::now();
-    let start = end - TimeDelta::seconds(runtime.config.catchup.default_window_seconds);
+    let window = runtime.default_recovery_window(end).await;
     run_catchup_window(
         runtime,
         CatchupRequest {
-            start,
+            start: window.start,
             end,
             trigger,
+            scope_label: window.scope_label,
             report_only: false,
+            allow_large_window: window.allow_large_window,
             title_scope: Some(titles),
         },
     )
@@ -62,12 +68,26 @@ pub async fn run_catchup_window(
     runtime: &Arc<AppRuntime>,
     request: CatchupRequest,
 ) -> Result<CoverageSummary> {
-    validate_window(runtime, request.start, request.end)?;
-    runtime.mark_recovery_started(request.trigger.clone()).await;
+    validate_window(
+        runtime,
+        request.start,
+        request.end,
+        request.allow_large_window,
+        request.report_only,
+    )?;
+    runtime
+        .mark_recovery_started(
+            request.trigger.clone(),
+            request.scope_label.clone(),
+            request.start,
+            request.end,
+        )
+        .await;
     let titles = scoped_titles(runtime, request.title_scope.clone()).await;
     let mut warning_aggregates =
         WarningAggregates::new(runtime.config.catchup.warning_sample_limit);
     let mut summary = CoverageSummary {
+        scope_label: Some(request.scope_label.clone()),
         started_at: Some(request.start),
         ended_at: Some(request.end),
         requested_by: request.trigger.clone(),
@@ -113,6 +133,7 @@ pub async fn run_catchup_window(
                     UnresolvedExposureItem {
                         title: title.clone(),
                         revid: 0,
+                        revision_url: None,
                         age_seconds: None,
                         reason: format!("revision-query-failed:{}", warning_reason(&failure)),
                         next_action: "check API/network and rerun catch-up".to_string(),
@@ -136,6 +157,10 @@ pub async fn run_catchup_window(
                     UnresolvedExposureItem {
                         title: title.clone(),
                         revid: revision.revid,
+                        revision_url: Some(crate::mw_api::revision_url(
+                            &runtime.config.wiki.server_name,
+                            revision.revid,
+                        )),
                         age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
                         reason: "max-revisions-reached".to_string(),
                         next_action: "rerun catch-up with a narrower window".to_string(),
@@ -155,6 +180,10 @@ pub async fn run_catchup_window(
                     UnresolvedExposureItem {
                         title: title.clone(),
                         revid: revision.revid,
+                        revision_url: Some(crate::mw_api::revision_url(
+                            &runtime.config.wiki.server_name,
+                            revision.revid,
+                        )),
                         age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
                         reason: "report-only-not-hidden".to_string(),
                         next_action: "run emergency catch-up without report-only".to_string(),
@@ -186,6 +215,10 @@ pub async fn run_catchup_window(
                         UnresolvedExposureItem {
                             title: title.clone(),
                             revid: revision.revid,
+                            revision_url: Some(crate::mw_api::revision_url(
+                                &runtime.config.wiki.server_name,
+                                revision.revid,
+                            )),
                             age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
                             reason,
                             next_action: "review auth/API state and rerun catch-up".to_string(),
@@ -199,6 +232,10 @@ pub async fn run_catchup_window(
                         UnresolvedExposureItem {
                             title: title.clone(),
                             revid: revision.revid,
+                            revision_url: Some(crate::mw_api::revision_url(
+                                &runtime.config.wiki.server_name,
+                                revision.revid,
+                            )),
                             age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
                             reason: "worker-completion-timeout".to_string(),
                             next_action: "check worker status and rerun catch-up".to_string(),
@@ -227,9 +264,17 @@ pub async fn run_catchup_window(
 }
 
 async fn scoped_titles(runtime: &Arc<AppRuntime>, title_scope: Option<Vec<String>>) -> Vec<String> {
+    let watched_titles = runtime.cache.read().await.watched_titles().to_vec();
+    scoped_titles_from_input(&watched_titles, title_scope)
+}
+
+fn scoped_titles_from_input(
+    watched_titles: &[String],
+    title_scope: Option<Vec<String>>,
+) -> Vec<String> {
     let mut titles = match title_scope {
         Some(titles) => titles,
-        None => runtime.cache.read().await.watched_titles().to_vec(),
+        None => watched_titles.to_vec(),
     };
     titles.sort();
     titles.dedup();
@@ -240,12 +285,14 @@ pub fn validate_window(
     runtime: &AppRuntime,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
+    allow_large_window: bool,
+    report_only: bool,
 ) -> Result<()> {
     if end < start {
         bail!("catch-up window end must be >= start");
     }
     let seconds = (end - start).num_seconds();
-    if seconds > runtime.config.catchup.max_window_seconds {
+    if seconds > runtime.config.catchup.max_window_seconds && !allow_large_window && !report_only {
         bail!(
             "catch-up window {}s exceeds configured maximum {}s",
             seconds,
@@ -257,6 +304,10 @@ pub fn validate_window(
 
 pub fn format_summary_lines(summary: &CoverageSummary) -> Vec<String> {
     let mut lines = vec![
+        format!(
+            "coverage.scope_label={}",
+            summary.scope_label.as_deref().unwrap_or("recent window")
+        ),
         format!("coverage.requested_by={}", summary.requested_by),
         format!("coverage.pages_checked={}", summary.pages_checked),
         format!("coverage.edits_checked={}", summary.edits_checked),
@@ -277,14 +328,15 @@ pub fn format_summary_lines(summary: &CoverageSummary) -> Vec<String> {
     }
     for item in &summary.unresolved_items {
         lines.push(format!(
-            "coverage.unresolved_item title={} revid={} age_seconds={} reason={} next_action={}",
-            item.title,
+            "coverage.unresolved_item title={} revid={} revision_url={} age_seconds={} reason={} next_action={}",
+            compact_report_text(&item.title),
             item.revid,
+            item.revision_url.as_deref().unwrap_or("none"),
             item.age_seconds
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
-            item.reason,
-            item.next_action
+            sanitize_report_detail(&item.reason),
+            sanitize_report_detail(&item.next_action)
         ));
     }
     for warning in &summary.warning_summaries {
@@ -318,6 +370,51 @@ fn push_unresolved_item(
     if summary.unresolved_items.len() < sample_limit {
         summary.unresolved_items.push(item);
     }
+}
+
+fn compact_report_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(180)
+        .collect()
+}
+
+fn sanitize_report_detail(value: &str) -> String {
+    let compact = compact_report_text(value);
+    let lower = compact.to_ascii_lowercase();
+    let marker = [
+        "response body",
+        "response-body",
+        "set-cookie",
+        "cookie=",
+        "cookie:",
+        "token=",
+        "token:",
+        "password=",
+        "password:",
+        "authorization:",
+        "csrf",
+    ]
+    .into_iter()
+    .filter_map(|marker| lower.find(marker).map(|index| (index, marker)))
+    .min_by_key(|(index, _)| *index);
+    if let Some((index, marker)) = marker {
+        let prefix = compact[..index].trim();
+        let suffix = if marker.contains("body") {
+            "response-body-redacted"
+        } else {
+            "sensitive-details-redacted"
+        };
+        return if prefix.is_empty() {
+            suffix.to_string()
+        } else {
+            format!("{prefix} {suffix}")
+        };
+    }
+    compact
 }
 
 fn warning_reason(snapshot: &ApiFailureSnapshot) -> String {
@@ -440,7 +537,13 @@ fn rate_limit_retry_after_seconds(
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     use super::*;
+    use crate::config::EnvConfig;
+    use crate::runtime::{RuntimeStatusSurfaceMode, build_test_runtime_harness_with_env};
 
     #[test]
     fn formats_summary_without_sensitive_payloads() {
@@ -453,6 +556,7 @@ mod tests {
             unresolved_items: vec![UnresolvedExposureItem {
                 title: "Sensitive Page".to_string(),
                 revid: 42,
+                revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/42".to_string()),
                 age_seconds: Some(15),
                 reason: "report-only-not-hidden".to_string(),
                 next_action: "run emergency catch-up without report-only".to_string(),
@@ -466,6 +570,35 @@ mod tests {
         assert!(rendered.contains("revid=42"));
         assert!(!rendered.contains("comment="));
         assert!(!rendered.contains("token="));
+    }
+
+    #[test]
+    fn unresolved_item_details_are_sanitized_but_stay_actionable() {
+        let summary = CoverageSummary {
+            unresolved_items: vec![UnresolvedExposureItem {
+                title: "Sensitive Page".to_string(),
+                revid: 42,
+                revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/42".to_string()),
+                age_seconds: Some(15),
+                reason: "revisiondelete failed token=abc123 cookie=session raw comment".to_string(),
+                next_action: "inspect response body: <html>denied</html> and password=secret"
+                    .to_string(),
+            }],
+            unresolved_count: 1,
+            ..CoverageSummary::default()
+        };
+
+        let rendered = format_summary_lines(&summary).join("\n");
+
+        assert!(rendered.contains("title=Sensitive Page"));
+        assert!(rendered.contains("revid=42"));
+        assert!(rendered.contains("age_seconds=15"));
+        assert!(rendered.contains("reason=revisiondelete failed sensitive-details-redacted"));
+        assert!(rendered.contains("next_action=inspect response-body-redacted"));
+        assert!(!rendered.contains("abc123"));
+        assert!(!rendered.contains("session"));
+        assert!(!rendered.contains("<html>"));
+        assert!(!rendered.contains("password=secret"));
     }
 
     #[test]
@@ -544,6 +677,9 @@ mod tests {
                 UnresolvedExposureItem {
                     title: format!("Page {revid}"),
                     revid,
+                    revision_url: Some(format!(
+                        "https://be.wikipedia.org/wiki/Special:Diff/{revid}"
+                    )),
                     age_seconds: Some(5),
                     reason: "rate-limited".to_string(),
                     next_action: "retry later".to_string(),
@@ -588,5 +724,129 @@ mod tests {
         assert!(rendered.contains("coverage.backoff_until=2026-04-25T17:06:00Z"));
         assert!(rendered.contains("retry_after_seconds=30"));
         assert!(rendered.contains("stopped_early=true"));
+    }
+
+    #[test]
+    fn title_scoped_catchup_dedups_and_sorts_requested_titles() {
+        let titles = scoped_titles_from_input(
+            &["Watched A".to_string(), "Watched B".to_string()],
+            Some(vec![
+                "Title B".to_string(),
+                "Title A".to_string(),
+                "Title B".to_string(),
+            ]),
+        );
+
+        assert_eq!(titles, vec!["Title A".to_string(), "Title B".to_string()]);
+    }
+
+    #[test]
+    fn catchup_without_title_scope_uses_full_watched_set() {
+        let titles =
+            scoped_titles_from_input(&["Watched B".to_string(), "Watched A".to_string()], None);
+
+        assert_eq!(
+            titles,
+            vec!["Watched A".to_string(), "Watched B".to_string()]
+        );
+    }
+
+    fn test_env(temp: &tempfile::TempDir, api_url: String) -> EnvConfig {
+        EnvConfig {
+            api_url,
+            stream_url: "https://example.invalid/stream".to_string(),
+            bot_username: "bot".to_string(),
+            bot_password: "pw".to_string(),
+            user_agent: "bewiki-test/1.0".to_string(),
+            env_file: temp.path().join(".env"),
+        }
+    }
+
+    fn empty_revisions_response() -> &'static str {
+        r#"{"query":{"pages":[{"pageid":1,"revisions":[]}]}}"#
+    }
+
+    #[tokio::test]
+    async fn default_catchup_reports_last_successful_hide_anchor_in_summary() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(empty_revisions_response(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        let anchor = Utc::now() - TimeDelta::hours(3);
+        harness
+            .runtime
+            .update_runtime_status(move |status| {
+                status.realtime.last_successful_hide_at = Some(anchor);
+            })
+            .await;
+
+        let summary = run_default_catchup(&harness.runtime, "stream-gap".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            summary.scope_label.as_deref(),
+            Some("since last successful hide")
+        );
+        assert_eq!(summary.requested_by, "stream-gap");
+        assert_eq!(summary.started_at, Some(anchor));
+        assert!(
+            summary
+                .ended_at
+                .zip(summary.started_at)
+                .is_some_and(|(end, start)| {
+                    (end - start).num_seconds() > harness.runtime.config.catchup.max_window_seconds
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn default_catchup_reports_recent_emergency_window_when_anchor_is_missing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(empty_revisions_response(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+
+        let summary = run_default_catchup(&harness.runtime, "startup".to_string())
+            .await
+            .unwrap();
+        let start = summary.started_at.unwrap();
+        let end = summary.ended_at.unwrap();
+
+        assert_eq!(
+            summary.scope_label.as_deref(),
+            Some("recent emergency window")
+        );
+        assert_eq!(summary.requested_by, "startup");
+        assert_eq!(
+            (end - start).num_seconds(),
+            harness.runtime.config.catchup.default_window_seconds
+        );
     }
 }

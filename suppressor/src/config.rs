@@ -19,7 +19,8 @@ pub struct AppConfig {
     pub realtime: RealtimeConfig,
     pub catchup: CatchupConfig,
     pub nightly_sweep: NightlySweepConfig,
-    pub current_day_recheck: CurrentDayRecheckConfig,
+    #[serde(alias = "current_day_recheck")]
+    pub daytime_verification: DaytimeVerificationConfig,
     pub logging: LoggingConfig,
     pub metrics: MetricsConfig,
 }
@@ -113,15 +114,19 @@ pub struct NightlySweepConfig {
     pub enabled: bool,
     pub timezone: String,
     pub start_time: String,
+    #[serde(default)]
+    pub randomized_window_minutes: u64,
     pub page_concurrency: usize,
     pub batch_sleep_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CurrentDayRecheckConfig {
+pub struct DaytimeVerificationConfig {
     pub enabled: bool,
     pub min_delay_seconds: u64,
     pub max_delay_seconds: u64,
+    #[serde(default = "default_daytime_window_hours")]
+    pub window_hours: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -192,6 +197,10 @@ fn default_unresolved_sample_limit() -> usize {
     25
 }
 
+fn default_daytime_window_hours() -> u64 {
+    24
+}
+
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
@@ -201,10 +210,13 @@ impl AppConfig {
         if config.queue.capacity == 0 {
             bail!("queue.capacity must be greater than zero");
         }
-        if config.current_day_recheck.min_delay_seconds
-            > config.current_day_recheck.max_delay_seconds
+        if config.daytime_verification.min_delay_seconds
+            > config.daytime_verification.max_delay_seconds
         {
-            bail!("current_day_recheck min_delay_seconds must be <= max_delay_seconds");
+            bail!("daytime_verification min_delay_seconds must be <= max_delay_seconds");
+        }
+        if config.daytime_verification.window_hours == 0 {
+            bail!("daytime_verification.window_hours must be greater than zero");
         }
         if config.realtime.stale_threshold_seconds == 0 {
             bail!("realtime.stale_threshold_seconds must be greater than zero");
@@ -280,6 +292,10 @@ impl RuntimePaths {
             pid_file: AppConfig::resolve_path(&config_path, &config.state.pid_file),
             config_path,
         }
+    }
+
+    pub fn command_report_file(&self) -> PathBuf {
+        self.state_dir.join("command_report.json")
     }
 }
 

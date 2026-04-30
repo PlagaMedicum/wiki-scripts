@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,10 +9,13 @@ use metrics::{counter, histogram};
 use reqwest_eventsource::{Event, EventSource};
 use tracing::{debug, info, warn};
 
-use crate::cache::{CachePersistence, CacheRefreshMode, refresh_cache};
+use crate::cache::{
+    CachePersistence, CacheRefreshMode, SourceRefreshCatchupPlan, SourceRefreshFollowup,
+    SourceRefreshTriggerKind, SuppressionListCache, plan_source_refresh_catchup, refresh_cache,
+};
 use crate::catchup::run_title_scoped_catchup;
 use crate::mw_api::classify_api_failure;
-use crate::recentchange::LiveRevisionCandidate;
+use crate::recentchange::{LiveRevisionCandidate, PageChangeTrigger};
 use crate::runtime::{AppRuntime, RevDelDispatch, RevDelMode};
 use crate::state::{SourceListRefresh, load_text, save_text_atomic};
 
@@ -71,20 +75,27 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
             Ok(stream) => stream,
             Err(error) => {
                 counter!("event_reconnect_total").increment(1);
-                use_since_recovery = should_use_since_recovery(resume_event_id.as_deref(), &error);
-                runtime
-                    .mark_realtime_state(
-                        "reconnecting",
-                        Some(if use_since_recovery {
-                            "invalid-resume".to_string()
-                        } else {
-                            "reconnect-error".to_string()
-                        }),
-                        Some(error.to_string()),
-                        Some("stream-open-failed".to_string()),
-                        "real-time stream failed to open".to_string(),
-                    )
-                    .await;
+                let recovery = classify_stream_error_recovery(resume_event_id.as_deref(), &error);
+                use_since_recovery = recovery.use_since_recovery;
+                if let Some(trigger) = recovery.catchup_trigger {
+                    runtime
+                        .mark_stream_gap_detected(
+                            trigger.to_string(),
+                            "stream-open-failed".to_string(),
+                            "real-time stream failed to open; verifying missed edits".to_string(),
+                        )
+                        .await;
+                    spawn_bounded_catchup_if_needed(Arc::clone(&runtime), trigger.to_string())
+                        .await;
+                } else {
+                    runtime
+                        .mark_stream_reconnecting(
+                            "stream-open-failed".to_string(),
+                            error.to_string(),
+                            "real-time stream failed to open".to_string(),
+                        )
+                        .await;
+                }
                 warn!(
                     use_since_recovery,
                     error = %error,
@@ -108,11 +119,9 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                 Ok(None) => {
                     counter!("event_reconnect_total").increment(1);
                     runtime
-                        .mark_realtime_state(
-                            "reconnecting",
-                            Some("stream-closed".to_string()),
-                            Some("event stream ended".to_string()),
-                            None,
+                        .mark_stream_reconnecting(
+                            "stream-closed".to_string(),
+                            "event stream ended".to_string(),
                             "real-time stream closed; reconnecting".to_string(),
                         )
                         .await;
@@ -121,17 +130,25 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                 Err(_) => {
                     counter!("event_stream_starvation_total").increment(1);
                     let trigger = "silent-starvation".to_string();
-                    runtime
-                        .mark_realtime_state(
-                            "stale",
-                            Some(trigger.clone()),
-                            Some(format!("no stream item for {}s", read_timeout.as_secs())),
-                            Some("stream-silent".to_string()),
-                            stream_silence_notice(read_timeout.as_secs()),
-                        )
-                        .await;
-                    spawn_bounded_catchup(Arc::clone(&runtime), trigger.clone());
-                    use_since_recovery = true;
+                    let probe_outcome =
+                        probe_recentchange_freshness(Arc::clone(&runtime), read_timeout).await;
+                    if probe_outcome.requires_catchup {
+                        runtime
+                            .mark_stream_gap_detected(
+                                trigger.clone(),
+                                "stream-silent".to_string(),
+                                stream_silence_notice(read_timeout.as_secs()),
+                            )
+                            .await;
+                        spawn_bounded_catchup_if_needed(Arc::clone(&runtime), trigger.clone())
+                            .await;
+                        use_since_recovery = true;
+                    } else {
+                        runtime
+                            .mark_stream_quiet_without_gap(read_timeout.as_secs())
+                            .await;
+                        use_since_recovery = false;
+                    }
                     break;
                 }
             };
@@ -173,17 +190,24 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                     let recovery =
                         classify_stream_error_recovery(resume_event_id.as_deref(), &error);
                     use_since_recovery = recovery.use_since_recovery;
-                    runtime
-                        .mark_realtime_state(
-                            "reconnecting",
-                            Some(recovery.status_trigger.to_string()),
-                            Some(error.to_string()),
-                            Some("stream-error".to_string()),
-                            "real-time stream reconnecting after error".to_string(),
-                        )
-                        .await;
                     if let Some(trigger) = recovery.catchup_trigger {
-                        spawn_bounded_catchup(Arc::clone(&runtime), trigger.to_string());
+                        runtime
+                            .mark_stream_gap_detected(
+                                trigger.to_string(),
+                                "stream-error".to_string(),
+                                "real-time stream found a gap; verifying missed edits".to_string(),
+                            )
+                            .await;
+                        spawn_bounded_catchup_if_needed(Arc::clone(&runtime), trigger.to_string())
+                            .await;
+                    } else {
+                        runtime
+                            .mark_stream_reconnecting(
+                                "stream-error".to_string(),
+                                format!("{} ({})", recovery.status_trigger, error),
+                                "real-time stream reconnecting after error".to_string(),
+                            )
+                            .await;
                     }
                     warn!(
                         use_since_recovery,
@@ -204,16 +228,21 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
     }
 }
 
+async fn spawn_bounded_catchup_if_needed(runtime: Arc<AppRuntime>, trigger: String) {
+    if !runtime.should_start_recovery(&trigger).await {
+        return;
+    }
+    spawn_bounded_catchup(runtime, trigger);
+}
+
 fn spawn_bounded_catchup(runtime: Arc<AppRuntime>, trigger: String) {
     tokio::spawn(async move {
         if let Err(error) = crate::catchup::run_default_catchup(&runtime, trigger.clone()).await {
             warn!(error = %error, trigger = %trigger, "bounded catch-up failed");
             runtime
-                .mark_realtime_state(
-                    "unhealthy",
-                    Some(trigger),
-                    Some("catch-up failed".to_string()),
-                    Some("catchup-failed".to_string()),
+                .mark_recovery_failed(
+                    trigger,
+                    "catchup-failed".to_string(),
                     format!("bounded catch-up failed: {error}"),
                 )
                 .await;
@@ -221,21 +250,191 @@ fn spawn_bounded_catchup(runtime: Arc<AppRuntime>, trigger: String) {
     });
 }
 
+struct FreshnessProbeOutcome {
+    requires_catchup: bool,
+    reason: String,
+}
+
+async fn probe_recentchange_freshness(
+    runtime: Arc<AppRuntime>,
+    read_timeout: Duration,
+) -> FreshnessProbeOutcome {
+    match runtime.client.fetch_latest_recent_change().await {
+        Ok(Some(probe)) => {
+            let previous = runtime.last_event_observed_at().await;
+            runtime
+                .record_freshness_probe(
+                    probe.timestamp,
+                    "api-freshness-probe".to_string(),
+                    format!(
+                        "freshness probe saw latest target-wiki edit at {}",
+                        probe.timestamp.format("%H:%M:%S UTC")
+                    ),
+                )
+                .await;
+            let requires_catchup = previous.map(|seen| probe.timestamp > seen).unwrap_or(true);
+            FreshnessProbeOutcome {
+                requires_catchup,
+                reason: if requires_catchup {
+                    format!(
+                        "stream silent for {}s while newer wiki edits exist",
+                        read_timeout.as_secs()
+                    )
+                } else {
+                    format!(
+                        "stream silent for {}s but no newer wiki edits were found",
+                        read_timeout.as_secs()
+                    )
+                },
+            }
+        }
+        Ok(None) => FreshnessProbeOutcome {
+            requires_catchup: false,
+            reason: format!(
+                "stream silent for {}s and freshness probe returned no edits",
+                read_timeout.as_secs()
+            ),
+        },
+        Err(error) => {
+            runtime
+                .record_api_failure(classify_api_failure(&error, "freshness-probe", None, None))
+                .await;
+            FreshnessProbeOutcome {
+                requires_catchup: true,
+                reason: format!(
+                    "stream silent for {}s and freshness probe failed: {}",
+                    read_timeout.as_secs(),
+                    error
+                ),
+            }
+        }
+    }
+}
+
 fn spawn_title_scope_catchup(runtime: Arc<AppRuntime>, trigger: String, titles: Vec<String>) {
     tokio::spawn(async move {
         if let Err(error) = run_title_scoped_catchup(&runtime, trigger.clone(), titles).await {
             warn!(error = %error, trigger = %trigger, "title-scoped catch-up failed");
             runtime
-                .mark_realtime_state(
-                    "unhealthy",
-                    Some(trigger),
-                    Some("title-scoped catch-up failed".to_string()),
-                    Some("catchup-failed".to_string()),
+                .mark_recovery_failed(
+                    trigger,
+                    "catchup-failed".to_string(),
                     format!("title-scoped catch-up failed: {error}"),
                 )
                 .await;
         }
     });
+}
+
+fn source_refresh_catchup_trigger(trigger_kind: SourceRefreshTriggerKind) -> &'static str {
+    match trigger_kind {
+        SourceRefreshTriggerKind::SuppressionList => "source-list-refresh",
+        SourceRefreshTriggerKind::RequestPage => "request-page-refresh",
+    }
+}
+
+fn plan_source_refresh(
+    before: &SuppressionListCache,
+    after: &SuppressionListCache,
+    refreshed: bool,
+    trigger_title: &str,
+    trigger_revid: Option<u64>,
+    catchup_plan: &SourceRefreshCatchupPlan,
+    started_at: chrono::DateTime<Utc>,
+    completed_at: chrono::DateTime<Utc>,
+    deferred_until: Option<chrono::DateTime<Utc>>,
+) -> SourceListRefresh {
+    let catchup_requested = catchup_plan.catchup_requested();
+    let catchup_triggered = catchup_requested && deferred_until.is_none();
+    let outcome = if deferred_until.is_some() {
+        "catchup-deferred"
+    } else if catchup_triggered {
+        "catchup-started"
+    } else if refreshed {
+        "refreshed"
+    } else {
+        "unchanged"
+    };
+
+    SourceListRefresh {
+        trigger_title: trigger_title.to_string(),
+        trigger_revid,
+        started_at: Some(started_at),
+        completed_at: Some(completed_at),
+        old_source_revid: before.source_lastrevid,
+        new_source_revid: after.source_lastrevid,
+        new_titles_count: catchup_plan.new_titles_count,
+        removed_titles_count: catchup_plan.removed_titles_count,
+        redirects_reused: catchup_plan.redirects_reused,
+        catchup_triggered,
+        catchup_title_scope: catchup_plan.catchup_scope_label().map(str::to_string),
+        deferred_until,
+        outcome: outcome.to_string(),
+        error: None,
+    }
+}
+
+fn spawn_source_refresh_catchup(
+    runtime: Arc<AppRuntime>,
+    trigger_kind: SourceRefreshTriggerKind,
+    catchup_plan: SourceRefreshCatchupPlan,
+) {
+    match catchup_plan.followup {
+        SourceRefreshFollowup::None => {}
+        SourceRefreshFollowup::TitleScoped { titles, .. } => {
+            spawn_title_scope_catchup(
+                runtime,
+                source_refresh_catchup_trigger(trigger_kind).to_string(),
+                titles,
+            );
+        }
+        SourceRefreshFollowup::RecentWindow { .. } => {
+            spawn_bounded_catchup(
+                runtime,
+                source_refresh_catchup_trigger(trigger_kind).to_string(),
+            );
+        }
+    }
+}
+
+struct RecentChangeDispatchContext<'a> {
+    source_title_normalized: &'a str,
+    request_pages: &'a [String],
+    watched_set: &'a HashSet<String>,
+}
+
+enum RecentChangeDispatch {
+    Ignore,
+    IgnoredLiveRevision(LiveRevisionCandidate),
+    SourceListRefresh(PageChangeTrigger),
+    RequestPageRefresh(PageChangeTrigger),
+    LiveWatchedRevision(LiveRevisionCandidate),
+}
+
+fn dispatch_recentchange_event(
+    event: &crate::recentchange::RecentChangeEvent,
+    sse_id: Option<&str>,
+    context: &RecentChangeDispatchContext<'_>,
+) -> RecentChangeDispatch {
+    if let Some(trigger) = event.to_page_change_trigger() {
+        if trigger.normalized_title == context.source_title_normalized {
+            return RecentChangeDispatch::SourceListRefresh(trigger);
+        }
+        if is_request_page_trigger(&trigger.normalized_title, context.request_pages) {
+            return RecentChangeDispatch::RequestPageRefresh(trigger);
+        }
+    }
+    if !event.is_revision_event() {
+        return RecentChangeDispatch::Ignore;
+    }
+    let Some(candidate) = event.to_candidate(sse_id) else {
+        return RecentChangeDispatch::Ignore;
+    };
+    if context.watched_set.contains(&candidate.normalized_title) {
+        RecentChangeDispatch::LiveWatchedRevision(candidate)
+    } else {
+        RecentChangeDispatch::IgnoredLiveRevision(candidate)
+    }
 }
 
 pub async fn handle_recentchange_event(
@@ -254,64 +453,57 @@ pub async fn handle_recentchange_event(
     }
     counter!("events_bewiki_total").increment(1);
     let event_id = event.event_id(sse_id);
-    runtime.mark_realtime_event(event_id.clone()).await;
-    if let Some(title) = event.title.as_deref() {
-        let normalized_title = crate::titles::normalize_title(title);
-        let source_title = runtime.cache.read().await.source_title_normalized.clone();
-        if normalized_title == source_title {
-            handle_source_list_change(
-                runtime,
-                title,
-                event.revision.as_ref().and_then(|revision| revision.new),
-            )
-            .await;
-            return Ok(event_id);
-        }
-        if is_request_page_trigger(
-            &normalized_title,
-            &runtime.config.suppression_list.request_pages,
-        ) {
-            handle_request_page_change(
-                runtime,
-                title,
-                event.revision.as_ref().and_then(|revision| revision.new),
-            )
-            .await;
-            return Ok(event_id);
-        }
-    }
-    if !event.is_revision_event() {
-        return Ok(event_id);
-    }
-    let Some(candidate) = event.to_candidate(sse_id) else {
-        return Ok(event_id);
-    };
-    if !runtime
-        .cache
-        .read()
-        .await
-        .watched_set
-        .contains(&candidate.normalized_title)
-    {
-        debug!(
-            title = %candidate.title,
-            normalized_title = %candidate.normalized_title,
-            "ignoring revision event because title is not in watched set"
-        );
-        return Ok(event_id);
-    }
-    counter!("events_matched_total").increment(1);
-    info!(
-        title = %candidate.title,
-        revid = candidate.revid,
-        old_revid = ?candidate.old_revid,
-        event_id = ?candidate.event_id,
-        "matched live watched revision"
-    );
+    let observed_at = event.observed_at();
     runtime
-        .mark_realtime_match(candidate.title.clone(), candidate.revid)
+        .mark_realtime_event(event_id.clone(), observed_at)
         .await;
-    handle_live_candidate(runtime, candidate, Some(Utc::now())).await?;
+    let dispatch = {
+        let cache = runtime.cache.read().await;
+        dispatch_recentchange_event(
+            &event,
+            sse_id,
+            &RecentChangeDispatchContext {
+                source_title_normalized: &cache.source_title_normalized,
+                request_pages: &runtime.config.suppression_list.request_pages,
+                watched_set: &cache.watched_set,
+            },
+        )
+    };
+    match dispatch {
+        RecentChangeDispatch::Ignore => {}
+        RecentChangeDispatch::IgnoredLiveRevision(candidate) => {
+            debug!(
+                title = %candidate.title,
+                normalized_title = %candidate.normalized_title,
+                "ignoring revision event because title is not in watched set"
+            );
+        }
+        RecentChangeDispatch::SourceListRefresh(trigger) => {
+            handle_source_list_change(runtime, &trigger.title, trigger.trigger_revid).await;
+        }
+        RecentChangeDispatch::RequestPageRefresh(trigger) => {
+            handle_request_page_change(runtime, &trigger.title, trigger.trigger_revid).await;
+        }
+        RecentChangeDispatch::LiveWatchedRevision(candidate) => {
+            counter!("events_matched_total").increment(1);
+            info!(
+                title = %candidate.title,
+                revid = candidate.revid,
+                old_revid = ?candidate.old_revid,
+                event_id = ?candidate.event_id,
+                "matched live watched revision"
+            );
+            runtime
+                .mark_realtime_match(
+                    candidate.title.clone(),
+                    candidate.revid,
+                    crate::mw_api::revision_url(&runtime.config.wiki.server_name, candidate.revid),
+                    observed_at,
+                )
+                .await;
+            handle_live_candidate(runtime, candidate, observed_at).await?;
+        }
+    }
     Ok(event_id)
 }
 
@@ -320,7 +512,40 @@ async fn handle_source_list_change(
     title: &str,
     trigger_revid: Option<u64>,
 ) {
-    info!(title = %title, "source suppression list page changed; refreshing cache");
+    handle_source_refresh_trigger(
+        runtime,
+        title,
+        trigger_revid,
+        SourceRefreshTriggerKind::SuppressionList,
+    )
+    .await;
+}
+
+async fn handle_request_page_change(
+    runtime: &Arc<AppRuntime>,
+    title: &str,
+    trigger_revid: Option<u64>,
+) {
+    handle_source_refresh_trigger(
+        runtime,
+        title,
+        trigger_revid,
+        SourceRefreshTriggerKind::RequestPage,
+    )
+    .await;
+}
+
+async fn handle_source_refresh_trigger(
+    runtime: &Arc<AppRuntime>,
+    title: &str,
+    trigger_revid: Option<u64>,
+    trigger_kind: SourceRefreshTriggerKind,
+) {
+    info!(
+        title = %title,
+        trigger_kind = ?trigger_kind,
+        "source-adjacent page changed; refreshing cache and planning follow-up"
+    );
     let started_at = Utc::now();
     let before = runtime.cache.read().await.snapshot.clone();
     let persistence = if runtime.dry_run {
@@ -340,60 +565,40 @@ async fn handle_source_list_change(
     {
         Ok(refreshed) => {
             let after = runtime.cache.read().await.snapshot.clone();
-            let diff = before.watched_title_diff(&after);
-            let catchup_titles = diff.added.clone();
-            let catchup_requested = !catchup_titles.is_empty();
-            let catchup_title_scope = if catchup_requested
-                && catchup_titles.len() > runtime.config.catchup.source_refresh_title_scope_limit
+            let catchup_plan = plan_source_refresh_catchup(
+                &before,
+                &after,
+                trigger_kind,
+                runtime.config.catchup.source_refresh_title_scope_limit,
+            );
+            if let SourceRefreshFollowup::TitleScoped { titles, .. } = &catchup_plan.followup
+                && titles.len() > runtime.config.catchup.source_refresh_title_scope_limit
             {
                 warn!(
-                    added_titles = catchup_titles.len(),
+                    added_titles = titles.len(),
                     configured_limit = runtime.config.catchup.source_refresh_title_scope_limit,
-                    "source-list refresh added more titles than the low-spec planning threshold"
+                    "source refresh added more titles than the low-spec planning threshold"
                 );
-                "new-titles-large"
-            } else {
-                "new-titles"
-            };
-            let deferred_until = if catchup_requested {
+            }
+            let deferred_until = if catchup_plan.catchup_requested() {
                 runtime.current_backoff_until().await
             } else {
                 None
             };
-            let catchup_triggered = catchup_requested && deferred_until.is_none();
-            let outcome = if deferred_until.is_some() {
-                "catchup-deferred"
-            } else if catchup_triggered {
-                "catchup-started"
-            } else if refreshed {
-                "refreshed"
-            } else {
-                "unchanged"
-            };
-            runtime
-                .record_source_refresh(SourceListRefresh {
-                    trigger_title: title.to_string(),
-                    trigger_revid,
-                    started_at: Some(started_at),
-                    completed_at: Some(Utc::now()),
-                    old_source_revid: before.source_lastrevid,
-                    new_source_revid: after.source_lastrevid,
-                    new_titles_count: diff.added.len(),
-                    removed_titles_count: diff.removed.len(),
-                    redirects_reused: before.titles_hash_sha256 == after.titles_hash_sha256,
-                    catchup_triggered,
-                    catchup_title_scope: catchup_requested.then(|| catchup_title_scope.to_string()),
-                    deferred_until,
-                    outcome: outcome.to_string(),
-                    error: None,
-                })
-                .await;
-            if catchup_triggered {
-                spawn_title_scope_catchup(
-                    Arc::clone(runtime),
-                    "source-list-refresh".to_string(),
-                    catchup_titles,
-                );
+            let refresh = plan_source_refresh(
+                &before,
+                &after,
+                refreshed,
+                title,
+                trigger_revid,
+                &catchup_plan,
+                started_at,
+                Utc::now(),
+                deferred_until,
+            );
+            runtime.record_source_refresh(refresh.clone()).await;
+            if refresh.catchup_triggered {
+                spawn_source_refresh_catchup(Arc::clone(runtime), trigger_kind, catchup_plan);
             }
         }
         Err(error) => {
@@ -417,53 +622,15 @@ async fn handle_source_list_change(
     }
 }
 
-async fn handle_request_page_change(
-    runtime: &Arc<AppRuntime>,
-    title: &str,
-    trigger_revid: Option<u64>,
-) {
-    info!(title = %title, "request page changed; starting immediate catch-up");
-    let started_at = Utc::now();
-    let deferred_until = runtime.current_backoff_until().await;
-    let catchup_triggered = deferred_until.is_none();
-    runtime
-        .record_source_refresh(SourceListRefresh {
-            trigger_title: title.to_string(),
-            trigger_revid,
-            started_at: Some(started_at),
-            completed_at: Some(Utc::now()),
-            catchup_triggered,
-            catchup_title_scope: Some("request-window".to_string()),
-            deferred_until,
-            outcome: if catchup_triggered {
-                "catchup-started".to_string()
-            } else {
-                "catchup-deferred".to_string()
-            },
-            ..SourceListRefresh::default()
-        })
-        .await;
-    if catchup_triggered {
-        spawn_bounded_catchup(Arc::clone(runtime), "request-page-refresh".to_string());
-    }
-}
-
 async fn handle_live_candidate(
     runtime: &Arc<AppRuntime>,
     candidate: LiveRevisionCandidate,
     observed_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<()> {
-    if runtime
-        .reconcile
-        .actions
-        .contains_processed(candidate.revid)
-        .await
-    {
+    if runtime.contains_processed_revid(candidate.revid).await {
         return Ok(());
     }
     runtime
-        .reconcile
-        .actions
         .dispatch_action(RevDelDispatch {
             title: candidate.title,
             revids: vec![candidate.revid],
@@ -539,7 +706,23 @@ fn is_request_page_trigger(normalized_title: &str, request_pages: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashSet};
+
+    use chrono::{TimeDelta, TimeZone};
+    use tempfile::tempdir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     use super::*;
+    use crate::cache::{
+        SourceRefreshFollowup, SourceRefreshTriggerKind, SuppressionListCache,
+        plan_source_refresh_catchup,
+    };
+    use crate::config::EnvConfig;
+    use crate::recentchange::test_fixtures::SyntheticRecentChange;
+    use crate::runtime::{
+        RuntimeStatusSurfaceMode, build_test_runtime_harness, build_test_runtime_harness_with_env,
+    };
 
     #[test]
     fn since_recovery_is_disabled_without_resume_id() {
@@ -604,6 +787,34 @@ mod tests {
         );
     }
 
+    fn test_env(temp: &tempfile::TempDir, api_url: String) -> EnvConfig {
+        EnvConfig {
+            api_url,
+            stream_url: "https://example.invalid/stream".to_string(),
+            bot_username: "bot".to_string(),
+            bot_password: "pw".to_string(),
+            user_agent: "bewiki-test/1.0".to_string(),
+            env_file: temp.path().join(".env"),
+        }
+    }
+
+    fn latest_recent_change_response(timestamp: chrono::DateTime<Utc>) -> String {
+        format!(
+            r#"{{
+              "query": {{
+                "recentchanges": [
+                  {{
+                    "title": "Fixture Page",
+                    "timestamp": "{}",
+                    "revid": 5133571
+                  }}
+                ]
+              }}
+            }}"#,
+            timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        )
+    }
+
     #[test]
     fn configured_request_page_is_detected_after_normalization() {
         assert!(is_request_page_trigger(
@@ -614,5 +825,485 @@ mod tests {
             "Іншая старонка",
             &["Вікіпедыя:Запыты да схавальнікаў".to_string()]
         ));
+    }
+
+    #[tokio::test]
+    async fn watchdog_probe_requests_catchup_when_newer_wiki_edit_exists() {
+        let server = MockServer::start().await;
+        let previous = Utc::now() - TimeDelta::seconds(30);
+        let newer = previous + TimeDelta::seconds(10);
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(latest_recent_change_response(newer), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        harness
+            .runtime
+            .mark_realtime_event(Some("evt-1".to_string()), Some(previous))
+            .await;
+
+        let outcome =
+            probe_recentchange_freshness(Arc::clone(&harness.runtime), Duration::from_secs(10))
+                .await;
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert!(outcome.requires_catchup);
+        assert!(outcome.reason.contains("newer wiki edits exist"));
+        assert_eq!(
+            status.realtime.last_freshness_probe_source.as_deref(),
+            Some("api-freshness-probe")
+        );
+        assert_eq!(
+            status.realtime.current_lag_source.as_deref(),
+            Some("api-freshness-probe")
+        );
+        assert!(
+            status
+                .realtime
+                .last_event_observed_at
+                .is_some_and(|value| value > previous)
+        );
+    }
+
+    #[tokio::test]
+    async fn watchdog_probe_does_not_request_catchup_when_no_newer_edit_exists() {
+        let server = MockServer::start().await;
+        let previous = Utc::now() - TimeDelta::seconds(15);
+        let older = previous - TimeDelta::seconds(5);
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(latest_recent_change_response(older), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        harness
+            .runtime
+            .mark_realtime_event(Some("evt-2".to_string()), Some(previous))
+            .await;
+
+        let outcome =
+            probe_recentchange_freshness(Arc::clone(&harness.runtime), Duration::from_secs(10))
+                .await;
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert!(!outcome.requires_catchup);
+        assert!(outcome.reason.contains("no newer wiki edits were found"));
+        assert_eq!(status.realtime.last_event_observed_at, Some(previous));
+        assert_eq!(
+            status.realtime.last_freshness_probe_source.as_deref(),
+            Some("api-freshness-probe")
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_stream_reopen_does_not_retrigger_startup_recovery() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let observed_at = Utc::now() - TimeDelta::seconds(2);
+        harness
+            .runtime
+            .mark_realtime_event(Some("evt-3".to_string()), Some(observed_at))
+            .await;
+        harness
+            .runtime
+            .mark_stream_reconnecting(
+                "stream-error".to_string(),
+                "temporary network timeout".to_string(),
+                "real-time stream reconnecting after error".to_string(),
+            )
+            .await;
+
+        harness.runtime.mark_realtime_stream_open().await;
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(status.realtime.state, "healthy");
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.task_kind.as_str()),
+            Some("idle")
+        );
+        assert_eq!(
+            status.realtime.latest_notice.as_deref(),
+            Some("real-time stream opened")
+        );
+        assert!(!status.realtime.catchup_active);
+        assert_eq!(status.realtime.last_recovery_trigger, None);
+        assert_eq!(status.realtime.last_reconnect_reason, None);
+        assert!(status.realtime.last_offline_recovered_at.is_some());
+    }
+
+    #[test]
+    fn source_page_edit_routes_to_source_refresh_dispatch() {
+        let event = SyntheticRecentChange::default()
+            .with_title("Удзельнік:Wizardist/SuppressionList")
+            .with_revision_ids(Some(10), Some(11))
+            .parse();
+        let request_pages = vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()];
+        let watched = HashSet::from(["Foo".to_string()]);
+        let dispatch = dispatch_recentchange_event(
+            &event,
+            Some("stream-11"),
+            &RecentChangeDispatchContext {
+                source_title_normalized: "Удзельнік:Wizardist/SuppressionList",
+                request_pages: &request_pages,
+                watched_set: &watched,
+            },
+        );
+
+        match dispatch {
+            RecentChangeDispatch::SourceListRefresh(trigger) => {
+                assert_eq!(trigger.title, "Удзельнік:Wizardist/SuppressionList");
+                assert_eq!(trigger.trigger_revid, Some(11));
+            }
+            _ => panic!("expected source refresh dispatch"),
+        }
+    }
+
+    #[test]
+    fn request_page_edit_routes_to_request_refresh_dispatch() {
+        let event = SyntheticRecentChange::default()
+            .with_title("Вікіпедыя:Запыты_да_схавальнікаў")
+            .with_revision_ids(Some(10), Some(11))
+            .parse();
+        let request_pages = vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()];
+        let watched = HashSet::from(["Foo".to_string()]);
+        let dispatch = dispatch_recentchange_event(
+            &event,
+            Some("stream-11"),
+            &RecentChangeDispatchContext {
+                source_title_normalized: "Удзельнік:Wizardist/SuppressionList",
+                request_pages: &request_pages,
+                watched_set: &watched,
+            },
+        );
+
+        match dispatch {
+            RecentChangeDispatch::RequestPageRefresh(trigger) => {
+                assert_eq!(trigger.normalized_title, "Вікіпедыя:Запыты да схавальнікаў");
+                assert_eq!(trigger.trigger_revid, Some(11));
+            }
+            _ => panic!("expected request page refresh dispatch"),
+        }
+    }
+
+    #[test]
+    fn watched_revision_routes_to_live_dispatch() {
+        let event = SyntheticRecentChange::default()
+            .with_title("Foo")
+            .with_revision_ids(Some(10), Some(77))
+            .parse();
+        let request_pages = vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()];
+        let watched = HashSet::from(["Foo".to_string()]);
+        let dispatch = dispatch_recentchange_event(
+            &event,
+            Some("stream-77"),
+            &RecentChangeDispatchContext {
+                source_title_normalized: "Удзельнік:Wizardist/SuppressionList",
+                request_pages: &request_pages,
+                watched_set: &watched,
+            },
+        );
+
+        match dispatch {
+            RecentChangeDispatch::LiveWatchedRevision(candidate) => {
+                assert_eq!(candidate.title, "Foo");
+                assert_eq!(candidate.revid, 77);
+                assert_eq!(candidate.event_id.as_deref(), Some("stream-77"));
+            }
+            _ => panic!("expected live watched revision dispatch"),
+        }
+    }
+
+    #[test]
+    fn unwatched_revision_routes_to_ignored_live_dispatch() {
+        let event = SyntheticRecentChange::default()
+            .with_title("Baz")
+            .with_revision_ids(Some(10), Some(99))
+            .parse();
+        let request_pages = vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()];
+        let watched = HashSet::from(["Foo".to_string()]);
+        let dispatch = dispatch_recentchange_event(
+            &event,
+            Some("stream-99"),
+            &RecentChangeDispatchContext {
+                source_title_normalized: "Удзельнік:Wizardist/SuppressionList",
+                request_pages: &request_pages,
+                watched_set: &watched,
+            },
+        );
+
+        match dispatch {
+            RecentChangeDispatch::IgnoredLiveRevision(candidate) => {
+                assert_eq!(candidate.title, "Baz");
+                assert_eq!(candidate.revid, 99);
+            }
+            _ => panic!("expected ignored live revision dispatch"),
+        }
+    }
+
+    #[tokio::test]
+    async fn watched_revision_event_is_queued_for_live_hiding() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let event = SyntheticRecentChange::default()
+            .with_title("Foo")
+            .with_revision_ids(Some(10), Some(77))
+            .parse();
+
+        let event_id = handle_recentchange_event(&harness.runtime, event, Some("stream-77"))
+            .await
+            .unwrap();
+
+        let action = harness.work_rx.try_recv().unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(event_id.as_deref(), Some("stream-77"));
+        assert_eq!(action.title, "Foo");
+        assert_eq!(action.revids, vec![77]);
+        assert_eq!(action.event_id.as_deref(), Some("stream-77"));
+        assert_eq!(action.mode.label(), RevDelMode::Live.label());
+        assert_eq!(status.realtime.last_matching_title.as_deref(), Some("Foo"));
+        assert_eq!(status.realtime.last_matching_revid, Some(77));
+        assert!(status.realtime.last_action_queued_at.is_some());
+        assert_eq!(
+            status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .map(|outcome| outcome.outcome.as_str()),
+            Some("queued")
+        );
+    }
+
+    #[tokio::test]
+    async fn processed_watched_revision_is_not_requeued() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        harness.runtime.processed.write().await.insert(77);
+        let event = SyntheticRecentChange::default()
+            .with_title("Foo")
+            .with_revision_ids(Some(10), Some(77))
+            .parse();
+
+        let event_id = handle_recentchange_event(&harness.runtime, event, Some("stream-77"))
+            .await
+            .unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(event_id.as_deref(), Some("stream-77"));
+        assert!(harness.work_rx.try_recv().is_err());
+        assert_eq!(status.realtime.last_matching_title.as_deref(), Some("Foo"));
+        assert!(status.realtime.last_action_queued_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn non_watched_revision_event_is_observed_but_not_queued() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let event = SyntheticRecentChange::default()
+            .with_title("Baz")
+            .with_revision_ids(Some(10), Some(99))
+            .parse();
+
+        let event_id = handle_recentchange_event(&harness.runtime, event, Some("stream-99"))
+            .await
+            .unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(event_id.as_deref(), Some("stream-99"));
+        assert!(harness.work_rx.try_recv().is_err());
+        assert_eq!(status.realtime.last_matching_title, None);
+        assert_eq!(status.realtime.last_matching_revid, None);
+    }
+
+    fn test_snapshot(
+        source_revid: u64,
+        listed: &[&str],
+        watched: &[&str],
+        hash: &str,
+    ) -> SuppressionListCache {
+        SuppressionListCache {
+            source_title: "Удзельнік:Wizardist/SuppressionList".to_string(),
+            source_pageid: Some(1),
+            source_lastrevid: Some(source_revid),
+            source_last_timestamp: None,
+            fetched_at: Utc::now(),
+            listed_titles_normalized: listed.iter().map(|value| (*value).to_string()).collect(),
+            watched_titles_normalized: watched.iter().map(|value| (*value).to_string()).collect(),
+            redirect_map: BTreeMap::new(),
+            titles_hash_sha256: hash.to_string(),
+        }
+    }
+
+    #[test]
+    fn source_refresh_plan_reports_delta_and_starts_title_scoped_catchup() {
+        let before = test_snapshot(10, &["Foo", "Bar"], &["Foo", "Bar"], "old");
+        let after = test_snapshot(11, &["Bar", "Baz", "Qux"], &["Bar", "Baz", "Qux"], "new");
+        let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 0, 0).unwrap();
+        let completed_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 0, 5).unwrap();
+        let catchup_plan = plan_source_refresh_catchup(
+            &before,
+            &after,
+            SourceRefreshTriggerKind::SuppressionList,
+            10,
+        );
+        let refresh = plan_source_refresh(
+            &before,
+            &after,
+            true,
+            "Удзельнік:Wizardist/SuppressionList",
+            Some(11),
+            &catchup_plan,
+            started_at,
+            completed_at,
+            None,
+        );
+
+        assert_eq!(refresh.trigger_revid, Some(11));
+        assert_eq!(refresh.old_source_revid, Some(10));
+        assert_eq!(refresh.new_source_revid, Some(11));
+        assert_eq!(refresh.new_titles_count, 2);
+        assert_eq!(refresh.removed_titles_count, 1);
+        assert!(refresh.catchup_triggered);
+        assert_eq!(refresh.catchup_title_scope.as_deref(), Some("new-titles"));
+        assert_eq!(refresh.outcome, "catchup-started");
+        assert_eq!(
+            catchup_plan.followup,
+            SourceRefreshFollowup::TitleScoped {
+                scope_label: "new-titles",
+                titles: vec!["Baz".to_string(), "Qux".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn source_refresh_plan_defers_large_new_title_scope_when_backoff_is_active() {
+        let before = test_snapshot(10, &["Foo"], &["Foo"], "same");
+        let after = test_snapshot(11, &["Foo", "Bar", "Baz"], &["Foo", "Bar", "Baz"], "same");
+        let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 0, 0).unwrap();
+        let completed_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 0, 5).unwrap();
+        let deferred_until = Utc.with_ymd_and_hms(2026, 4, 29, 10, 2, 0).unwrap();
+        let catchup_plan = plan_source_refresh_catchup(
+            &before,
+            &after,
+            SourceRefreshTriggerKind::SuppressionList,
+            1,
+        );
+        let refresh = plan_source_refresh(
+            &before,
+            &after,
+            false,
+            "Удзельнік:Wizardist/SuppressionList",
+            Some(11),
+            &catchup_plan,
+            started_at,
+            completed_at,
+            Some(deferred_until),
+        );
+
+        assert!(!refresh.catchup_triggered);
+        assert_eq!(
+            refresh.catchup_title_scope.as_deref(),
+            Some("new-titles-large")
+        );
+        assert_eq!(refresh.deferred_until, Some(deferred_until));
+        assert_eq!(refresh.outcome, "catchup-deferred");
+        assert_eq!(
+            catchup_plan.followup,
+            SourceRefreshFollowup::TitleScoped {
+                scope_label: "new-titles-large",
+                titles: vec!["Bar".to_string(), "Baz".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn request_page_refresh_plan_uses_recent_window_when_titles_are_unchanged() {
+        let before = test_snapshot(10, &["Foo"], &["Foo"], "same");
+        let after = test_snapshot(11, &["Foo"], &["Foo"], "same");
+        let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 5, 0).unwrap();
+        let completed_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 5, 1).unwrap();
+        let catchup_plan =
+            plan_source_refresh_catchup(&before, &after, SourceRefreshTriggerKind::RequestPage, 10);
+        let refresh = plan_source_refresh(
+            &before,
+            &after,
+            true,
+            "Вікіпедыя:Запыты да схавальнікаў",
+            Some(55),
+            &catchup_plan,
+            started_at,
+            completed_at,
+            None,
+        );
+
+        assert!(refresh.catchup_triggered);
+        assert_eq!(
+            refresh.catchup_title_scope.as_deref(),
+            Some("request-window")
+        );
+        assert_eq!(refresh.outcome, "catchup-started");
+        assert_eq!(refresh.trigger_revid, Some(55));
+        assert_eq!(refresh.old_source_revid, Some(10));
+        assert_eq!(refresh.new_source_revid, Some(11));
+    }
+
+    #[test]
+    fn request_page_refresh_plan_prefers_new_titles_after_refresh() {
+        let before = test_snapshot(10, &["Foo"], &["Foo"], "old");
+        let after = test_snapshot(11, &["Foo", "Bar"], &["Foo", "Bar"], "new");
+        let started_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 5, 0).unwrap();
+        let completed_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 5, 1).unwrap();
+        let catchup_plan =
+            plan_source_refresh_catchup(&before, &after, SourceRefreshTriggerKind::RequestPage, 10);
+        let refresh = plan_source_refresh(
+            &before,
+            &after,
+            true,
+            "Вікіпедыя:Запыты да схавальнікаў",
+            Some(55),
+            &catchup_plan,
+            started_at,
+            completed_at,
+            None,
+        );
+
+        assert!(refresh.catchup_triggered);
+        assert_eq!(refresh.catchup_title_scope.as_deref(), Some("new-titles"));
+        assert_eq!(refresh.new_titles_count, 1);
+        assert_eq!(
+            catchup_plan.followup,
+            SourceRefreshFollowup::TitleScoped {
+                scope_label: "new-titles",
+                titles: vec!["Bar".to_string()],
+            }
+        );
     }
 }

@@ -60,13 +60,15 @@ unresolved_sample_limit = 25
 enabled = true
 timezone = "Europe/Minsk"
 start_time = "02:00"
+randomized_window_minutes = 180
 page_concurrency = 2
 batch_sleep_ms = 250
 
-[current_day_recheck]
+[daytime_verification]
 enabled = true
 min_delay_seconds = 3600
 max_delay_seconds = 21600
+window_hours = 24
 
 [logging]
 level = "info"

@@ -28,8 +28,40 @@ pub struct RuntimeStatus {
     pub last_notice: Option<String>,
     pub last_notice_at: Option<DateTime<Utc>>,
     pub resource_economy: Option<ResourceEconomySnapshot>,
+    pub compatibility_notice: Option<CompatibilityNotice>,
     pub realtime: RealtimeRuntimeStatus,
     pub reconciliation: ReconciliationRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CompatibilityNotice {
+    pub scope: String,
+    pub severity: String,
+    pub detected_at: Option<DateTime<Utc>>,
+    pub previous_value: Option<String>,
+    pub expected_value: Option<String>,
+    pub summary: String,
+    pub operator_action: String,
+    pub blocking: bool,
+}
+
+pub fn compatibility_notice_for_unreadable_surface(
+    scope: &str,
+    path: &Path,
+    expected_value: &str,
+    operator_action: &str,
+) -> CompatibilityNotice {
+    CompatibilityNotice {
+        scope: scope.to_string(),
+        severity: "migration-required".to_string(),
+        detected_at: Some(Utc::now()),
+        previous_value: Some(path.display().to_string()),
+        expected_value: Some(expected_value.to_string()),
+        summary: format!("existing {scope} surface could not be parsed safely"),
+        operator_action: operator_action.to_string(),
+        blocking: true,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,27 +76,42 @@ pub struct RealtimeRuntimeStatus {
     pub last_matching_edit_at: Option<DateTime<Utc>>,
     pub last_matching_title: Option<String>,
     pub last_matching_revid: Option<u64>,
+    pub last_matching_revid_url: Option<String>,
     pub last_action_queued_at: Option<DateTime<Utc>>,
     pub last_action_completed_at: Option<DateTime<Utc>>,
     pub last_successful_hide_at: Option<DateTime<Utc>>,
+    pub last_successful_hide_title: Option<String>,
+    pub last_successful_hide_revid: Option<u64>,
+    pub last_successful_hide_url: Option<String>,
     pub last_event_id: Option<String>,
     pub current_lag_seconds: Option<i64>,
+    pub current_lag_millis: Option<i64>,
+    pub current_lag_source: Option<String>,
     pub queue_depth: usize,
+    pub daemon_started_at: Option<DateTime<Utc>>,
+    pub current_task: Option<CurrentTaskSnapshot>,
     pub last_recovery_trigger: Option<String>,
     pub last_recovery_started_at: Option<DateTime<Utc>>,
     pub last_recovery_completed_at: Option<DateTime<Utc>>,
     pub last_reconnect_reason: Option<String>,
+    pub last_offline_started_at: Option<DateTime<Utc>>,
+    pub last_offline_recovered_at: Option<DateTime<Utc>>,
     pub last_freshness_probe_at: Option<DateTime<Utc>>,
     pub last_freshness_probe_source: Option<String>,
     pub catchup_active: bool,
     pub backoff_until: Option<DateTime<Utc>>,
     pub latest_error_code: Option<String>,
     pub latest_error: Option<ApiFailureSnapshot>,
+    pub latest_actionable_issue: Option<ActionableIssueSnapshot>,
     pub latest_notice: Option<String>,
     pub latest_outcome: Option<SuppressionOutcomeSnapshot>,
     pub latest_recovery_warnings: Vec<WarningSummary>,
     pub latest_recovery_summary: Option<CoverageSummary>,
     pub last_source_refresh: Option<SourceListRefresh>,
+    pub last_daytime_verification_at: Option<DateTime<Utc>>,
+    pub last_daytime_verification_window_start: Option<DateTime<Utc>>,
+    pub last_daytime_verification_window_end: Option<DateTime<Utc>>,
+    pub last_nightly_full_recheck_at: Option<DateTime<Utc>>,
 }
 
 impl Default for RealtimeRuntimeStatus {
@@ -79,29 +126,66 @@ impl Default for RealtimeRuntimeStatus {
             last_matching_edit_at: None,
             last_matching_title: None,
             last_matching_revid: None,
+            last_matching_revid_url: None,
             last_action_queued_at: None,
             last_action_completed_at: None,
             last_successful_hide_at: None,
+            last_successful_hide_title: None,
+            last_successful_hide_revid: None,
+            last_successful_hide_url: None,
             last_event_id: None,
             current_lag_seconds: None,
+            current_lag_millis: None,
+            current_lag_source: None,
             queue_depth: 0,
+            daemon_started_at: None,
+            current_task: None,
             last_recovery_trigger: None,
             last_recovery_started_at: None,
             last_recovery_completed_at: None,
             last_reconnect_reason: None,
+            last_offline_started_at: None,
+            last_offline_recovered_at: None,
             last_freshness_probe_at: None,
             last_freshness_probe_source: None,
             catchup_active: false,
             backoff_until: None,
             latest_error_code: None,
             latest_error: None,
+            latest_actionable_issue: None,
             latest_notice: None,
             latest_outcome: None,
             latest_recovery_warnings: Vec::new(),
             latest_recovery_summary: None,
             last_source_refresh: None,
+            last_daytime_verification_at: None,
+            last_daytime_verification_window_start: None,
+            last_daytime_verification_window_end: None,
+            last_nightly_full_recheck_at: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CurrentTaskSnapshot {
+    pub task_kind: String,
+    pub label: String,
+    pub progress_done: Option<usize>,
+    pub progress_total: Option<usize>,
+    pub window_start: Option<DateTime<Utc>>,
+    pub window_end: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub expected_resume_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ActionableIssueSnapshot {
+    pub severity: String,
+    pub summary: String,
+    pub next_action: String,
+    pub detected_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,9 +238,11 @@ pub struct ResourceEconomySnapshot {
 pub struct SuppressionOutcomeSnapshot {
     pub title: String,
     pub revid: u64,
+    pub revision_url: Option<String>,
     pub outcome: String,
     pub reason_code: Option<String>,
     pub mode: String,
+    pub source_label: String,
     pub observed_at: Option<DateTime<Utc>>,
     pub queued_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -166,6 +252,7 @@ pub struct SuppressionOutcomeSnapshot {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct CoverageSummary {
+    pub scope_label: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub requested_by: String,
@@ -187,6 +274,7 @@ pub struct CoverageSummary {
 pub struct UnresolvedExposureItem {
     pub title: String,
     pub revid: u64,
+    pub revision_url: Option<String>,
     pub age_seconds: Option<i64>,
     pub reason: String,
     pub next_action: String,
@@ -219,6 +307,47 @@ pub struct BenchmarkRun {
     pub completed_at: Option<DateTime<Utc>>,
     pub smoke_only: bool,
     pub unresolved_items: Vec<UnresolvedExposureItem>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CommandReportSurface {
+    pub command: String,
+    pub generated_at: Option<DateTime<Utc>>,
+    pub report_only: bool,
+    pub scope_label: Option<String>,
+    pub window: CommandReportWindow,
+    pub counts: CommandReportCounts,
+    #[serde(default, alias = "unresolved")]
+    pub unresolved_items: Vec<UnresolvedExposureItem>,
+    pub stopped_early_reason: Option<String>,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub next_action: Option<String>,
+    pub compatibility_notice: Option<CompatibilityNotice>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CommandReportWindow {
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CommandReportCounts {
+    #[serde(default, alias = "checked")]
+    pub checked: usize,
+    #[serde(default, alias = "hidden")]
+    pub hidden: usize,
+    #[serde(default, alias = "already_hidden")]
+    pub already_hidden: usize,
+    #[serde(default, alias = "skipped")]
+    pub skipped: usize,
+    #[serde(default, alias = "failed")]
+    pub failed: usize,
+    #[serde(default, alias = "unresolved")]
+    pub unresolved: usize,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -385,6 +514,7 @@ mod tests {
             last_notice: Some("ok".to_string()),
             last_notice_at: Some(Utc::now()),
             resource_economy: None,
+            compatibility_notice: None,
             realtime: RealtimeRuntimeStatus {
                 state: "healthy".to_string(),
                 queue_depth: 3,
@@ -392,8 +522,10 @@ mod tests {
                 latest_outcome: Some(SuppressionOutcomeSnapshot {
                     title: "Title".to_string(),
                     revid: 42,
+                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/42".to_string()),
                     outcome: "hidden".to_string(),
                     mode: "live".to_string(),
+                    source_label: "live hiding".to_string(),
                     ..SuppressionOutcomeSnapshot::default()
                 }),
                 ..RealtimeRuntimeStatus::default()
@@ -406,10 +538,13 @@ mod tests {
 
         assert_eq!(loaded.realtime.state, "healthy");
         assert_eq!(loaded.realtime.queue_depth, 3);
+        let latest_outcome = loaded.realtime.latest_outcome.unwrap();
+        assert_eq!(latest_outcome.outcome, "hidden");
         assert_eq!(
-            loaded.realtime.latest_outcome.unwrap().outcome.as_str(),
-            "hidden"
+            latest_outcome.revision_url.as_deref(),
+            Some("https://be.wikipedia.org/wiki/Special:Diff/42")
         );
+        assert_eq!(latest_outcome.source_label, "live hiding");
     }
 
     #[test]
@@ -424,6 +559,13 @@ mod tests {
                 coalesced_warning_count_recent: 42,
                 latest_measurement_at: Some(Utc::now()),
                 ..ResourceEconomySnapshot::default()
+            }),
+            compatibility_notice: Some(CompatibilityNotice {
+                scope: "command-report".to_string(),
+                severity: "warning".to_string(),
+                summary: "legacy report shape detected".to_string(),
+                operator_action: "trust the new report output".to_string(),
+                ..CompatibilityNotice::default()
             }),
             realtime: RealtimeRuntimeStatus {
                 latest_error: Some(ApiFailureSnapshot {
@@ -511,6 +653,13 @@ mod tests {
         );
         assert_eq!(
             loaded
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("command-report")
+        );
+        assert_eq!(
+            loaded
                 .realtime
                 .latest_recovery_summary
                 .as_ref()
@@ -526,5 +675,137 @@ mod tests {
                 .and_then(|warning| warning.retry_after_seconds),
             Some(30)
         );
+    }
+
+    #[test]
+    fn runtime_status_round_trips_precise_lag_current_task_and_actionable_issue() {
+        let started_at = Utc::now();
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            dry_run: false,
+            compatibility_notice: Some(CompatibilityNotice {
+                scope: "runtime".to_string(),
+                severity: "warning".to_string(),
+                summary: "older runtime artifact detected".to_string(),
+                operator_action: "review compatibility guidance".to_string(),
+                ..CompatibilityNotice::default()
+            }),
+            realtime: RealtimeRuntimeStatus {
+                state: "catching-up".to_string(),
+                current_lag_seconds: Some(1),
+                current_lag_millis: Some(284),
+                current_lag_source: Some("api-freshness-probe".to_string()),
+                current_task: Some(CurrentTaskSnapshot {
+                    task_kind: "catch-up".to_string(),
+                    label: "since last successful hide".to_string(),
+                    progress_done: Some(1),
+                    progress_total: Some(3),
+                    window_start: Some(started_at),
+                    window_end: Some(started_at),
+                    started_at: Some(started_at),
+                    expected_resume_at: None,
+                }),
+                latest_actionable_issue: Some(ActionableIssueSnapshot {
+                    severity: "error".to_string(),
+                    summary: "stream stale while newer wiki edits exist".to_string(),
+                    next_action: "watch the recovery window".to_string(),
+                    detected_at: Some(started_at),
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(loaded.realtime.current_lag_millis, Some(284));
+        assert_eq!(
+            loaded.realtime.current_lag_source.as_deref(),
+            Some("api-freshness-probe")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.label.as_str()),
+            Some("since last successful hide")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.summary.as_str()),
+            Some("stream stale while newer wiki edits exist")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.summary.as_str()),
+            Some("older runtime artifact detected")
+        );
+    }
+
+    #[test]
+    fn command_report_surface_loads_older_shape_with_aliases() {
+        let raw = r#"{
+          "command": "coverage-report",
+          "generated_at": "2026-04-08T14:12:00Z",
+          "window": {
+            "start": "2026-04-08T13:30:00Z",
+            "end": "2026-04-08T14:00:00Z"
+          },
+          "counts": {
+            "checked": 12,
+            "hidden": 3,
+            "already_hidden": 6,
+            "skipped": 2,
+            "unresolved": 1
+          },
+          "unresolved": [
+            {
+              "title": "Fixture Page",
+              "revid": 42,
+              "reason": "throttled",
+              "next_action": "retry after backoff"
+            }
+          ]
+        }"#;
+
+        let loaded: CommandReportSurface = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(loaded.command, "coverage-report");
+        assert_eq!(loaded.counts.checked, 12);
+        assert_eq!(loaded.counts.hidden, 3);
+        assert_eq!(loaded.counts.already_hidden, 6);
+        assert_eq!(loaded.counts.failed, 0);
+        assert_eq!(loaded.counts.unresolved, 1);
+        assert_eq!(loaded.unresolved_items.len(), 1);
+        assert!(loaded.compatibility_notice.is_none());
+    }
+
+    #[test]
+    fn unreadable_surface_notice_is_blocking_and_migration_required() {
+        let notice = compatibility_notice_for_unreadable_surface(
+            "runtime-status",
+            Path::new("/tmp/runtime_status.json"),
+            "readable runtime_status.json surface",
+            "replace or remove the unreadable runtime status file before trusting suppressor status",
+        );
+
+        assert_eq!(notice.scope, "runtime-status");
+        assert_eq!(notice.severity, "migration-required");
+        assert_eq!(
+            notice.previous_value.as_deref(),
+            Some("/tmp/runtime_status.json")
+        );
+        assert_eq!(
+            notice.expected_value.as_deref(),
+            Some("readable runtime_status.json surface")
+        );
+        assert!(notice.blocking);
     }
 }

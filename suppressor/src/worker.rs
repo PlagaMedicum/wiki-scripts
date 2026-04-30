@@ -89,11 +89,6 @@ pub async fn run_worker(runtime: Arc<AppRuntime>, mut rx: mpsc::Receiver<RevDelA
             Ok(()) => {
                 counter!("revdel_success_total").increment(action.revids.len() as u64);
                 histogram!("immediate_hide_latency_ms").record(start.elapsed().as_millis() as f64);
-                if let Some(observed_at) = action.observed_at {
-                    let elapsed_ms =
-                        (chrono::Utc::now() - observed_at).num_milliseconds().max(0) as f64;
-                    histogram!("event_observed_to_hide_latency_ms").record(elapsed_ms);
-                }
                 info!(
                     title = %action.title,
                     revids = ?action.revids,
@@ -180,9 +175,18 @@ fn persist_processed_revids(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use chrono::{TimeDelta, Utc};
     use tempfile::tempdir;
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
 
     use super::*;
+    use crate::metrics::snapshot_runtime_latency_metrics;
+    use crate::runtime::{
+        RevDelDispatch, RevDelMode, RuntimeStatusSurfaceMode, build_test_runtime_harness,
+    };
 
     #[test]
     fn persists_processed_revids_after_batch() {
@@ -198,5 +202,79 @@ mod tests {
         let saved: ProcessedRevidsState = crate::state::load_json(&path).unwrap().unwrap();
         assert_eq!(processed.revids, vec![20, 30, 40]);
         assert_eq!(saved.revids, vec![20, 30, 40]);
+    }
+
+    #[tokio::test]
+    async fn worker_marks_live_action_hidden_and_updates_last_successful_hide() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let runtime = Arc::clone(&harness.runtime);
+        let runtime_status = Arc::clone(&harness.runtime_status);
+        let worker = tokio::spawn(run_worker(Arc::clone(&runtime), harness.work_rx));
+        let observed_at = Utc::now() - TimeDelta::seconds(2);
+        let (completion_tx, completion_rx) = oneshot::channel();
+
+        runtime
+            .reconcile
+            .actions
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![77],
+                event_id: Some("evt-77".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(observed_at),
+                recovery_trigger: None,
+                completion_tx: Some(completion_tx),
+            })
+            .await
+            .unwrap();
+
+        let completion = timeout(Duration::from_secs(1), completion_rx)
+            .await
+            .unwrap();
+        assert!(completion.unwrap().is_ok());
+
+        let status = runtime_status.lock().await.clone();
+        let latest_outcome = status.realtime.latest_outcome.as_ref().unwrap();
+
+        assert_eq!(status.realtime.state, "healthy");
+        assert_eq!(status.realtime.queue_depth, 0);
+        assert_eq!(
+            status.realtime.last_successful_hide_title.as_deref(),
+            Some("Foo")
+        );
+        assert_eq!(status.realtime.last_successful_hide_revid, Some(77));
+        assert_eq!(
+            status.realtime.last_successful_hide_url.as_deref(),
+            Some("https://be.wikipedia.org/wiki/Special:Diff/77")
+        );
+        assert!(status.realtime.last_successful_hide_at.is_some());
+        assert_eq!(latest_outcome.outcome, "hidden");
+        assert_eq!(latest_outcome.mode, RevDelMode::Live.label());
+        assert_eq!(latest_outcome.source_label, RevDelMode::Live.source_label());
+        assert_eq!(
+            latest_outcome.revision_url.as_deref(),
+            Some("https://be.wikipedia.org/wiki/Special:Diff/77")
+        );
+        assert_eq!(latest_outcome.observed_at, Some(observed_at));
+        assert!(latest_outcome.completed_at.is_some());
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.task_kind.as_str()),
+            Some("idle")
+        );
+
+        let latency = snapshot_runtime_latency_metrics();
+        assert!(latency.observed_to_queue.sample_count >= 1);
+        assert!(latency.observed_to_queue.latest_ms.unwrap() >= 1_000);
+        assert!(latency.observed_to_hide.sample_count >= 1);
+        assert!(latency.observed_to_hide.latest_ms.unwrap() >= 1_000);
+
+        worker.abort();
     }
 }

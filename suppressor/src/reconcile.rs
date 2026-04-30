@@ -1,18 +1,16 @@
-use std::cmp::max;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, NaiveTime, TimeZone, Utc};
-use chrono_tz::Tz;
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use metrics::histogram;
-use rand::Rng;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::cache::{CachePersistence, enrich_redirects, fetch_redirect_target};
 use crate::runtime::{ReconcilePassContext, ReconciliationRuntime, RevDelMode};
+use crate::scheduler::rolling_window_start;
 use crate::state::{NightlySweepProgress, PageCheckpoint, save_json_atomic};
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -205,7 +203,12 @@ async fn reconcile_title(
             .cloned()
             .unwrap_or_default()
     };
-    let since = reconciliation_since(ctx.mode, checkpoint.last_reconciled_at, &ctx.timezone)?;
+    let since = reconciliation_since(
+        ctx.mode,
+        checkpoint.last_reconciled_at,
+        &ctx.timezone,
+        ctx.daytime_window_hours,
+    )?;
     let revisions = ctx.client.fetch_revisions(title, since).await?;
     let revisions_checked = revisions.len();
     metrics::counter!("nightly_sweep_pages_total").increment(1);
@@ -273,55 +276,17 @@ async fn reconcile_title(
     Ok(())
 }
 
-pub async fn next_nightly_delay(timezone: &str, start_time: &str) -> Result<std::time::Duration> {
-    let tz: Tz = timezone.parse()?;
-    let local_now = Utc::now().with_timezone(&tz);
-    let start = NaiveTime::parse_from_str(start_time, "%H:%M")?;
-    let today = local_now.date_naive();
-    let mut target = tz
-        .from_local_datetime(&today.and_time(start))
-        .single()
-        .ok_or_else(|| anyhow::anyhow!("Unable to resolve nightly local time"))?;
-    if target <= local_now {
-        target = tz
-            .from_local_datetime(&(today.succ_opt().unwrap().and_time(start)))
-            .single()
-            .ok_or_else(|| anyhow::anyhow!("Unable to resolve next nightly local time"))?;
-    }
-    Ok((target.with_timezone(&Utc) - Utc::now())
-        .to_std()
-        .unwrap_or_else(|_| std::time::Duration::from_secs(0)))
-}
-
-pub fn next_current_day_delay(
-    min_delay_seconds: u64,
-    max_delay_seconds: u64,
-) -> std::time::Duration {
-    let seconds = rand::thread_rng().gen_range(min_delay_seconds..=max_delay_seconds);
-    std::time::Duration::from_secs(seconds)
-}
-
-fn current_local_midnight(timezone: &str) -> Result<DateTime<Utc>> {
-    let tz: Tz = timezone.parse()?;
-    let local_now = Utc::now().with_timezone(&tz);
-    let midnight = tz
-        .from_local_datetime(&local_now.date_naive().and_hms_opt(0, 0, 0).unwrap())
-        .single()
-        .ok_or_else(|| anyhow::anyhow!("Unable to resolve local midnight"))?;
-    Ok(midnight.with_timezone(&Utc))
-}
-
 fn reconciliation_since(
     mode: ReconcileMode,
     previous: Option<DateTime<Utc>>,
     timezone: &str,
+    daytime_window_hours: u64,
 ) -> Result<Option<DateTime<Utc>>> {
-    match (mode, previous) {
-        (_, None) => Ok(None),
-        (ReconcileMode::Full, Some(previous)) => Ok(Some(previous)),
-        (ReconcileMode::CurrentDay, Some(previous)) => {
-            let midnight = current_local_midnight(timezone)?;
-            Ok(Some(max(previous, midnight)))
+    let _ = timezone;
+    match mode {
+        ReconcileMode::Full => Ok(previous),
+        ReconcileMode::CurrentDay => {
+            Ok(Some(rolling_window_start(Utc::now(), daytime_window_hours)))
         }
     }
 }
@@ -352,17 +317,28 @@ fn next_checkpoint(
 impl ReconcileMode {
     pub fn label(self) -> &'static str {
         match self {
-            ReconcileMode::CurrentDay => "current-day",
-            ReconcileMode::Full => "nightly",
+            ReconcileMode::CurrentDay => "last-24h",
+            ReconcileMode::Full => "nightly-full",
+        }
+    }
+
+    pub fn operator_label(self) -> &'static str {
+        match self {
+            ReconcileMode::CurrentDay => "Last 24 hours verification",
+            ReconcileMode::Full => "Full watched-set recheck",
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::TimeZone;
+    use tempfile::tempdir;
 
     use super::*;
+    use crate::runtime::{RuntimeStatusSurfaceMode, build_test_runtime_harness};
 
     #[test]
     fn batch_limit_uses_high_limit_rights() {
@@ -374,7 +350,7 @@ mod tests {
     fn full_mode_since_keeps_previous_checkpoint() {
         let previous = Utc.with_ymd_and_hms(2026, 4, 7, 21, 0, 0).unwrap();
         let since =
-            reconciliation_since(ReconcileMode::Full, Some(previous), "Europe/Warsaw").unwrap();
+            reconciliation_since(ReconcileMode::Full, Some(previous), "Europe/Warsaw", 24).unwrap();
 
         assert_eq!(since, Some(previous));
     }
@@ -412,5 +388,99 @@ mod tests {
         assert_eq!(next.last_reconciled_at, Some(last_seen));
         assert_eq!(next.last_reconciled_revision_timestamp, Some(last_seen));
         assert_eq!(next.last_reconciled_revid, Some(123));
+    }
+
+    #[test]
+    fn current_day_since_uses_rolling_last_24_hours_window() {
+        let previous = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
+        let since = reconciliation_since(
+            ReconcileMode::CurrentDay,
+            Some(previous),
+            "Europe/Warsaw",
+            24,
+        )
+        .unwrap()
+        .unwrap();
+        let delta = Utc::now().signed_duration_since(since).num_hours();
+
+        assert!((23..=24).contains(&delta));
+        assert!(since > previous);
+    }
+
+    #[test]
+    fn operator_labels_use_plain_language() {
+        assert_eq!(
+            ReconcileMode::CurrentDay.operator_label(),
+            "Last 24 hours verification"
+        );
+        assert_eq!(
+            ReconcileMode::Full.operator_label(),
+            "Full watched-set recheck"
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_full_recheck_supersedes_active_last_24h_rerun() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let coordinator = Arc::new(ReconcileCoordinator::default());
+        {
+            let mut state = coordinator.state.lock().await;
+            state.active = true;
+            state.pending = Some(ReconcileMode::CurrentDay);
+        }
+
+        coordinator
+            .request_run(Arc::clone(&harness.runtime.reconcile), ReconcileMode::Full)
+            .await;
+
+        let state = coordinator.state.lock().await;
+        assert!(state.active);
+        assert_eq!(state.pending, Some(ReconcileMode::Full));
+        drop(state);
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert_eq!(
+            status.reconciliation.queued_mode.as_deref(),
+            Some("nightly-full")
+        );
+        assert_eq!(
+            status.last_notice.as_deref(),
+            Some("queued nightly-full reconciliation rerun")
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_full_recheck_is_not_downgraded_by_later_last_24h_request() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let coordinator = Arc::new(ReconcileCoordinator::default());
+        {
+            let mut state = coordinator.state.lock().await;
+            state.active = true;
+            state.pending = Some(ReconcileMode::Full);
+        }
+
+        coordinator
+            .request_run(
+                Arc::clone(&harness.runtime.reconcile),
+                ReconcileMode::CurrentDay,
+            )
+            .await;
+
+        let state = coordinator.state.lock().await;
+        assert!(state.active);
+        assert_eq!(state.pending, Some(ReconcileMode::Full));
+        drop(state);
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert_eq!(
+            status.reconciliation.queued_mode.as_deref(),
+            Some("nightly-full")
+        );
+        assert_eq!(
+            status.last_notice.as_deref(),
+            Some("queued nightly-full reconciliation rerun")
+        );
     }
 }

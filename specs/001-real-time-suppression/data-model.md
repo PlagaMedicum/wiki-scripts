@@ -3,7 +3,7 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Data model for real-time suppression recovery.
-  source: speckit-plan on 2026-04-28
+  source: speckit-plan on 2026-04-29
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -11,78 +11,83 @@ docmeta:
 
 ## WatchedSensitivePage
 
-Represents a page whose eligible new revisions must be protected.
+Represents a page whose eligible revisions must be protected by the suppressor.
 
 Fields:
 
-- `title`: Canonical display title.
-- `normalized_title`: Normalized title used for matching.
-- `source`: Suppression-list source page or redirect-derived source.
+- `title`: Canonical page title.
+- `normalized_title`: Matching key used by live events and recovery queries.
+- `source_kind`: `suppression-list`, `request-page`, `redirect-derived`, or another explicit local
+  source classification.
 - `active`: Whether the page is currently watched.
-- `last_cache_seen_at`: Time the page was last present in the local cache.
+- `last_cache_seen_at`: Time the title last appeared in the active cache snapshot.
 
 Validation rules:
 
-- `normalized_title` must match the same normalization rules used by live recentchange events.
-- Only active watched pages are eligible for live hiding or catch-up hiding.
+- `normalized_title` must match the same normalization logic used by recentchange parsing and
+  catch-up queries.
+- Only active watched pages are eligible for live hiding or automated recovery.
 
 Relationships:
 
 - Has many `ObservedEdit` records.
-- Belongs to the current suppression-list cache snapshot.
+- Belongs to a cache snapshot that may be refreshed by source-page edits.
 
 ## ObservedEdit
 
-Represents a watched-page revision observed from the live stream or a catch-up/coverage query.
+Represents a watched-page revision observed either live or through a recovery or verification path.
 
 Fields:
 
 - `revid`: Revision identifier.
-- `title`: Page title at observation time.
-- `normalized_title`: Normalized page title at observation time.
-- `observed_at`: Local observation time.
+- `title`: Title at observation time.
+- `normalized_title`: Normalized title at observation time.
 - `published_at`: Wiki revision timestamp when available.
-- `event_id`: Stream event ID when available.
-- `source`: `live`, `startup-catchup`, `reconnect-catchup`, `stale-catchup`, `manual-catchup`, or `coverage`.
-- `user_present`: Whether actor metadata was present without storing its value in routine status.
-- `comment_present`: Whether comment metadata was present without storing its value in routine status.
-- `eligibility`: `eligible`, `not-watched`, `not-revision`, `already-processed`, `policy-skipped`, or `unknown`.
-- `outcome`: Current `SuppressionOutcome` for this revision.
+- `observed_at`: Local observation timestamp.
+- `observation_kind`: `live`, `gap-recovery`, `rolling-last-24h`, `nightly-full`,
+  `manual-emergency`, `coverage-report`, or `source-refresh`.
+- `event_cursor`: Optional stream cursor or resume token retained for transport logic only.
+- `revision_url`: Safe browser-openable revision or diff URL.
+- `eligibility`: `eligible`, `policy-skipped`, `already-processed`, `not-watched`,
+  `missing-metadata`, or `unknown`.
+- `latest_outcome`: Current `SuppressionOutcome`.
 
 Validation rules:
 
-- `revid` is required for any hide attempt.
-- `title` and `normalized_title` are required for watched-page decisions.
-- Sensitive text, comments, credentials, and tokens are not stored in routine status or coverage reports.
+- `revid` is required for any hide or operator inspection path.
+- `revision_url` must be derivable without exposing hidden content or raw comments.
+- Sensitive payloads are not stored in routine operator state.
 
 Relationships:
 
-- Belongs to one `WatchedSensitivePage` when eligible or watched.
+- Belongs to one `WatchedSensitivePage` when matched to the watched set.
 - Has zero or more `SuppressionAction` attempts.
 
 ## SuppressionAction
 
-Represents an attempt to hide one or more revision IDs.
+Represents a hide attempt or confirmed no-op for an observed revision.
 
 Fields:
 
-- `action_id`: Local unique identifier or deterministic revision/batch key.
-- `revids`: Revision IDs included in the hide request.
+- `action_id`: Local unique identifier or deterministic revision key.
+- `revid`: Revision identifier.
 - `title`: Page title for operator context.
-- `mode`: `live`, `catchup`, `coverage`, `reconciliation`, or `manual`.
-- `queued_at`: Time the action entered the worker queue.
-- `submitted_at`: Time the hide request was submitted.
-- `completed_at`: Time the action reached success or terminal failure.
-- `outcome`: `hidden`, `already-hidden`, `skipped`, `retrying`, `failed`, `unresolved`, or `blocked`.
-- `reason_code`: Compact non-sensitive reason such as `duplicate`, `not-watched`, `bad-token-retried`, `permission-denied`, `network`, `api-transient`, or `api-terminal`.
-- `error`: Optional `ApiFailureSnapshot` for failed, retrying, unresolved, or blocked actions.
-- `attempt_count`: Number of worker/API attempts.
+- `mode`: `live`, `recovery`, `verification`, `reconciliation`, `manual`, or `benchmark`.
+- `queued_at`: Time work entered the queue.
+- `submitted_at`: Time the API request was sent.
+- `completed_at`: Time the action reached terminal success or terminal failure.
+- `attempt_count`: Number of attempts.
+- `outcome`: `hidden`, `already-hidden`, `skipped`, `retrying`, `failed`, `unresolved`, or
+  `blocked`.
+- `reason_code`: Compact non-sensitive reason such as `duplicate`, `policy-skip`,
+  `permission-denied`, `rate-limited`, `network`, or `api-terminal`.
+- `error`: Optional `ApiFailureSnapshot`.
 
 Validation rules:
 
-- Do not mark a revision processed until hiding succeeds or already-hidden status is confirmed.
-- Transient failures remain retryable or unresolved; fatal rights/session failures move realtime health to blocked.
+- A revision is not treated as fully covered until a terminal outcome is recorded.
 - Replayed events must not create conflicting duplicate actions.
+- Fatal auth or permission failures must surface a blocked protection state.
 
 State transitions:
 
@@ -95,340 +100,294 @@ queued -> skipped
 queued -> blocked
 ```
 
-## ApiFailureSnapshot
+## RecoveryAnchor
 
-Represents compact non-sensitive evidence for a failed MediaWiki API call or transport operation.
+Represents the trusted starting point for automatic or operator-initiated recovery.
 
 Fields:
 
-- `class`: `api-json-error`, `http-status`, `non-json-response`, `decode-error`, `network`, `timeout`, `auth-session`, or `unknown`.
-- `api_code`: MediaWiki API error code when present, such as `badtimestamp`, `badtoken`, or `permissiondenied`.
-- `http_status`: HTTP status code when available.
-- `content_type`: Response content type when available.
-- `retryable`: Whether the daemon considers the failure transient.
-- `retry_after_seconds`: Optional retry delay derived from `Retry-After` or a local throttle policy.
-- `operation`: `fetch-revisions`, `fetch-page-content`, `fetch-source-metadata`, `revisiondelete`, `login`, `csrf-token`, `userinfo`, or `freshness-probe`.
-- `sample_title`: Optional page title associated with the failure.
-- `sample_revid`: Optional revision ID associated with the failure.
-- `message`: Short redacted message suitable for TUI display.
-- `occurred_at`: Time the failure was classified.
+- `anchor_kind`: `last-successful-hide`, `trusted-fallback`, or `operator-specified`.
+- `anchor_at`: Timestamp from which recovery coverage begins.
+- `recorded_at`: Time the anchor value itself was recorded or selected.
+- `source_surface`: `runtime-status`, `legacy-state`, `command-input`, or another explicit source.
+- `fallback_reason`: Reason a non-primary anchor was used, such as `missing-last-successful-hide`
+  or `unreadable-state`.
 
 Validation rules:
 
-- Must not store full response bodies, hidden text, raw comments, credentials, tokens, cookies, or session material.
-- Decode and non-JSON failures must preserve enough metadata to tell whether the daemon contacted MediaWiki and what kind of response came back.
-- `HTTP 429` or equivalent throttle responses should preserve `retry_after_seconds` when available so the TUI and recovery loops can agree on when work may resume.
-- Repeated failures with the same class/code may be aggregated in summaries while retaining a small safe sample.
+- Automatic recovery prefers `last-successful-hide`.
+- Any fallback anchor must be explicit and operator-visible when it changes the recovery start
+  point.
+- Recovery may not silently truncate to a newer arbitrary recent window.
+
+Relationships:
+
+- Used by `VerificationRun` when the run type is gap recovery or emergency catch-up.
+
+## VerificationRun
+
+Represents one bounded recovery or verification job and its operator-visible scope.
+
+Fields:
+
+- `run_kind`: `gap-recovery`, `rolling-last-24h`, `nightly-full`, `manual-emergency`,
+  `coverage-report`, or `source-refresh-catchup`.
+- `trigger`: `daemon-start`, `stream-gap`, `stream-stale`, `reconnect-error`, `operator`,
+  `scheduler-daytime`, `scheduler-nightly`, or `source-refresh`.
+- `window_start`: Start timestamp when the run has a time window.
+- `window_end`: End timestamp when the run has a time window.
+- `scope_label`: Human-readable summary such as `since last successful hide`, `last 24 hours`, or
+  `full watched set`.
+- `page_scope_count`: Number of watched pages in scope when known.
+- `progress_done`: Completed pages or units.
+- `progress_total`: Total pages or units when known.
+- `started_at`: Time the run started.
+- `completed_at`: Time the run finished or stopped.
+- `backoff_until`: When throttling delays resume.
+- `stopped_early_reason`: Repeated-root-cause reason such as `rate-limited`.
+- `counts`: `VerificationCounts`.
+- `warning_summaries`: Bounded list of `WarningSummary`.
+- `unresolved_items`: Bounded list of `UnresolvedExposureItem`.
+
+Validation rules:
+
+- Every run must report either a concrete time window or an explicit full-scope label.
+- Daytime verification always uses a rolling 24-hour window.
+- Nightly full recheck is distinct from rolling verification even if both run on the same date.
+- Progress and unresolved samples remain bounded for low-spec safety.
+
+Relationships:
+
+- Uses zero or one `RecoveryAnchor`.
+- Produces zero or more `ObservedEdit` outcomes.
+
+## VerificationCounts
+
+Represents the bounded counts summary for a recovery or verification run.
+
+Fields:
+
+- `pages_checked`
+- `edits_checked`
+- `hidden_count`
+- `already_hidden_count`
+- `skipped_count`
+- `failed_count`
+- `unresolved_count`
+
+Validation rules:
+
+- Counts must cover every checked eligible edit exactly once across the outcome buckets.
+
+## ApiFailureSnapshot
+
+Represents a compact non-sensitive classification of a MediaWiki or transport failure.
+
+Fields:
+
+- `class`: `api-json-error`, `http-status`, `non-json-response`, `decode-error`, `network`,
+  `timeout`, `auth-session`, or `unknown`.
+- `api_code`: MediaWiki API error code when present.
+- `http_status`: HTTP status when present.
+- `content_type`: Response content type when present.
+- `retryable`: Whether the daemon considers the failure transient.
+- `retry_after_seconds`: Retry delay from `Retry-After` or local policy when available.
+- `operation`: `fetch-revisions`, `revisiondelete`, `source-refresh`, `freshness-probe`,
+  `coverage-report`, or another explicit operation.
+- `sample_title`: Safe sample title when useful.
+- `sample_revid`: Safe sample revision ID when useful.
+- `message`: Short redacted operator-facing message.
+- `occurred_at`: Classification time.
+
+Validation rules:
+
+- Never persist response bodies, hidden text, raw comments, cookies, credentials, or tokens.
+- Rate-limit failures must preserve backoff information when possible.
+- The same snapshot shape must work for live, recovery, verification, and source-refresh failures.
 
 ## WarningSummary
 
-Represents an aggregated repeated-failure root cause captured during catch-up, coverage, or reconciliation.
+Represents one repeated-root-cause warning aggregated across a run.
 
 Fields:
 
-- `class`: Classified failure class from `ApiFailureSnapshot`.
-- `api_code`: Optional API error code when the repeated cause is a MediaWiki JSON error.
-- `http_status`: Optional HTTP status when the repeated cause comes from transport or edge throttling.
-- `operation`: Operation affected, such as `fetch-revisions`.
-- `retryable`: Whether the repeated cause is currently considered retryable.
-- `count`: Number of repeated failures aggregated into the summary.
-- `sample_titles`: Small bounded sample of affected titles.
-- `sample_revids`: Small bounded sample of affected revision IDs when safe and useful.
-- `first_occurred_at`: Time the repeated cause was first observed in the run.
-- `last_occurred_at`: Time the repeated cause was last observed in the run.
-- `stopped_early`: Whether the run paused or stopped because this repeated cause reached the configured limit.
+- `class`
+- `api_code`
+- `http_status`
+- `retryable`
+- `retry_after_seconds`
+- `operation`
+- `count`
+- `sample_titles`
+- `sample_revids`
+- `message`
+- `stopped_early`
 
 Validation rules:
 
-- Sample lists must remain bounded.
-- One repeated root cause must not expand into one warning record per watched page.
-- `stopped_early=true` means aggregate counts may exceed the number of sampled unresolved items retained in durable state.
+- One repeated root cause may not expand into one durable warning entry per watched page.
+- Sample lists remain bounded.
 
-## SourceListRefresh
+## PrimaryOperatorStatus
 
-Represents an observed change to the suppression-list source or request page and the recovery work triggered by that change.
+Represents the operator-first summary needed by the compact TUI view.
 
 Fields:
 
-- `trigger_title`: Page that caused the refresh, such as `Удзельнік:Wizardist/SuppressionList` or `Вікіпедыя:Запыты да схавальнікаў`.
-- `trigger_revid`: Revision ID of the triggering edit when available.
-- `started_at`: Local time the refresh started.
-- `completed_at`: Local time the refresh completed or failed.
-- `old_source_revid`: Previous cached source revision.
-- `new_source_revid`: New source revision after refresh.
-- `new_titles`: Newly added watched titles after diffing the old and new cache snapshots.
-- `removed_titles`: Titles removed from the watched set after refresh.
-- `redirects_reused`: Whether existing redirect expansion was preserved.
-- `catchup_triggered`: Whether immediate bounded catch-up was started.
-- `catchup_title_scope`: `new-titles`, `request-window`, or `all-watched`.
-- `deferred_until`: Optional timestamp when immediate catch-up is postponed by a throttle or shared backoff state.
-- `outcome`: `unchanged`, `refreshed`, `refresh-failed`, `catchup-started`, `catchup-deferred`, `catchup-failed`, or `completed`.
-- `error`: Optional `ApiFailureSnapshot`.
+- `protection_state`: `healthy`, `recovering`, `degraded`, `blocked`, `stale`, `reconnecting`, or
+  `stopped`.
+- `daemon_pid`: PID when known from the supervisor view.
+- `daemon_started_at`: Time continuous daemon protection began.
+- `uptime_seconds`: Current daemon uptime.
+- `current_task`: Optional `OperatorTaskStatus`.
+- `last_successful_hide`: Optional `ObservedEditSummary`.
+- `last_observed_event`: Optional `ObservedEditSummary`.
+- `latest_actionable_issue`: Optional `ActionableIssue`.
+- `lag_seconds`: Compatibility whole-seconds lag value.
+- `lag_millis`: Additive precise lag value for sub-second operator display.
+- `lag_source`: `stream` or `api-probe`.
+- `recent_offline_interval`: Optional `OfflineInterval`.
+- `compatibility_notice`: Optional `CompatibilityNotice`.
 
 Validation rules:
 
-- A successful source-list refresh that adds titles must trigger immediate bounded catch-up over those titles unless an operator explicitly runs report-only mode.
-- If a shared throttle/backoff state prevents immediate catch-up, the refresh must persist `catchup-deferred` with `deferred_until` and a clear reason instead of pretending the refresh completed normally.
-- Refresh failures must be visible as unhealthy or actionable notices; they must not be silently ignored.
-- Routine automated benchmarks must not edit the production source list.
+- The primary view must answer current operator questions before showing internal counters.
+- Raw transport cursors, processed-ring sizes, and checkpoint-page counts are secondary diagnostics,
+  not primary status.
 
-## SuppressionOutcome
+## OperatorTaskStatus
 
-Represents the latest known state for an observed edit.
-
-Values:
-
-- `hidden`: The revision's public user/comment metadata was hidden by the daemon.
-- `already-hidden`: The revision did not require action because it was already hidden.
-- `skipped`: The revision is not eligible under policy.
-- `retrying`: A transient failure occurred and retry remains pending.
-- `failed`: An action attempt failed and no retry is currently active.
-- `unresolved`: The edit may still be exposed and requires catch-up or operator review.
-- `blocked`: Hiding could not continue because of rights, session, or wiki-side blocking conditions.
-
-Validation rules:
-
-- Accident-window reports must account for every checked eligible edit with one of these outcomes.
-- `unresolved` and `blocked` outcomes must be visible to the operator.
-
-## RuntimeStatusSurface
-
-Represents the daemon-owned machine-readable status surface used by the TUI and operator diagnostics.
+Represents the background work currently active or most recently completed.
 
 Fields:
 
-- `daemon_state`: Current daemon lifecycle state such as `running` or `stopped`.
-- `dry_run`: Whether the daemon is currently configured not to issue live hides.
-- `last_notice`: Latest compact operator notice from the daemon-owned runtime surface.
-- `last_notice_at`: Time the latest daemon notice was recorded.
-- `resource_economy`: Optional `ResourceEconomySnapshot` for recent bounded resource measurements.
-- `compatibility_notice`: Optional `CompatibilityNotice` when the previously documented operator setup, persisted state shape, or launch-path assumption is no longer safe to trust without operator action.
-- `realtime`: Current `RealtimeHealth` snapshot.
-- `reconciliation`: Existing bounded reconciliation status persisted alongside realtime state.
+- `task_kind`: `idle`, `gap-recovery`, `rolling-last-24h`, `nightly-full`, `source-refresh`,
+  `manual-command`, or `backoff`.
+- `label`: Plain-language description shown to the operator.
+- `window_start`
+- `window_end`
+- `progress_done`
+- `progress_total`
+- `started_at`
+- `expected_resume_at`
 
 Validation rules:
 
-- The long-running daemon is the only writer for this surface; one-shot commands may read it but must not overwrite or impersonate it.
-- A blocking or `migration-required` `CompatibilityNotice` must prevent the overall operator surface from appearing fully healthy or production-ready.
-- Missing newer fields in older persisted files must degrade safely through documented defaults rather than a false healthy interpretation.
+- A task must carry either a window or an explicit full-scope label.
+- `idle` carries no misleading progress numbers.
 
-## RealtimeHealth
+## ObservedEditSummary
 
-Represents the daemon's live protection state.
+Represents a safe summary row for a meaningful last event or last hide.
 
 Fields:
 
-- `state`: `starting`, `healthy`, `catching-up`, `stale`, `reconnecting`, `unhealthy`, `blocked`, or `stopped`.
-- `last_state_changed_at`: Last time the realtime state changed.
-- `stale_threshold_seconds`: Configured freshness threshold for treating the live path as stale.
-- `last_stream_opened_at`: Last successful stream open time.
-- `last_event_observed_at`: Last recentchange event observed for the target wiki.
-- `last_matching_edit_at`: Last watched-page revision event observed.
-- `last_action_queued_at`: Last time a hide action was queued.
-- `last_action_completed_at`: Last time a hide action completed.
-- `last_successful_hide_at`: Last successful hide time.
-- `last_event_id`: Last stream event ID recorded.
-- `current_lag_seconds`: Current freshness lag estimate.
-- `queue_depth`: Current worker queue depth.
-- `last_recovery_trigger`: Why recovery or catch-up is running, such as `startup`, `reconnect-error`, `invalid-resume`, `silent-starvation`, or `operator-manual`.
-- `last_recovery_started_at`: Last time bounded recovery started.
-- `last_recovery_completed_at`: Last time bounded recovery completed.
-- `last_reconnect_reason`: Latest reconnect or stream-failure reason suitable for operator display.
-- `last_freshness_probe_at`: Last time the bounded freshness probe ran.
-- `last_freshness_probe_source`: `stream`, `api-probe`, or `unknown`.
-- `catchup_active`: Whether bounded catch-up is running.
-- `backoff_until`: Optional time until recovery work should remain paused because of throttling.
-- `latest_error_code`: Compact latest actionable error.
-- `latest_error`: Optional `ApiFailureSnapshot` or source-list failure summary.
-- `latest_outcome`: Optional compact summary of the latest `SuppressionAction`, including its `mode`, `outcome`, `reason_code`, and safe timestamps.
-- `latest_recovery_warnings`: Bounded list of `WarningSummary` items from the most recent recovery run.
-- `latest_notice`: Operator-facing current status.
-- `last_source_refresh`: Optional `SourceListRefresh` summary.
+- `title`
+- `revid`
+- `revision_url`
+- `occurred_at`
+- `outcome_label`
 
 Validation rules:
 
-- A running daemon cannot report `healthy` while realtime observation is stale beyond the configured threshold and recovery has not completed.
-- A running daemon cannot report `healthy` while `backoff_until` is still active for required recovery work.
-- A running daemon cannot report `healthy` only because the stream is fresh when the latest live suppression outcome is still `failed`, `unresolved`, or `blocked` without a compensating recovery result.
-- `state=catching-up` requires either an active catch-up run, an active recovery backoff, or a still-incomplete recovery decision; otherwise the state must converge to `healthy`, `unhealthy`, `reconnecting`, or `blocked`.
-- Rights/session failures set `state` to `blocked`.
-- The daemon's realtime status surface is authoritative for live health; one-shot operator commands and reports must not overwrite it.
-- `last_recovery_trigger=startup` is reserved for true daemon bootstrap or an explicit bootstrap recovery decision, not every ordinary stream reopen.
-- TUI rendering must expose the state and latest notice without requiring log inspection.
-- Repeated API failures must be summarized by class and count so one root cause cannot flood the operator terminal.
-- Compact operator surfaces should prioritize active realtime failure, throttle, or backoff context over lower-priority reconciliation details.
-- Operator surfaces should distinguish stream freshness from live hide effectiveness so `current_lag_seconds=0` cannot mask ineffective suppression.
+- The summary must be directly usable by a human and safe to show in the TUI.
+
+## ActionableIssue
+
+Represents the single most important problem requiring operator attention now.
+
+Fields:
+
+- `severity`: `info`, `warning`, `error`, or `blocked`.
+- `kind`: `rate-limit`, `auth`, `permission`, `stream-gap`, `compatibility`, `source-refresh`, or
+  another explicit category.
+- `summary`: Plain-language issue summary.
+- `next_action`: Exact next operator action when one is required.
+- `related_revid`
+- `related_revision_url`
+- `detected_at`
+
+Validation rules:
+
+- The issue must be compact and non-sensitive.
+- If no operator action is required, the field may be omitted.
+
+## OfflineInterval
+
+Represents a recent known or inferred offline or stalled protection interval.
+
+Fields:
+
+- `started_at`
+- `ended_at`
+- `duration_seconds`
+- `reason`
+
+Validation rules:
+
+- Present only when the interval is meaningful for operator trust or recovery interpretation.
 
 ## CompatibilityNotice
 
-Represents a bounded machine-readable diagnostic that the previously documented operator setup is no longer safe to trust without migration or explicit verification.
+Represents a bounded machine-readable migration or incompatibility diagnostic.
 
 Fields:
 
-- `scope`: `runtime-status`, `command-report`, `pid-file`, `launch-path`, `supervisor-output`, or another explicit operator-facing surface.
+- `scope`: `runtime-status`, `command-report`, `launch-path`, `pid-file`, `supervisor-output`, or
+  another operator-facing surface.
 - `severity`: `info`, `warning`, or `migration-required`.
-- `detected_at`: Time the incompatibility or drift was detected.
-- `previous_value`: Previous documented assumption or surface when it is safe to name, such as a systemd unit or older report shape.
-- `expected_value`: Current authoritative surface or required shape.
-- `summary`: Compact human-readable explanation suitable for the TUI or release notes.
-- `operator_action`: Exact next action required before trusting the current setup.
-- `blocking`: Whether this notice should prevent a healthy/ready interpretation until acted on.
+- `detected_at`
+- `previous_value`
+- `expected_value`
+- `summary`
+- `operator_action`
+- `rollback_path`
+- `blocking`
 
 Validation rules:
 
-- The notice must stay compact and omit hidden text, raw comments, credentials, tokens, cookies, and response bodies.
-- `severity=migration-required` or `blocking=true` means the operator surface must not silently present the system as healthy or production-ready.
-- The daemon may attach the notice to runtime status, and one-shot commands may emit the same structure in their own bounded reports, but command notices must not masquerade as daemon realtime truth.
-- If the previously documented setup remains valid, no notice is emitted.
+- `blocking=true` or `severity=migration-required` prevents a healthy or release-ready
+  interpretation until acted on.
+- The notice remains compact and non-sensitive.
+
+## OperatorCommandReport
+
+Represents the bounded output of a one-shot operator command.
+
+Fields:
+
+- `command`: `emergency-catchup`, `coverage-report`, `coverage-last-24h`, `nightly-recheck-now`,
+  or another explicit command.
+- `generated_at`
+- `report_only`
+- `window_start`
+- `window_end`
+- `scope_label`
+- `counts`: `VerificationCounts`
+- `unresolved_items`
+- `stopped_early_reason`
+- `backoff_until`
+- `next_action`
+- `compatibility_notice`
+
+Validation rules:
+
+- One-shot command reports must not replace daemon realtime truth.
+- The `Last 24 hours` preset must carry that exact label in the report surface.
 
 ## ResourceEconomySnapshot
 
-Represents bounded resource measurements kept in runtime status for low-spec verification and regression checks.
+Represents compact recent resource evidence.
 
 Fields:
 
-- `queue_depth_max_recent`: Highest queue depth observed in the recent measurement window.
-- `api_concurrency_max_recent`: Highest API concurrency observed in the recent measurement window.
-- `state_bytes_recent`: Approximate bytes across the main runtime state surfaces or the currently measured state file.
-- `coalesced_warning_count_recent`: Count of repeated warnings folded into summaries during the recent measurement window.
-- `latest_measurement_at`: Time the snapshot was last updated.
+- `queue_depth_max_recent`
+- `api_concurrency_max_recent`
+- `state_bytes_recent`
+- `coalesced_warning_count_recent`
+- `latest_measurement_at`
 
 Validation rules:
 
-- The snapshot is a compact recent summary, not a long-term timeseries.
-- Resource measurements must remain bounded and cheap enough for continuous local use.
-
-## CoverageWindow
-
-Represents a bounded check over a recent incident or downtime range.
-
-Fields:
-
-- `started_at`: Window start timestamp.
-- `ended_at`: Window end timestamp.
-- `requested_by`: `operator`, `startup`, `reconnect`, or `watchdog`.
-- `pages_checked`: Count of watched pages checked.
-- `edits_checked`: Count of candidate edits checked.
-- `hidden_count`: Count hidden by this run.
-- `already_hidden_count`: Count already hidden before this run.
-- `skipped_count`: Count skipped by policy.
-- `failed_count`: Count with terminal failure.
-- `unresolved_count`: Count requiring follow-up.
-- `unresolved_items`: Compact list of page title, revision ID, age, reason, and next action.
-- `warning_summaries`: Optional bounded list of `WarningSummary` items captured during the run.
-
-Validation rules:
-
-- Every checked eligible edit must be counted exactly once.
-- Persisted unresolved detail must stay bounded even when `unresolved_count` is large.
-- Reports must not include hidden text, full edit comments, credentials, or tokens.
-
-## OperatorCommandRun
-
-Represents a bounded one-shot operator command launched from the CLI or TUI.
-
-Fields:
-
-- `command_name`: `check-auth`, `print-config`, `emergency-catchup`, `coverage-report`, `benchmark`, or `resource-economy`.
-- `started_at`: Command start time.
-- `completed_at`: Command completion time.
-- `dry_run`: Whether the command ran in dry-run mode.
-- `report_only`: Whether the command intentionally avoided state-changing actions.
-- `exit_status`: `success`, `failed`, or `cancelled`.
-- `output_channel`: `stdout`, `stderr`, `tui-background-log`, or another explicit local operator surface.
-- `summary_lines`: Small bounded list of safe summary lines for operator review.
-
-Validation rules:
-
-- One-shot command runs must not overwrite the daemon-owned realtime status contract.
-- TUI rendering must label command output distinctly from daemon output.
-- Summary lines remain bounded and omit hidden text, credentials, tokens, cookies, and raw response bodies.
-
-## BenchmarkRun
-
-Represents controlled live verification against the approved bot test page.
-
-Fields:
-
-- `test_page_title`: Must be `Удзельнік:Plaga med Bot/suppressor/tests` unless explicitly overridden by the operator for a non-production environment.
-- `run_id`: Unique local identifier included in edit summaries and metrics labels where safe.
-- `edit_count`: Number of benchmark edits created.
-- `bot_marked`: Whether every test edit was submitted with the MediaWiki bot edit marker.
-- `started_at`: Run start time.
-- `completed_at`: Run completion time.
-- `publish_to_detect_ms`: Timing samples from page edit publication to stream/catch-up observation.
-- `detect_to_queue_ms`: Timing samples from observation to worker queueing.
-- `queue_to_hide_ms`: Timing samples from queueing to confirmed hide/already-hidden outcome.
-- `publish_to_hidden_ms`: End-to-end timing samples.
-- `p50_ms`, `p95_ms`, `p99_ms`: Summary percentiles when the sample size is large enough.
-- `smoke_only`: Whether the sample is too small for SLO percentile claims.
-- `unresolved_items`: Any test revisions not hidden or explicitly accounted for.
-
-Validation rules:
-
-- Every benchmark edit to the wiki test page must be marked as a bot edit.
-- Benchmark edit content and summaries must be test-only and must not contain sensitive payloads.
-- Percentile compliance claims require the documented controlled sample size; smaller production-safe checks are smoke evidence only.
-
-## InternalServiceBoundary
-
-Represents a microservice-like module boundary inside the single suppressor daemon/TUI deployment.
-
-Fields:
-
-- `name`: Boundary name such as `stream-ingestion`, `source-refresh`, `catchup`, `mw-api`, `revdel-worker`, `runtime-state`, `operator-commands`, `metrics`, or `tui-status`.
-- `owner_module`: Primary Rust module or module tree that owns the boundary.
-- `input_contracts`: Typed structs, enums, channels, or function inputs accepted by the boundary.
-- `output_contracts`: Typed outputs, status updates, metrics, or queued actions emitted by the boundary.
-- `bounded_resources`: Queue capacity, concurrency limit, sample size, state retention, or log aggregation limits that protect low-spec hosts.
-- `failure_contract`: How the boundary reports errors without leaking sensitive payloads.
-- `test_surface`: Unit, subsystem, or integration tests that prove the boundary behavior.
-- `docs_surface`: Maintained docs where the boundary and its operational lessons are explained.
-
-Validation rules:
-
-- A boundary must not require a separate deployed OS process, public network endpoint, or new operator supervisor for this feature.
-- Cross-boundary communication must prefer typed data over raw strings for stable contracts.
-- Every boundary that performs IO, buffering, retries, or background work must document its resource bound and failure contract.
-- `operator-commands` may read daemon status or emit standalone reports, but it must not masquerade as the daemon's realtime state writer.
-
-## ResourceEconomySnapshot
-
-Represents release evidence that the daemon and TUI remain suitable for low-spec local hardware.
-
-Fields:
-
-- `scenario`: `idle-daemon`, `daemon-plus-tui`, `live-edit`, `startup-catchup`, `source-refresh-catchup`, `benchmark`, or `failure-storm`.
-- `started_at`: Measurement start time.
-- `duration_seconds`: Measurement duration.
-- `rss_bytes`: Resident memory sample or summary.
-- `cpu_percent`: CPU sample or summary.
-- `queue_depth_max`: Maximum worker queue depth observed.
-- `api_concurrency_max`: Maximum concurrent MediaWiki API work observed.
-- `state_file_bytes`: Size of relevant state files after the scenario.
-- `log_lines_per_minute`: Log volume summary, with repeated failures coalesced.
-- `notes`: Compact non-sensitive notes about the environment and any limits.
-
-Validation rules:
-
-- Measurements must not include secrets or hidden content.
-- Resource evidence must cover both normal operation and at least one failure/recovery scenario.
-- A failing low-spec check blocks production-readiness claims until the tradeoff is documented or fixed.
-
-## DurableLesson
-
-Represents a lesson from the incident that must remain discoverable after feature-local planning notes are removed.
-
-Fields:
-
-- `lesson_id`: Stable short identifier.
-- `topic`: `timestamp-format`, `source-refresh`, `api-error-classification`, `warning-coalescing`, `benchmark-safety`, `resource-economy`, or `architecture-boundary`.
-- `source`: Incident, test, code audit, benchmark, or operator observation that produced the lesson.
-- `durable_location`: Code test, maintained doc, or concise code comment where the lesson is preserved.
-- `verification`: Test, docs gate, or manual release check that proves the lesson remains covered.
-
-Validation rules:
-
-- Lessons that prevent a repeat safety incident must be captured in tests when feasible.
-- Operator-facing lessons belong in maintained suppressor docs, not only in feature-local artifacts.
-- Code comments should be used only when the local rule is non-obvious from names and tests.
+- This is a bounded recent summary, not a long-term timeseries.
+- Resource tracking must remain cheap enough for continuous local use.

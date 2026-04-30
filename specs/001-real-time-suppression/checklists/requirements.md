@@ -42,5 +42,6 @@ docmeta:
 - Validation pass 1 completed on 2026-04-24.
 - Validation pass 2 completed on 2026-04-28 after adding runtime-truth requirements for authoritative daemon status, degraded-protection visibility, recovery-state convergence, and launch-path-aware operator verification.
 - Validation pass 3 completed on 2026-04-28 after adding compatibility and migration requirements for operator-facing status or report surfaces and launch-path changes that could invalidate the previous setup.
+- Validation pass 4 completed on 2026-04-29 after clarifying recovery from the last successful hide, rolling `Last 24 hours` daytime verification, randomized nightly full recheck, revision-link rendering, operator-first primary status evidence, and explicit approval plus fallback or rollback requirements for workflow incompatibilities.
 - The specification intentionally treats exact implementation mechanisms as planning work.
 - The accident-window date range is operational input, not a blocking clarification, because the feature requires checking any bounded recent window.

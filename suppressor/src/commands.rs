@@ -1,21 +1,35 @@
+use std::fs::{self, OpenOptions};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, TimeDelta, Utc};
+use nix::errno::Errno;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::{Pid, setsid};
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::auth::{AuthState, authenticate, refresh_csrf_token};
 use crate::catchup::{CatchupRequest, format_summary_lines, run_catchup_window};
-use crate::config::{AppConfig, EnvConfig, RuntimePaths, init_logging, load_env};
+use crate::config::{
+    AppConfig, EnvConfig, RuntimePaths, default_log_filter, init_logging, load_env,
+};
+use crate::daemon::{
+    LAUNCH_KIND_ENV, LAUNCH_LOG_PATH_ENV, LAUNCH_WRITE_PID_ENV, SERVER_START_LAUNCH_KIND,
+};
 use crate::effective_config::render_effective_config;
 use crate::mw_api::MediaWikiClient;
 use crate::runtime::AppRuntime;
 use crate::signals;
 use crate::state::{
     CommandReportCounts, CommandReportSurface, CommandReportWindow, CompatibilityNotice,
-    CoverageSummary, compatibility_notice_for_unreadable_surface, load_json, save_json_atomic,
+    CoverageSummary, RuntimeStatus, compatibility_notice_for_unreadable_surface, load_json,
+    load_text, save_json_atomic,
 };
 
 pub struct CommandContext {
@@ -65,6 +79,361 @@ impl AuthenticatedCommandContext {
             auth_lock,
         })
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ServerStartReceipt {
+    mode: &'static str,
+    pid: i32,
+    config_path: PathBuf,
+    pid_file: PathBuf,
+    runtime_status_file: PathBuf,
+    log_path: PathBuf,
+}
+
+enum ServerStartProbe {
+    Ready(ServerStartReceipt),
+    Pending(String),
+    Failed(String),
+}
+
+pub fn run_server_start(
+    config_path: PathBuf,
+    dry_run: bool,
+    status_timeout_seconds: u64,
+    log_file: Option<PathBuf>,
+    verbose: bool,
+) -> Result<()> {
+    ensure!(
+        status_timeout_seconds > 0,
+        "server-start requires --status-timeout-seconds greater than zero"
+    );
+    let command = CommandContext::load(&config_path)?;
+    let log_path =
+        resolve_server_start_log_path(&command.paths.config_path, &command.paths, log_file);
+    prepare_server_start_paths(&command.paths, &log_path)?;
+    let _env = load_env(&command.paths.config_path)?;
+    reject_or_clear_existing_pid(&command.paths)?;
+
+    let current_exe =
+        std::env::current_exe().context("failed to resolve current suppressor binary")?;
+    let spawned_at = Utc::now();
+    let (mut child, child_pid) =
+        spawn_server_start_child(&current_exe, &command.paths, &log_path, dry_run, verbose)?;
+    let timeout = Duration::from_secs(status_timeout_seconds);
+    match wait_for_server_start(
+        &mut child,
+        &command.paths,
+        &log_path,
+        child_pid,
+        dry_run,
+        spawned_at,
+        timeout,
+    ) {
+        Ok(receipt) => {
+            for line in format_server_start_receipt_lines(&receipt) {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        Err(error) => {
+            terminate_child(&mut child, child_pid);
+            Err(error)
+        }
+    }
+}
+
+fn resolve_server_start_log_path(
+    config_path: &Path,
+    paths: &RuntimePaths,
+    log_file: Option<PathBuf>,
+) -> PathBuf {
+    match log_file {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(path),
+        None => paths.state_dir.join("daemon.log"),
+    }
+}
+
+fn prepare_server_start_paths(paths: &RuntimePaths, log_path: &Path) -> Result<()> {
+    fs::create_dir_all(&paths.state_dir)
+        .with_context(|| format!("failed to create {}", paths.state_dir.display()))?;
+    for path in [
+        paths.cache_file.as_path(),
+        paths.last_event_id_file.as_path(),
+        paths.processed_revids_file.as_path(),
+        paths.nightly_sweep_progress_file.as_path(),
+        paths.runtime_status_file.as_path(),
+        paths.pid_file.as_path(),
+        log_path,
+    ] {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("failed to open detached daemon log {}", log_path.display()))?;
+    Ok(())
+}
+
+fn reject_or_clear_existing_pid(paths: &RuntimePaths) -> Result<()> {
+    let Some(pid) = read_positive_pid(&paths.pid_file)? else {
+        return Ok(());
+    };
+    if process_is_running(pid) {
+        bail!(
+            "server-start refused duplicate daemon: {} points to live PID {}; stop the existing daemon first",
+            paths.pid_file.display(),
+            pid
+        );
+    }
+    fs::remove_file(&paths.pid_file).with_context(|| {
+        format!(
+            "failed to remove stale PID file {} for non-running PID {}",
+            paths.pid_file.display(),
+            pid
+        )
+    })?;
+    Ok(())
+}
+
+fn read_positive_pid(path: &Path) -> Result<Option<i32>> {
+    let Some(raw) = load_text(path)? else {
+        return Ok(None);
+    };
+    let pid: i32 = raw
+        .parse()
+        .with_context(|| format!("invalid PID file {}", path.display()))?;
+    ensure!(
+        pid > 0,
+        "invalid non-positive PID {} in {}",
+        pid,
+        path.display()
+    );
+    Ok(Some(pid))
+}
+
+fn process_is_running(pid: i32) -> bool {
+    match kill(Pid::from_raw(pid), None) {
+        Ok(()) => true,
+        Err(Errno::EPERM) => true,
+        Err(Errno::ESRCH) => false,
+        Err(_) => false,
+    }
+}
+
+fn spawn_server_start_child(
+    current_exe: &Path,
+    paths: &RuntimePaths,
+    log_path: &Path,
+    dry_run: bool,
+    verbose: bool,
+) -> Result<(Child, i32)> {
+    let stdout_log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("failed to open detached daemon log {}", log_path.display()))?;
+    let stderr_log = stdout_log
+        .try_clone()
+        .with_context(|| format!("failed to clone detached daemon log {}", log_path.display()))?;
+    let log_filter =
+        std::env::var("RUST_LOG").unwrap_or_else(|_| default_log_filter(verbose).to_string());
+    let mut child_command = ProcessCommand::new(current_exe);
+    child_command
+        .arg("--config")
+        .arg(&paths.config_path)
+        .env("BEWIKI_ENV_FILE", &paths.env_file)
+        .env("RUST_LOG", log_filter)
+        .env("BEWIKI_LOG_FORMAT", "text")
+        .env("NO_COLOR", "1")
+        .env(LAUNCH_KIND_ENV, SERVER_START_LAUNCH_KIND)
+        .env(LAUNCH_LOG_PATH_ENV, log_path)
+        .env(LAUNCH_WRITE_PID_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log));
+    if verbose {
+        child_command.arg("--verbose");
+    }
+    child_command.arg(if dry_run { "dry-run" } else { "run" });
+    // Safety: the closure only calls async-signal-safe setsid before exec to detach from SSH.
+    unsafe {
+        child_command.pre_exec(|| {
+            setsid()
+                .map(|_| ())
+                .map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
+        });
+    }
+    let child = child_command
+        .spawn()
+        .with_context(|| format!("failed to spawn detached daemon {}", current_exe.display()))?;
+    let child_pid = i32::try_from(child.id()).context("detached daemon PID does not fit in i32")?;
+    Ok((child, child_pid))
+}
+
+fn wait_for_server_start(
+    child: &mut Child,
+    paths: &RuntimePaths,
+    log_path: &Path,
+    child_pid: i32,
+    dry_run: bool,
+    spawned_at: DateTime<Utc>,
+    timeout: Duration,
+) -> Result<ServerStartReceipt> {
+    let deadline = Instant::now() + timeout;
+    let mut last_reason = "waiting for daemon-owned startup evidence".to_string();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to inspect detached daemon")?
+        {
+            bail!(
+                "server-start child exited before startup was verified: status={status}; last_evidence={last_reason}; log={}",
+                log_path.display()
+            );
+        }
+        match probe_server_start(paths, log_path, child_pid, dry_run, spawned_at) {
+            ServerStartProbe::Ready(receipt) => return Ok(receipt),
+            ServerStartProbe::Pending(reason) => last_reason = reason,
+            ServerStartProbe::Failed(reason) => bail!(
+                "server-start verification failed: {reason}; log={}",
+                log_path.display()
+            ),
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "server-start timed out after {}s before startup was verified: last_evidence={}; log={}",
+                timeout.as_secs(),
+                last_reason,
+                log_path.display()
+            );
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn probe_server_start(
+    paths: &RuntimePaths,
+    log_path: &Path,
+    child_pid: i32,
+    dry_run: bool,
+    spawned_at: DateTime<Utc>,
+) -> ServerStartProbe {
+    let pid = match read_positive_pid(&paths.pid_file) {
+        Ok(Some(pid)) => pid,
+        Ok(None) => return ServerStartProbe::Pending("pid file not written yet".to_string()),
+        Err(error) => return ServerStartProbe::Failed(format!("{error:#}")),
+    };
+    if pid != child_pid {
+        return ServerStartProbe::Failed(format!(
+            "pid file {} contains {}, expected detached child {}",
+            paths.pid_file.display(),
+            pid,
+            child_pid
+        ));
+    }
+    if !process_is_running(pid) {
+        return ServerStartProbe::Pending(format!("PID {pid} is not running yet"));
+    }
+
+    let status = match load_json::<RuntimeStatus>(&paths.runtime_status_file) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            return ServerStartProbe::Pending("runtime_status.json not written yet".to_string());
+        }
+        Err(error) => {
+            return ServerStartProbe::Pending(format!(
+                "runtime_status.json is not readable yet: {error:#}"
+            ));
+        }
+    };
+    if let Some(notice) = status.compatibility_notice.as_ref()
+        && notice.blocking
+    {
+        return ServerStartProbe::Failed(format!(
+            "blocking compatibility notice: {}",
+            notice.summary
+        ));
+    }
+    let Some(launch_path) = status.launch_path.as_ref() else {
+        return ServerStartProbe::Pending("runtime status has no launch_path yet".to_string());
+    };
+    if launch_path.kind != SERVER_START_LAUNCH_KIND {
+        return ServerStartProbe::Pending(format!(
+            "runtime launch_path={} is not {} yet",
+            launch_path.kind, SERVER_START_LAUNCH_KIND
+        ));
+    }
+    if launch_path.pid != child_pid {
+        return ServerStartProbe::Failed(format!(
+            "runtime launch_path pid {} does not match detached child {}",
+            launch_path.pid, child_pid
+        ));
+    }
+    if launch_path
+        .started_at
+        .is_none_or(|started_at| started_at < spawned_at)
+    {
+        return ServerStartProbe::Pending("runtime launch_path is stale".to_string());
+    }
+    if status.dry_run != dry_run {
+        return ServerStartProbe::Failed(format!(
+            "runtime dry_run={} does not match requested dry_run={}",
+            status.dry_run, dry_run
+        ));
+    }
+    let expected_state = if dry_run {
+        "dry-run-running"
+    } else {
+        "running"
+    };
+    if status.daemon_state != expected_state {
+        return ServerStartProbe::Pending(format!(
+            "daemon_state={} waiting for {}",
+            status.daemon_state, expected_state
+        ));
+    }
+
+    ServerStartProbe::Ready(ServerStartReceipt {
+        mode: if dry_run { "dry-run" } else { "live" },
+        pid,
+        config_path: paths.config_path.clone(),
+        pid_file: paths.pid_file.clone(),
+        runtime_status_file: paths.runtime_status_file.clone(),
+        log_path: log_path.to_path_buf(),
+    })
+}
+
+fn terminate_child(child: &mut Child, pid: i32) {
+    let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn format_server_start_receipt_lines(receipt: &ServerStartReceipt) -> Vec<String> {
+    vec![
+        format!("server-start.ok mode={} pid={}", receipt.mode, receipt.pid),
+        format!("config={}", receipt.config_path.display()),
+        format!("pid_file={}", receipt.pid_file.display()),
+        format!("runtime_status={}", receipt.runtime_status_file.display()),
+        format!("log={}", receipt.log_path.display()),
+        format!("launch_path={SERVER_START_LAUNCH_KIND}"),
+    ]
 }
 
 fn format_auth_status_lines(auth: &AuthState) -> Vec<String> {
@@ -430,7 +799,10 @@ mod tests {
 
     use super::*;
     use crate::auth::AuthState;
-    use crate::state::{CommandReportSurface, CoverageSummary, UnresolvedExposureItem, load_json};
+    use crate::state::{
+        CommandReportSurface, CoverageSummary, LaunchPathSnapshot, UnresolvedExposureItem,
+        load_json, save_text_atomic,
+    };
 
     fn test_runtime_paths(temp: &tempfile::TempDir) -> RuntimePaths {
         RuntimePaths {
@@ -457,6 +829,115 @@ mod tests {
             command.paths.pid_file,
             temp.path().join("./state/daemon.pid")
         );
+    }
+
+    #[test]
+    fn server_start_resolves_relative_log_path_from_config_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_runtime_paths(&temp);
+
+        let log_path = resolve_server_start_log_path(
+            &paths.config_path,
+            &paths,
+            Some(PathBuf::from("./state/server.log")),
+        );
+
+        assert_eq!(log_path, temp.path().join("./state/server.log"));
+    }
+
+    #[test]
+    fn server_start_receipt_lines_are_non_sensitive_and_complete() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_runtime_paths(&temp);
+        let receipt = ServerStartReceipt {
+            mode: "live",
+            pid: 42,
+            config_path: paths.config_path.clone(),
+            pid_file: paths.pid_file.clone(),
+            runtime_status_file: paths.runtime_status_file.clone(),
+            log_path: paths.state_dir.join("daemon.log"),
+        };
+
+        let lines = format_server_start_receipt_lines(&receipt);
+
+        assert_eq!(lines[0], "server-start.ok mode=live pid=42");
+        assert!(lines.iter().any(|line| line.starts_with("config=")));
+        assert!(lines.iter().any(|line| line.starts_with("pid_file=")));
+        assert!(lines.iter().any(|line| line.starts_with("runtime_status=")));
+        assert!(lines.iter().any(|line| line.starts_with("log=")));
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("launch_path=server-start")
+        );
+        assert!(!lines.join("\n").contains("password"));
+        assert!(!lines.join("\n").contains("token"));
+    }
+
+    #[test]
+    fn server_start_rejects_duplicate_live_pid() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_runtime_paths(&temp);
+        save_text_atomic(&paths.pid_file, &std::process::id().to_string()).unwrap();
+
+        let error = reject_or_clear_existing_pid(&paths).unwrap_err();
+
+        assert!(error.to_string().contains("refused duplicate daemon"));
+        assert!(paths.pid_file.exists());
+    }
+
+    #[test]
+    fn server_start_clears_stale_pid_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_runtime_paths(&temp);
+        save_text_atomic(&paths.pid_file, "9999999").unwrap();
+
+        reject_or_clear_existing_pid(&paths).unwrap();
+
+        assert!(!paths.pid_file.exists());
+    }
+
+    #[test]
+    fn server_start_probe_accepts_fresh_matching_runtime_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_runtime_paths(&temp);
+        let pid = std::process::id() as i32;
+        let spawned_at = Utc::now() - TimeDelta::seconds(1);
+        save_text_atomic(&paths.pid_file, &pid.to_string()).unwrap();
+        save_json_atomic(
+            &paths.runtime_status_file,
+            &RuntimeStatus {
+                daemon_state: "running".to_string(),
+                dry_run: false,
+                launch_path: Some(LaunchPathSnapshot {
+                    kind: SERVER_START_LAUNCH_KIND.to_string(),
+                    pid,
+                    config_path: paths.config_path.display().to_string(),
+                    pid_file: paths.pid_file.display().to_string(),
+                    runtime_status_file: paths.runtime_status_file.display().to_string(),
+                    log_path: Some(paths.state_dir.join("daemon.log").display().to_string()),
+                    started_at: Some(Utc::now()),
+                    ..LaunchPathSnapshot::default()
+                }),
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+
+        match probe_server_start(
+            &paths,
+            &paths.state_dir.join("daemon.log"),
+            pid,
+            false,
+            spawned_at,
+        ) {
+            ServerStartProbe::Ready(receipt) => {
+                assert_eq!(receipt.pid, pid);
+                assert_eq!(receipt.mode, "live");
+            }
+            ServerStartProbe::Pending(reason) | ServerStartProbe::Failed(reason) => {
+                panic!("expected ready probe, got {reason}")
+            }
+        }
     }
 
     #[test]

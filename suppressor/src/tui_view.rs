@@ -135,13 +135,18 @@ fn build_status_lines(paths: &RuntimePaths, status: &StatusSnapshot) -> Vec<Line
         } else {
             "live"
         };
+        let launch = runtime_status
+            .launch_path
+            .as_ref()
+            .map(|path| path.kind.as_str())
+            .unwrap_or("unknown-launch");
         Line::from(vec![
             Span::styled("Protection: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 render_protection_state(status, runtime_status),
                 protection_style(status, runtime_status),
             ),
-            Span::raw(format!(" ({pid}, {uptime}, {dry_run})")),
+            Span::raw(format!(" ({pid}, {uptime}, {dry_run}, {launch})")),
         ])
     } else if status.daemon_running {
         Line::from(vec![

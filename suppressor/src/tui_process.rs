@@ -8,6 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::RuntimePaths;
 use crate::config::default_log_filter;
+use crate::daemon::LAUNCH_KIND_ENV;
 
 pub(crate) fn build_child_command(
     current_exe: &Path,
@@ -37,6 +38,7 @@ pub(crate) fn build_child_command_owned(
         .arg(&paths.config_path)
         .args(verbose.then_some("--verbose"))
         .env("BEWIKI_ENV_FILE", &paths.env_file)
+        .env(LAUNCH_KIND_ENV, "tui-managed")
         .env("RUST_LOG", log_filter)
         .env("BEWIKI_LOG_FORMAT", "tui")
         .env("NO_COLOR", "1")

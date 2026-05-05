@@ -5,6 +5,7 @@ use crate::cli::{Cli, Command};
 use crate::commands::{
     run_check_auth, run_coverage_last_24h, run_coverage_report, run_emergency_catchup,
     run_hide_revid, run_manual_sweep, run_print_effective_config, run_reload_cache,
+    run_server_start,
 };
 use crate::daemon::run_daemon;
 
@@ -56,6 +57,17 @@ pub async fn run() -> Result<()> {
             dry_run,
             report_only,
         } => run_coverage_last_24h(cli.config, dry_run, report_only, cli.verbose).await,
+        Command::ServerStart {
+            dry_run,
+            status_timeout_seconds,
+            log_file,
+        } => run_server_start(
+            cli.config,
+            dry_run,
+            status_timeout_seconds,
+            log_file,
+            cli.verbose,
+        ),
         Command::ReloadCache => run_reload_cache(cli.config),
         Command::NightlySweepNow => run_manual_sweep(cli.config),
         Command::PrintEffectiveConfig => run_print_effective_config(cli.config, cli.verbose),

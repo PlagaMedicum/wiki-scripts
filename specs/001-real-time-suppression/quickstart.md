@@ -44,6 +44,71 @@ cosmetic UI work. Verify this path first:
    status when blocked.
 6. Rate-limit/backoff does not starve live hiding and does not show false healthy status.
 
+## Local Evidence Recorded On 2026-05-05
+
+- Baseline warning: previously generated task completion remains provisional. The current
+  suppressor code is not production-ready until the actual deployed launch path, live or controlled
+  dry-run watched edit, recovery, reconciliation, and nightly evidence pass.
+- Makefile dry-run check passed:
+
+```bash
+rtk make -C suppressor -n build-server
+```
+
+Observed command:
+
+```text
+cargo zigbuild --release --target "aarch64-unknown-linux-musl"
+server binary: target/aarch64-unknown-linux-musl/release/suppressor
+```
+
+- Local build prerequisites are present: `cargo-zigbuild 0.22.3` and `zig 0.15.2`.
+- Focused `server-start` and launch-path status tests passed:
+  `7 passed, 183 filtered out` for `server_start`; `1 passed, 189 filtered out` for
+  `launch_path`.
+- Suppressor serial test gate passed:
+
+```bash
+rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1
+```
+
+Observed result:
+
+```text
+190 passed (5 suites)
+```
+
+- The first local `make build-server` attempt failed only because the sandbox blocked Zig cache
+  writes under `~/.cache/zig`. Re-running with normal user cache access passed:
+
+```bash
+rtk make -C suppressor build-server
+```
+
+Observed result:
+
+```text
+Finished release profile [optimized] target(s) in 1m 28s
+server binary: target/aarch64-unknown-linux-musl/release/suppressor
+```
+
+Verified artifact:
+
+```text
+suppressor/target/aarch64-unknown-linux-musl/release/suppressor
+ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+size: 9.5M
+```
+
+- `server-start` is implemented as an additive binary command with `--dry-run`,
+  `--status-timeout-seconds`, and `--log-file`. It validates config and auth inputs without printing
+  secrets, refuses a live duplicate PID, removes only proven-stale PID markers, detaches the child
+  into a new session, redirects stdout/stderr to the selected log, and prints success only after
+  PID and daemon-owned `runtime_status.json` agree on a fresh `launch_path=server-start`.
+- Actual server logout-survival verification is still pending. Do not treat the new launch path as
+  production-proven until T039 records that the rsynced binary survives terminal logout and keeps
+  updating daemon-owned status on the deployment host.
+
 ## Primary Status Questions
 
 During verification, the primary status view should let a human answer these questions immediately:

@@ -5,9 +5,9 @@ use chrono::Utc;
 use crate::cache::SuppressionListCache;
 use crate::config::RuntimePaths;
 use crate::state::{
-    CommandReportSurface, CompatibilityNotice, NightlySweepProgress, ProcessedRevidsState,
-    RecheckFreshnessSnapshot, RuntimeStatus, compatibility_notice_for_unreadable_surface,
-    load_json, load_text,
+    ActionableIssueSnapshot, CommandReportSurface, CompatibilityNotice, NightlySweepProgress,
+    ProcessedRevidsState, RecheckFreshnessSnapshot, RuntimeStatus,
+    compatibility_notice_for_unreadable_surface, load_json, load_text,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -135,6 +135,14 @@ pub(crate) fn collect_status(
                 checkpoint_progress.as_ref(),
                 snapshot.watched_titles,
             );
+            if let Some(notice) = validate_server_start_launch_path(
+                paths,
+                &mut runtime_status,
+                snapshot.daemon_pid,
+                snapshot.daemon_running,
+            ) {
+                record_surface_notice(&mut snapshot, notice);
+            }
             snapshot.runtime_status = Some(runtime_status);
         }
         Ok(None) => {}
@@ -175,6 +183,80 @@ pub(crate) fn collect_status(
     }
 
     snapshot
+}
+
+fn validate_server_start_launch_path(
+    paths: &RuntimePaths,
+    status: &mut RuntimeStatus,
+    daemon_pid: Option<i32>,
+    daemon_running: bool,
+) -> Option<CompatibilityNotice> {
+    let launch_path = status.launch_path.as_ref()?;
+    if launch_path.kind != crate::daemon::SERVER_START_LAUNCH_KIND {
+        return None;
+    }
+
+    let expected_pid_file = paths.pid_file.display().to_string();
+    let expected_status_file = paths.runtime_status_file.display().to_string();
+    let invalid_reason = if daemon_pid != Some(launch_path.pid) {
+        Some(format!(
+            "launch_path pid {} does not match pid file {:?}",
+            launch_path.pid, daemon_pid
+        ))
+    } else if !daemon_running {
+        Some(format!(
+            "launch_path pid {} is not running",
+            launch_path.pid
+        ))
+    } else if launch_path.pid_file != expected_pid_file {
+        Some("launch_path pid_file does not match active config".to_string())
+    } else if launch_path.runtime_status_file != expected_status_file {
+        Some("launch_path runtime_status_file does not match active config".to_string())
+    } else if launch_path.log_path.is_none() {
+        Some("launch_path is missing detached log path".to_string())
+    } else {
+        None
+    }?;
+
+    let now = Utc::now();
+    status.realtime.state = "unhealthy".to_string();
+    status.realtime.last_state_changed_at = Some(now);
+    status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+        source: "launch-path".to_string(),
+        severity: "error".to_string(),
+        summary: invalid_reason.clone(),
+        next_action:
+            "restart with server-start and trust status only after pid, runtime status, and log evidence agree"
+                .to_string(),
+        detected_at: Some(now),
+    });
+    let notice = CompatibilityNotice {
+        scope: "launch-path".to_string(),
+        severity: "migration-required".to_string(),
+        detected_at: Some(now),
+        previous_value: Some(launch_path.kind.clone()),
+        expected_value: Some(
+            "server-start launch_path matching the live pid file, runtime_status.json, and detached log"
+                .to_string(),
+        ),
+        summary: invalid_reason,
+        operator_action:
+            "restart through server-start or fall back to the last trusted launch workflow"
+                .to_string(),
+        approval_text: Some(
+            "trust server-start only after the shown pid is running and runtime_status.json is fresh"
+                .to_string(),
+        ),
+        rollback_path: Some(
+            "stop the suspect process, remove stale pid/status evidence, and restart the last trusted workflow"
+                .to_string(),
+        ),
+        blocking: true,
+    };
+    if status.compatibility_notice.is_none() {
+        status.compatibility_notice = Some(notice.clone());
+    }
+    Some(notice)
 }
 
 fn populate_runtime_derivatives(
@@ -501,8 +583,8 @@ mod tests {
     use crate::config::{AppConfig, RuntimePaths};
     use crate::state::{
         CommandReportCounts, CommandReportSurface, CommandReportWindow, CurrentTaskSnapshot,
-        PageCheckpoint, RealtimeRuntimeStatus, ReconciliationRuntimeStatus, RuntimeStatus,
-        SuppressionOutcomeSnapshot, save_json_atomic, save_text_atomic,
+        LaunchPathSnapshot, PageCheckpoint, RealtimeRuntimeStatus, ReconciliationRuntimeStatus,
+        RuntimeStatus, SuppressionOutcomeSnapshot, save_json_atomic, save_text_atomic,
     };
 
     #[test]
@@ -550,6 +632,7 @@ mod tests {
             &RuntimeStatus {
                 daemon_state: "running".to_string(),
                 dry_run: false,
+                launch_path: None,
                 last_notice: Some("ok".to_string()),
                 last_notice_at: Some(Utc::now()),
                 resource_economy: None,
@@ -778,6 +861,60 @@ mod tests {
                 .status_error
                 .as_deref()
                 .is_some_and(|value| value.contains("st.err command-report"))
+        );
+    }
+
+    #[test]
+    fn collect_status_surfaces_invalid_server_start_launch_path() {
+        let temp = tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let paths = RuntimePaths::resolve(&config_path, &config);
+        let pid = std::process::id() as i32;
+        save_text_atomic(&paths.pid_file, &pid.to_string()).unwrap();
+        save_json_atomic(
+            &paths.runtime_status_file,
+            &RuntimeStatus {
+                daemon_state: "running".to_string(),
+                dry_run: false,
+                launch_path: Some(LaunchPathSnapshot {
+                    kind: crate::daemon::SERVER_START_LAUNCH_KIND.to_string(),
+                    pid: pid + 1,
+                    config_path: paths.config_path.display().to_string(),
+                    pid_file: paths.pid_file.display().to_string(),
+                    runtime_status_file: paths.runtime_status_file.display().to_string(),
+                    log_path: Some(paths.state_dir.join("daemon.log").display().to_string()),
+                    started_at: Some(Utc::now()),
+                    ..LaunchPathSnapshot::default()
+                }),
+                realtime: RealtimeRuntimeStatus {
+                    state: "healthy".to_string(),
+                    ..RealtimeRuntimeStatus::default()
+                },
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+
+        let snapshot = collect_status(&paths, None);
+
+        let runtime_status = snapshot.runtime_status.as_ref().unwrap();
+        assert_eq!(runtime_status.realtime.state, "unhealthy");
+        assert_eq!(
+            runtime_status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("launch-path")
+        );
+        assert_eq!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("launch-path")
         );
     }
 

@@ -58,6 +58,15 @@ pub enum Command {
         #[arg(long)]
         report_only: bool,
     },
+    #[command(name = "server-start")]
+    ServerStart {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value_t = 10)]
+        status_timeout_seconds: u64,
+        #[arg(long)]
+        log_file: Option<PathBuf>,
+    },
     NightlySweepNow,
     PrintEffectiveConfig,
 }
@@ -176,6 +185,34 @@ mod tests {
             } => {
                 assert!(!dry_run);
                 assert!(report_only);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_server_start_command() {
+        let cli = Cli::try_parse_from([
+            "suppressor",
+            "--config",
+            "./config.toml",
+            "server-start",
+            "--dry-run",
+            "--status-timeout-seconds",
+            "15",
+            "--log-file",
+            "./state/start.log",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::ServerStart {
+                dry_run,
+                status_timeout_seconds,
+                log_file,
+            } => {
+                assert!(dry_run);
+                assert_eq!(status_timeout_seconds, 15);
+                assert_eq!(log_file, Some(PathBuf::from("./state/start.log")));
             }
             other => panic!("unexpected command: {other:?}"),
         }

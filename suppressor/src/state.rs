@@ -25,12 +25,26 @@ pub struct NightlySweepProgress {
 pub struct RuntimeStatus {
     pub daemon_state: String,
     pub dry_run: bool,
+    pub launch_path: Option<LaunchPathSnapshot>,
     pub last_notice: Option<String>,
     pub last_notice_at: Option<DateTime<Utc>>,
     pub resource_economy: Option<ResourceEconomySnapshot>,
     pub compatibility_notice: Option<CompatibilityNotice>,
     pub realtime: RealtimeRuntimeStatus,
     pub reconciliation: ReconciliationRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct LaunchPathSnapshot {
+    pub kind: String,
+    pub pid: i32,
+    pub binary_path: Option<String>,
+    pub config_path: String,
+    pub pid_file: String,
+    pub runtime_status_file: String,
+    pub log_path: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -537,6 +551,7 @@ mod tests {
         let status = RuntimeStatus {
             daemon_state: "running".to_string(),
             dry_run: false,
+            launch_path: None,
             last_notice: Some("ok".to_string()),
             last_notice_at: Some(Utc::now()),
             resource_economy: None,
@@ -578,6 +593,7 @@ mod tests {
         let status = RuntimeStatus {
             daemon_state: "running".to_string(),
             dry_run: false,
+            launch_path: None,
             last_notice: Some("source refresh catchup-started".to_string()),
             last_notice_at: Some(Utc::now()),
             resource_economy: Some(ResourceEconomySnapshot {
@@ -727,6 +743,7 @@ mod tests {
         let status = RuntimeStatus {
             daemon_state: "running".to_string(),
             dry_run: false,
+            launch_path: None,
             compatibility_notice: Some(CompatibilityNotice {
                 scope: "runtime".to_string(),
                 severity: "warning".to_string(),

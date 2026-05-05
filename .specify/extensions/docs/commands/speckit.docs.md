@@ -32,6 +32,9 @@ This command runs the same final gate as `make docs`:
   verification, recovery/status evidence, and incident lessons have been captured before treating
   the docs gate as complete. Concision is fine; missing performance evidence or operational lessons
   is not.
+- If an active human-safety freeze is in effect, confirm the docs gate is run for the active safety
+  feature and its direct enablers only. During the active suppressor MVP freeze, unrelated docs or
+  workflow cleanup must not displace `specs/001-real-time-suppression/` release evidence.
 - Use `python3 tools/doc_workflow.py sync --dry-run --scope managed` or `--scope active-feature`
   when you need to preview metadata rewrites before running the full gate.
 - The text status output uses stable compact section labels:

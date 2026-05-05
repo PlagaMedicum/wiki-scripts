@@ -7,6 +7,8 @@ docmeta:
   - user request on 2026-04-24
   - user request on 2026-04-28
   - user request on 2026-04-29
+  - user request on 2026-05-05
+  - user request on 2026-05-05 for one-command detached server start
 ---
 
 # Feature Specification: Real-Time Suppression Recovery
@@ -97,6 +99,14 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - The primary operator view contains internal bookkeeping or raw transport artifacts that do not answer whether protection is working, what is happening now, or what needs operator attention.
 - An updated version encounters older operator state or status artifacts whose shape reflects the previously documented setup.
 - An updated version changes which launch path, supervisor, or diagnostics surface is authoritative for operator verification.
+- The operator needs to build the server binary for rsync using the previously proven
+  `cargo zigbuild --release --target aarch64-unknown-linux-musl` path.
+- The operator has rsynced the server binary to a remote host and needs one command from that
+  binary to prepare local runtime paths, start the daemon detached from the SSH terminal, and return
+  only after the background daemon has trustworthy PID and status evidence.
+- The detached server-start command sees a missing config, missing auth secret, stale PID file,
+  existing live daemon, unwritable state directory, or failed health/status wait and must fail
+  before presenting the daemon as safely running in the background.
 
 ## Requirements *(mandatory)*
 
@@ -135,6 +145,17 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **FR-031**: While the daemon remains running, the system MUST schedule a full watched-set fallback recheck at a randomized night hour and keep that run clearly distinct from the rolling last 24-hour daytime verification.
 - **FR-032**: Actionable operator surfaces that show a safe revision identifier for inspection MUST render that identifier as a browser-openable link or equivalent directly usable target without requiring a separate lookup action.
 - **FR-033**: The primary operator status view MUST prioritize operator-meaningful evidence over internal counters by clearly showing current protection state, daemon uptime, current background task and progress, last successful hide, current recovery or verification window, latest actionable error, and any recent offline or stalled interval before exposing secondary diagnostic bookkeeping.
+- **FR-034**: The suppressor Makefile MUST provide an additive server-build target that runs
+  `cargo zigbuild --release --target aarch64-unknown-linux-musl`, leaves existing local build
+  targets unchanged, and prints the rsync-ready artifact path
+  `target/aarch64-unknown-linux-musl/release/suppressor`.
+- **FR-035**: The suppressor binary MUST provide an additive `server-start` CLI command that
+  prepares required runtime directories, validates the configured local config and auth environment
+  without writing secrets, refuses to start a duplicate live daemon, starts the normal daemon or
+  dry-run daemon detached from the invoking terminal, redirects daemon output to a non-sensitive
+  operator-visible log path, waits for PID and daemon-owned runtime-status evidence, prints the PID,
+  status path, log path, mode, and config path, and exits successfully only when the background
+  process remains alive after that verification.
 
 ### Key Entities
 
@@ -147,6 +168,13 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **Source Refresh Event**: An observed source-list or request-page change plus its refresh and immediate catch-up result. Key attributes include trigger title, trigger revision, old/new source revision, added/removed titles, catch-up scope, outcome, deferred-by-backoff status, retry point, and safe error details.
 - **Operator Command Report**: A bounded summary emitted by a one-shot operator action. Key attributes include action type, outcome counts, unresolved totals, safe next action, command provenance, and its separation from daemon-owned real-time status.
 - **Benchmark Run**: A controlled verification run on `Удзельнік:Plaga med Bot/suppressor/tests`. Key attributes include run ID, bot-marked edit count, timing samples, percentile summaries, and unresolved benchmark revisions.
+- **Deployment Artifact**: The server binary produced for rsync deployment. Key attributes include
+  target triple, build command, artifact path, source revision or dirty-state note, and verification
+  result without credentials or secrets.
+- **Detached Daemon Launch**: A one-command server start attempt from the deployed binary. Key
+  attributes include command name, binary path, config path, state directory, PID file, runtime
+  status path, log path, live or dry-run mode, started PID, start timestamp, verification result,
+  and any stale or duplicate daemon diagnostic without credentials or secrets.
 
 ## Success Criteria *(mandatory)*
 
@@ -172,6 +200,14 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **SC-017**: During each 24-hour period of uninterrupted daemon operation, operator evidence shows at least one randomized daytime rolling last-24-hours verification run and one randomized nightly full recheck, each with its own clearly named coverage window or scope.
 - **SC-018**: In operator-visible actionable rows, 100% of safe rendered revision identifiers are directly usable as links, and the `Last 24 hours` preset is visually distinguishable from arbitrary timestamped coverage reports.
 - **SC-019**: In the compact primary operator view, an informed operator can determine within 15 seconds whether protection is currently effective, whether recovery or verification is in progress, what the last successful hide was, what the latest actionable problem is, and whether the current version still uses the trusted operator workflow, without reading raw logs or secondary diagnostics.
+- **SC-020**: The operator can run `make build-server` from `suppressor/` and receive a successful
+  aarch64 Linux musl release binary path suitable as the rsync source for server deployment.
+- **SC-021**: After rsyncing the server binary to the target host, the operator can run
+  `./suppressor --config ./config.toml server-start`, close the SSH terminal, and within 10 seconds
+  verify that the PID remains alive, `runtime_status.json` is daemon-owned and updating, daemon
+  output is written to the printed log path, and missing config/secrets or duplicate/stale daemon
+  conditions fail with a non-healthy diagnostic instead of creating an orphaned or falsely healthy
+  daemon.
 
 ## Assumptions
 
@@ -189,6 +225,9 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Terminals used by operators can make direct use of rendered revision links or plain revision URLs without requiring a separate browser-launch action in the TUI itself.
 - Repo-wide rules for compatibility prompts or migration approval may grow from this incident, but this feature is responsible only for the suppressor-specific operator surfaces and setup it changes.
 - Release evidence can require an explicit human go/no-go check when compatibility, migration, or rollback risk would otherwise leave the operator guessing whether the new setup is safe to trust.
+- A deployed server host already has or receives the required `config.toml` and `.env`/environment
+  secrets through an operator-controlled path; the `server-start` command may create runtime
+  directories and log files, but it must not generate, store, print, or rsync credentials.
 
 ## Documentation Impact
 
@@ -204,5 +243,11 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Update operator and operations docs to explain daemon-owned status truth, one-shot command separation, launch-path-aware verification, and degraded protection versus mere stream freshness.
 - Update operator-facing docs to define the primary status view in operator language, including uptime, current task, recovery window, last successful hide, latest actionable error, and which secondary diagnostics are intentionally de-emphasized.
 - Update operator-facing docs to state the post-publication architecture limit explicitly and avoid any claim that the current feature can guarantee zero first-view prevention.
+- Update operator-facing docs or quickstart with the `make build-server` wrapper for
+  `target/aarch64-unknown-linux-musl/release/suppressor` and the requirement not to store server
+  credentials in release evidence.
+- Update operator-facing docs or quickstart with the `server-start` one-command background launch
+  path, including its safe failure modes, PID/status/log evidence, and the rule that it does not
+  replace secrets provisioning or claim systemd authority.
 - If this feature establishes a reusable compatibility or migration-warning rule for machine-readable operator surfaces, capture the generalized lesson in `specs/000-repo-governance/research.md` instead of leaving it only in suppressor-local docs.
 - Repo governance has been amended in constitution v1.5.0 to require low-spec economy without performance, robustness, or documentation compromise.

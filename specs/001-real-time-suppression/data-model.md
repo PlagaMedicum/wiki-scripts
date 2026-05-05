@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Data model for real-time suppression recovery.
-  source: speckit-plan on 2026-04-29
+  source:
+  - speckit-plan on 2026-04-29
+  - speckit-plan stabilization update on 2026-05-05
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -423,3 +425,78 @@ Validation rules:
 
 - This is a bounded recent summary, not a long-term timeseries.
 - Resource tracking must remain cheap enough for continuous local use.
+
+## DeploymentArtifact
+
+Represents the binary artifact that will be copied to the server for the MVP daemon run.
+
+Fields:
+
+- `build_command`: `make build-server` from `suppressor/`, wrapping
+  `cargo zigbuild --release --target aarch64-unknown-linux-musl`.
+- `target_triple`: `aarch64-unknown-linux-musl`.
+- `artifact_path`: `target/aarch64-unknown-linux-musl/release/suppressor`.
+- `built_at`: Local build timestamp when recorded in release evidence.
+- `source_revision`: Git revision or local dirty-state note used for the build.
+- `rsync_destination`: Operator-supplied server destination, not stored with credentials.
+- `verification_result`: `built`, `copied`, `launched`, `failed`, or `not-verified`.
+
+Validation rules:
+
+- Existing `build` and `release` Makefile targets remain unchanged.
+- The server build target is additive and must print the artifact path for rsync.
+- Release evidence must not include server credentials, tokens, or sensitive environment values.
+
+## DetachedDaemonLaunch
+
+Represents one operator request to start the daemon in the background from the deployed binary.
+
+Fields:
+
+- `command`: `server-start`.
+- `binary_path`: Path of the binary used to spawn the daemon child.
+- `config_path`: Config path resolved for the daemon.
+- `state_dir`: Runtime state directory created or verified before spawn.
+- `pid_file`: PID file expected to be written by the daemon.
+- `runtime_status_file`: Daemon-owned runtime status file used for startup verification.
+- `log_path`: Non-sensitive daemon stdout/stderr log path for detached operation.
+- `mode`: `live` or `dry-run`.
+- `spawned_pid`: PID returned by the detached child process.
+- `started_at`: Time the command spawned the daemon child.
+- `verification_deadline_seconds`: Maximum startup wait before the command fails.
+- `verification_result`: `running`, `already-running`, `stale-pid`, `missing-config`,
+  `missing-auth`, `status-timeout`, `spawn-failed`, or `unhealthy`.
+- `next_action`: Compact safe operator instruction when startup did not become trustworthy.
+
+Validation rules:
+
+- A successful launch requires both a live child process and daemon-owned runtime status evidence.
+- The command must not overwrite a trustworthy live daemon or silently treat stale PID/status files
+  as healthy.
+- Secrets, cookies, tokens, hidden text, and sensitive article content must not appear in the launch
+  receipt or detached log path.
+- The detached child must not depend on the invoking terminal after `server-start` exits.
+
+## MvpReleaseEvidence
+
+Represents the minimum evidence required before the active safety freeze can be considered ready to
+release for production trust.
+
+Fields:
+
+- `tests_passed`: Result for the shortest required suppressor test gate.
+- `server_artifact`: `DeploymentArtifact`.
+- `detached_launch`: Optional `DetachedDaemonLaunch` for rsync-to-server verification.
+- `launch_path_verified`: Whether the actual server launch path was used.
+- `live_hiding_verified`: Whether live or controlled dry-run hiding was observed through the daemon.
+- `recovery_verified`: Whether recovery from the last successful hide was verified.
+- `reconciliation_verified`: Whether rolling last-24h and nightly full recheck behavior were
+  verified or explicitly blocked with a non-healthy status.
+- `backoff_verified`: Whether rate-limit/backoff behavior stays bounded and visible.
+- `non_healthy_status_verified`: Whether blocked/degraded states avoid false healthy output.
+
+Validation rules:
+
+- Checked implementation tasks are not enough; evidence must come from tests, build output, or
+  actual launch-path verification.
+- Missing evidence keeps the MVP non-release-ready.

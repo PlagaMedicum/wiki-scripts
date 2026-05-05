@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Design research decisions for real-time suppression recovery.
-  source: speckit-plan on 2026-04-29
+  source:
+  - speckit-plan on 2026-04-29
+  - speckit-plan stabilization update on 2026-05-05
 ---
 
 # Research: Real-Time Suppression Recovery
@@ -25,6 +27,64 @@ older documented trusted anchor only when this value is missing or unreadable.
   resume-cursor ambiguity do not prove live hides succeeded.
 - Recover from midnight or the next daytime sweep. Rejected because the requirement is tied to the
   last successful suppression action, not calendar boundaries.
+
+## Decision: Reset the remaining work to a suppressor MVP stabilization path
+
+**Rationale**: Constitution v1.7.0 declares an active human-safety freeze for this feature. The
+highest-risk gap from analysis is not missing feature ambition; it is that critical daemon and
+launch-path verification is too late while broad status, TUI, and reporting work has expanded. The
+remaining work must therefore prioritize the smallest server-runnable daemon MVP: live hiding,
+automatic recovery/reconciliation, nightly fallback, truthful non-healthy status, shared
+throttle/backoff behavior, and actual deployment verification.
+
+**Alternatives considered**:
+
+- Continue broad operator-surface polish first. Rejected because cosmetic clarity does not matter if
+  the daemon is slow, starved, or not verified on the server path.
+- Treat checked tasks as sufficient evidence. Rejected because the operator observed a running
+  daemon that still failed to hide quickly; only actual launch-path and behavior evidence is enough.
+- Split into new services for isolation now. Rejected because the freeze requires minimal changes
+  and the current constitution prefers one local daemon unless a split clearly improves safety.
+
+## Decision: Add a Makefile server build target for the aarch64 musl artifact
+
+**Rationale**: The operator previously built the server binary with
+`cargo zigbuild --release --target aarch64-unknown-linux-musl`, producing
+`target/aarch64-unknown-linux-musl/release/suppressor`. This is an operational path, not a new
+architecture. Adding a Makefile wrapper makes the artifact path repeatable and ready for rsync while
+leaving existing `build` and `release` targets unchanged.
+
+**Alternatives considered**:
+
+- Keep the raw `cargo zigbuild` command only in chat. Rejected because deployment evidence must be
+  durable and repeatable.
+- Replace `release` with the cross-build. Rejected because it would silently change a developer
+  target and risk local workflow breakage.
+- Add a packaging script now. Rejected because the MVP needs one rsync-ready binary path, not a new
+  deployment system.
+
+## Decision: Add an additive self-detaching `server-start` CLI command
+
+**Rationale**: The rsync deployment path needs a single command from the deployed binary that can
+survive closing the SSH terminal. The safest minimal design is an additive `server-start` command
+that resolves the same config as `run`, creates required runtime directories, validates config and
+auth inputs without printing secrets, refuses duplicate live daemon starts, starts the existing
+daemon mode as a detached child in a new session with stdin closed and stdout/stderr redirected to a
+non-sensitive log path, waits for PID and daemon-owned `runtime_status.json` evidence, then prints a
+compact launch receipt. This keeps the daemon model unchanged while making the actual server launch
+path repeatable and verifiable.
+
+**Alternatives considered**:
+
+- Require `systemd` setup before MVP deployment. Rejected because the user needs to rsync one binary
+  and run one command now, and the actual current launch path may not be systemd-managed.
+- Tell the operator to use `nohup`, `tmux`, `screen`, or shell backgrounding. Rejected because that
+  pushes fragile launch semantics into undocumented shell state and can still leave false or
+  terminal-tied daemon evidence.
+- Make `run` detach by default. Rejected because it would silently change the existing foreground
+  development and supervision contract.
+- Generate config and `.env` automatically. Rejected because secrets provisioning must remain under
+  explicit operator control and must not be printed, logged, or created by a convenience launcher.
 
 ## Decision: Keep three distinct verification scopes
 

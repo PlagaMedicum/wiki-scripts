@@ -398,7 +398,11 @@ fn render_recheck_freshness_lines(
             .oldest_full_check_at
             .as_ref()
             .map(render_short_timestamp)
-            .or_else(|| freshness.oldest_full_check_age_seconds.map(render_age_seconds))
+            .or_else(|| {
+                freshness
+                    .oldest_full_check_age_seconds
+                    .map(render_age_seconds)
+            })
             .unwrap_or_else(|| "unknown".to_string());
         let oldest_title = freshness
             .oldest_full_check_title
@@ -415,7 +419,10 @@ fn render_recheck_freshness_lines(
     }
 
     let mut verification_parts = Vec::new();
-    if runtime_status.realtime.last_daytime_verification_at.is_some()
+    if runtime_status
+        .realtime
+        .last_daytime_verification_at
+        .is_some()
         || runtime_status
             .realtime
             .last_daytime_verification_result
@@ -432,7 +439,10 @@ fn render_recheck_freshness_lines(
             )
         ));
     }
-    if runtime_status.realtime.last_nightly_full_recheck_at.is_some()
+    if runtime_status
+        .realtime
+        .last_nightly_full_recheck_at
+        .is_some()
         || runtime_status
             .realtime
             .last_nightly_full_recheck_result
@@ -488,7 +498,10 @@ fn render_short_timestamp(value: &chrono::DateTime<Utc>) -> String {
 }
 
 fn render_age_seconds(age_seconds: i64) -> String {
-    format!("{} ago", format_duration(chrono::TimeDelta::seconds(age_seconds.max(0))))
+    format!(
+        "{} ago",
+        format_duration(chrono::TimeDelta::seconds(age_seconds.max(0)))
+    )
 }
 
 fn render_verification_outcome(
@@ -604,6 +617,12 @@ fn render_compatibility_notice_lines(
         "{label} action: {}",
         notice.operator_action
     )));
+    if let Some(approval_text) = notice.approval_text.as_deref() {
+        lines.push(Line::from(format!("{label} approval: {approval_text}")));
+    }
+    if let Some(rollback_path) = notice.rollback_path.as_deref() {
+        lines.push(Line::from(format!("{label} rollback: {rollback_path}")));
+    }
     lines
 }
 
@@ -745,6 +764,8 @@ mod tests {
                 expected_value: Some("bounded command report".to_string()),
                 summary: "previous report shape is no longer safe".to_string(),
                 operator_action: "trust the bounded command report".to_string(),
+                approval_text: Some("confirm the current binary rewrote the report".to_string()),
+                rollback_path: Some("rerun the last trusted report workflow".to_string()),
                 blocking: true,
             }),
             ..CommandReportSurface::default()
@@ -759,6 +780,8 @@ mod tests {
         assert!(rendered.contains("migration-required"));
         assert!(rendered.contains("command-report"));
         assert!(rendered.contains("trust the bounded command report"));
+        assert!(rendered.contains("confirm the current binary rewrote the report"));
+        assert!(rendered.contains("rerun the last trusted report workflow"));
     }
 
     #[test]
@@ -776,6 +799,8 @@ mod tests {
                     expected_value: Some("running daemon pid plus runtime_status.json".to_string()),
                     summary: "pid file points to a non-running process (stale marker)".to_string(),
                     operator_action: "clear the stale pid marker".to_string(),
+                    approval_text: Some("confirm the replacement pid is running".to_string()),
+                    rollback_path: Some("restart the last trusted supervisor workflow".to_string()),
                     blocking: true,
                 }),
                 runtime_status: Some(RuntimeStatus {
@@ -790,6 +815,14 @@ mod tests {
                         ),
                         summary: "current deployment is not systemd-managed".to_string(),
                         operator_action: "verify the TUI-managed child process".to_string(),
+                        approval_text: Some(
+                            "trust this setup only after confirming the active supervisor path"
+                                .to_string(),
+                        ),
+                        rollback_path: Some(
+                            "restart the last trusted workflow and verify it using the previous path"
+                                .to_string(),
+                        ),
                         blocking: true,
                     }),
                     realtime: RealtimeRuntimeStatus {
@@ -901,13 +934,9 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Full recheck freshness: 4/20 pages older than 24h"))
         );
-        assert!(
-            line_texts.iter().any(|line| {
-                line.contains(
-                    "Scheduled verification: Last 24 hours failed: non-json-response",
-                )
-            })
-        );
+        assert!(line_texts.iter().any(|line| {
+            line.contains("Scheduled verification: Last 24 hours failed: non-json-response")
+        }));
         assert!(
             line_texts
                 .iter()
@@ -927,6 +956,16 @@ mod tests {
             line_texts
                 .iter()
                 .any(|line| line.contains("Status notice:"))
+        );
+        assert!(
+            line_texts
+                .iter()
+                .any(|line| line.contains("Compatibility approval:"))
+        );
+        assert!(
+            line_texts
+                .iter()
+                .any(|line| line.contains("Compatibility rollback:"))
         );
     }
 

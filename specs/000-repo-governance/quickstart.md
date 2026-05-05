@@ -24,8 +24,12 @@ specify check
 ## Normal Flow For Non-Trivial Changes
 
 1. Read `README.md`, `.specify/memory/constitution.md`, and this governance stack.
-2. Create or update a feature directory under `specs/NNN-feature-name/`.
-3. Write `spec.md`, then `plan.md`, then `tasks.md`. If direct human answers or comments are still
+2. If an active human-safety freeze exists, confirm `.specify/feature.json` points at that feature
+   and do not start unrelated work. The current freeze points at
+   `specs/001-real-time-suppression/` and restricts work to suppressor MVP stabilization until the
+   human owner releases it.
+3. Create or update a feature directory under `specs/NNN-feature-name/`.
+4. Write `spec.md`, then `plan.md`, then `tasks.md`. If direct human answers or comments are still
    needed, keep them in feature-local files such as `questions.md` or `review-queue.md`.
    If the unresolved point is repo-level governance rather than feature-scoped work, move it into
    `specs/000-repo-governance/research.md`.
@@ -35,8 +39,8 @@ specify check
    For safety-, reliability-, or performance-sensitive work, state resource goals, bounded
    concurrency/state/logging, recovery/status behavior, low-spec verification, and how incident
    lessons will be preserved.
-4. Implement the change.
-5. Check the current docs queue when you need to see pending approval, manual review, answer, or
+5. Implement the change.
+6. Check the current docs queue when you need to see pending approval, manual review, answer, or
    update work:
 
 ```bash
@@ -46,7 +50,7 @@ python3 tools/doc_workflow.py status
    Read the active feature's `questions.md` and `review-queue.md` alongside that output when the
    feature is still in flight.
 
-6. Close the work with the explicit docs gate:
+7. Close the work with the explicit docs gate:
 
 ```bash
 make docs
@@ -60,7 +64,7 @@ python3 tools/doc_workflow.py all
 /speckit.docs
 ```
 
-7. Once the durable lessons are fixed elsewhere, close the feature by removing
+8. Once the durable lessons are fixed elsewhere, close the feature by removing
    `.specify/feature.json` and deleting the finished `specs/NNN-feature-name/` directory unless the
    directory still carries active context. Git history remains the archive.
 

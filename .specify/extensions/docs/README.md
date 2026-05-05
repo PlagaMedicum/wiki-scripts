@@ -26,6 +26,11 @@ resource goals, low-spec verification, recovery/status evidence, and durable inc
 be present in the affected maintained or project-local docs. Documentation can be concise, but it
 must not drop the performance evidence or operational lessons needed to repeat the decision.
 
+If an active human-safety freeze is in effect, the docs gate must preserve that routing rule and the
+minimum release evidence for the active safety feature. During the active suppressor MVP freeze,
+that evidence belongs in `specs/001-real-time-suppression/` and `suppressor/` docs, not in unrelated
+workflow or tool cleanup.
+
 The gate command and the maintenance command are different surfaces:
 
 - `python3 tools/doc_workflow.py all` or `/speckit.docs` runs the full docs gate

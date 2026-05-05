@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Verification quickstart for real-time suppression recovery.
-  source: speckit-plan on 2026-04-29
+  source:
+  - speckit-plan on 2026-04-29
+  - speckit-plan stabilization update on 2026-05-05
 ---
 
 # Quickstart: Real-Time Suppression Recovery
@@ -18,10 +20,29 @@ Prove that the running suppressor:
 - performs randomized rolling last-24h daytime verification and randomized nightly full rechecks
 - shows truthful operator-first runtime status
 - preserves or explicitly explains compatibility for the actual deployment path in use
+- builds the aarch64 Linux musl server binary through the documented Makefile target before rsync
+  deployment
+- starts from the rsynced binary with one detached `server-start` command that survives closing the
+  server terminal
 
 Important architectural limit: the suppressor observes edits after MediaWiki publishes them.
 Verification should minimize and measure publish-to-hide exposure, but it must not claim guaranteed
 zero first-view prevention.
+
+## Active MVP Critical Path
+
+During the active human-safety freeze, do not spend time on unrelated tools, broad refactors, or
+cosmetic UI work. Verify this path first:
+
+1. Short suppressor test gate passes.
+2. Server binary builds with `make build-server`.
+3. Actual launch path starts the daemon on the host being protected, preferably through the
+   one-command detached `server-start` path for the rsynced binary.
+4. Live or controlled dry-run hiding path updates `last_successful_hide_at` or the equivalent dry-run
+   outcome without waiting for reconciliation.
+5. Recovery/reconciliation and nightly fallback are scheduled or running with truthful non-healthy
+   status when blocked.
+6. Rate-limit/backoff does not starve live hiding and does not show false healthy status.
 
 ## Primary Status Questions
 
@@ -58,6 +79,65 @@ Run the repo docs gate before close-out:
 rtk python3 tools/doc_workflow.py all
 ```
 
+## Server Build Check
+
+From the suppressor project root:
+
+```bash
+cd suppressor
+make build-server
+```
+
+The target wraps the previously used deployment build:
+
+```bash
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+```
+
+Expected artifact:
+
+```text
+suppressor/target/aarch64-unknown-linux-musl/release/suppressor
+```
+
+Use that path as the rsync source after the test gate passes. Do not record server credentials,
+tokens, cookies, or `.env` values in release evidence.
+
+## Detached Server Start Check
+
+After copying the binary to the server and placing `config.toml` plus `.env` or equivalent
+environment secrets through the operator-controlled secret path, start the background daemon with one
+binary command:
+
+```bash
+./suppressor --config ./config.toml server-start
+```
+
+Expected receipt:
+
+```text
+server-start.ok mode=live pid=<pid>
+config=./config.toml
+pid_file=./state/daemon.pid
+runtime_status=./state/runtime_status.json
+log=./state/daemon.log
+launch_path=server-start
+```
+
+Verification:
+
+1. Confirm the command creates required runtime directories but does not create, print, or persist
+   credentials.
+2. Confirm the printed PID is alive and matches the expected suppressor binary.
+3. Confirm `runtime_status.json` is daemon-owned, updates within 10 seconds, and records
+   `launch_path=server-start` or equivalent detached-binary wording.
+4. Confirm daemon stdout/stderr goes to the printed log path, not the SSH terminal.
+5. Close the SSH terminal and reconnect.
+6. Confirm the PID is still alive and the status file continues updating.
+7. If config, auth secrets, state/log paths, stale PID, duplicate live daemon, or startup status
+   verification fail, treat the launch as failed; do not trust a partial or orphaned background
+   process.
+
 ## Compatibility Approval Check
 
 Before trusting a new version in the operator environment:
@@ -74,6 +154,7 @@ Before trusting a new version in the operator environment:
 1. Confirm whether this host is using:
    - a TUI-managed daemon child
    - a `systemd`-managed daemon
+   - a `server-start` detached binary daemon
    - another explicit supervisor path
 2. Treat only the actual launch path in use as authoritative for this run.
 3. If the daemon is not running under `systemd`, do not treat `journalctl -u suppressor.service` as
@@ -216,6 +297,7 @@ Do not treat the fix as production-ready until all of the following are true:
 - throttle and backoff checks pass
 - TUI truthfulness checks pass
 - compatibility approval and launch-path checks pass
+- detached `server-start` check passes for rsync-based server deployment
 - suppressor tests pass
 - docs workflow passes
 - maintained docs describe the new operator workflow, compatibility expectations, and architectural

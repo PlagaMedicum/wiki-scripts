@@ -114,6 +114,8 @@ fn command_report_compatibility_notice(paths: &RuntimePaths) -> Option<Compatibi
             &path,
             "bounded command-report surface",
             "review the previous command report file and trust the newly written bounded report",
+            "treat the last command summary as trustworthy only after the current binary rewrites a bounded command report",
+            "remove the incompatible command report and rerun the last trusted command workflow if the new report cannot be regenerated",
         )),
     }
 }

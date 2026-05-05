@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Operator command contract for real-time suppression recovery.
-  source: speckit-plan on 2026-04-29
+  source:
+  - speckit-plan on 2026-04-29
+  - speckit-plan stabilization update on 2026-05-05
 ---
 
 # Contract: Operator Commands
@@ -25,6 +27,8 @@ unless an explicit compatibility notice says otherwise:
 - Queue nightly reconciliation or full recheck
 - Refresh status
 - Hide one revision by ID
+- Build server binary
+- Start server daemon in background
 
 CLI command names should stay backward-compatible where practical. TUI labels may become clearer
 than the raw CLI name, but that relabeling must be plain-language and documented.
@@ -215,6 +219,79 @@ Required output:
 - Revision ID.
 - Success or failure.
 - Safe actionable failure summary when it did not hide.
+
+### Build server binary
+
+Purpose: Build the rsync-ready Linux server artifact for the current suppressor code.
+
+Command:
+
+```bash
+cd suppressor
+make build-server
+```
+
+Required behavior:
+
+- Run `cargo zigbuild --release --target aarch64-unknown-linux-musl` by default.
+- Produce `target/aarch64-unknown-linux-musl/release/suppressor`.
+- Print the artifact path after a successful build so the operator can use it as the rsync source.
+- Leave existing `make build` and `make release` behavior unchanged.
+
+Compatibility:
+
+- This is an additive Makefile target, not a replacement for local builds.
+- The command must not embed server credentials, rsync destination, or deployment secrets.
+
+### Start server daemon in background
+
+Purpose: Let the operator rsync the binary to the server, run one command, and safely close the SSH
+terminal while the daemon continues protecting edits.
+
+Command:
+
+```bash
+./suppressor --config ./config.toml server-start
+```
+
+Optional inputs:
+
+- `--dry-run` to start the background daemon in dry-run mode.
+- `--status-timeout-seconds <n>` to override the bounded startup wait.
+- `--log-file <path>` to choose the detached stdout/stderr log path.
+
+Required behavior:
+
+- Resolve and validate the same config path used by `run`.
+- Create required runtime directories and parent directories for PID, status, cache, and log files.
+- Validate that auth inputs are available from the process environment or `.env`, but never print or
+  persist their values.
+- Refuse to start a duplicate daemon when the PID file points to a live process that matches the
+  expected suppressor runtime.
+- Treat stale PID or stale runtime-status evidence as non-healthy startup evidence unless the
+  command can prove no live daemon is being replaced.
+- Spawn the same binary as a detached child running `run` or `dry-run`, with stdin detached from the
+  terminal, stdout/stderr redirected to the selected log path, and the child placed in a new session
+  so SSH logout does not kill it.
+- Wait for the child PID, PID file, and daemon-owned `runtime_status.json` to agree or fail within
+  the startup timeout.
+- Print a compact receipt containing mode, PID, config path, PID file, runtime status path, log
+  path, and the launch path label `server-start`.
+
+Failure behavior:
+
+- Missing config, missing auth values, unwritable state/log paths, duplicate live daemon, spawn
+  failure, startup timeout, and unhealthy runtime status all exit non-zero with a safe next action.
+- The command must not leave a false healthy status, orphaned child, or unlabeled launch path when
+  startup verification fails.
+- The command must not require `systemd`, `tmux`, `screen`, shell backgrounding, or `nohup`.
+
+Compatibility:
+
+- This is additive. Existing `run`, `dry-run`, TUI-managed daemon start, and optional systemd unit
+  behavior remain valid.
+- `server-start` becomes authoritative only for runs it actually started and verified; it must not
+  imply systemd authority or hide that the active launch path is detached-binary.
 
 ## TUI Action Presentation
 

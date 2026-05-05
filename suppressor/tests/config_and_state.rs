@@ -189,10 +189,14 @@ fn unreadable_runtime_status_surface_maps_to_migration_notice() {
         &paths.runtime_status_file,
         "readable runtime_status.json surface",
         "replace or remove the unreadable runtime status file before trusting suppressor status",
+        "trust healthy status again only after the active daemon rewrites a readable runtime_status.json surface",
+        "restart the last trusted daemon workflow and verify that it writes a readable runtime_status.json surface",
     );
 
     assert_eq!(notice.scope, "runtime-status");
     assert_eq!(notice.severity, "migration-required");
+    assert!(notice.approval_text.is_some());
+    assert!(notice.rollback_path.is_some());
     assert!(notice.blocking);
 }
 
@@ -212,9 +216,13 @@ fn unreadable_command_report_surface_maps_to_migration_notice() {
         &command_report_fixture_path(&paths),
         "bounded command-report surface",
         "rerun the command or remove the unreadable command report file before trusting the last command summary",
+        "trust the last command summary again only after the current binary regenerates a readable bounded command report",
+        "remove the unreadable command report and rerun the last trusted command workflow",
     );
 
     assert_eq!(notice.scope, "command-report");
     assert_eq!(notice.severity, "migration-required");
+    assert!(notice.approval_text.is_some());
+    assert!(notice.rollback_path.is_some());
     assert!(notice.blocking);
 }

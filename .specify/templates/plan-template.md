@@ -50,6 +50,10 @@ TODO review comments in maintained docs.
 
 Include document impact in this check:
 
+- whether an active human-safety freeze is in effect; if yes, confirm this feature is the active
+  safety feature or a direct enabler, otherwise stop before planning
+- whether `.specify/feature.json` points at the active safety feature when such a freeze is in
+  effect
 - which README files change
 - whether `specs/000-repo-governance/spec.md` changes
 - whether `specs/000-repo-governance/research.md` changes
@@ -74,6 +78,12 @@ Include document impact in this check:
 - whether `make docs` / `python3 tools/doc_workflow.py all` must be run
 - whether the feature needs `questions.md` or `review-queue.md` updates to capture pending human
   input explicitly
+
+If the active suppressor MVP freeze applies, the plan MUST minimize scope to the stable
+server-runnable daemon path: automatic live hiding, recovery/reconciliation, nightly fallback,
+truthful non-healthy status, bounded failure behavior, actual-launch-path verification, and the
+shortest meaningful test evidence. Non-essential refactors, new services, cosmetic UI work, broad
+docs, and unrelated tool changes must be deferred.
 
 ## Project Structure
 

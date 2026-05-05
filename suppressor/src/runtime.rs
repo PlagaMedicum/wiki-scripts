@@ -1516,10 +1516,8 @@ impl AppRuntime {
                 && !status.realtime.catchup_active
                 && backoff_until.is_none()
             {
-                let next_state = converged_realtime_state_after_stream_event(
-                    &status.realtime,
-                    completed_at,
-                );
+                let next_state =
+                    converged_realtime_state_after_stream_event(&status.realtime, completed_at);
                 status.realtime.state = next_state.clone();
                 status.realtime.last_state_changed_at = Some(completed_at);
                 if next_state == "healthy" {
@@ -1822,7 +1820,8 @@ fn restore_persistent_issue(status: &mut RuntimeStatus, detected_at: DateTime<Ut
                     detected_at: Some(detected_at),
                 });
             }
-        } else if let Some(issue) = scheduled_verification_failure_issue(&status.realtime, detected_at)
+        } else if let Some(issue) =
+            scheduled_verification_failure_issue(&status.realtime, detected_at)
         {
             status.realtime.latest_actionable_issue = Some(issue);
         }
@@ -1863,7 +1862,8 @@ fn restore_persistent_issue(status: &mut RuntimeStatus, detected_at: DateTime<Ut
                 detected_at: Some(detected_at),
             });
         }
-    } else if let Some(issue) = scheduled_verification_failure_issue(&status.realtime, detected_at) {
+    } else if let Some(issue) = scheduled_verification_failure_issue(&status.realtime, detected_at)
+    {
         status.realtime.latest_actionable_issue = Some(issue);
     }
 }
@@ -1905,11 +1905,7 @@ fn scheduled_verification_failure_issue(
         .map(|result| {
             (
                 status.last_daytime_verification_at,
-                verification_failure_issue_for_mode(
-                    ReconcileMode::CurrentDay,
-                    result,
-                    detected_at,
-                ),
+                verification_failure_issue_for_mode(ReconcileMode::CurrentDay, result, detected_at),
             )
         });
     let nightly = status

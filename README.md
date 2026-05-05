@@ -31,6 +31,13 @@ and deterministic checks so important assumptions do not stay buried in generate
 
 ## Workflow In Brief
 
+Active safety freeze: until the human owner releases it, repo work is restricted to
+`specs/001-real-time-suppression/` and the `suppressor/` changes needed to reach a minimal stable
+server-runnable MVP. That MVP means automatic live hiding, automatic recovery/reconciliation,
+nightly fallback checks, truthful non-healthy status, bounded failure behavior, and verification
+through the actual launch path. Unrelated `biblio`, broad docs, workflow polish, new features,
+architecture experiments, and cosmetic work wait.
+
 Non-trivial changes use Spec Kit under `specs/NNN-feature-name/`, with
 `.specify/feature.json` used only while a feature is active. Managed human docs get review state from
 `.specify/doc-registry.json` plus deterministic sync; feature-local questions and review queues are

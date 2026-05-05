@@ -2,174 +2,165 @@
 docmeta:
   status: draft
   review: feature-local
-  purpose: Actionable implementation task breakdown for real-time suppression recovery.
-  source: speckit-tasks on 2026-04-29
+  purpose: Remaining actionable task breakdown for the suppressor MVP stabilization freeze.
+  source:
+  - speckit-tasks regeneration on 2026-05-05
+  - speckit-tasks server-start update on 2026-05-05
 ---
 
 # Tasks: Real-Time Suppression Recovery
 
-**Input**: Design documents from `specs/001-real-time-suppression/`  
+**Input**: Design documents from `specs/001-real-time-suppression/`
+
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`,
 `quickstart.md`
 
-**Tests**: Required. This feature is latency-sensitive, recovery-sensitive, compatibility-sensitive,
-and operator-safety-sensitive, so every user story starts with tests for its independently
-verifiable behavior.
+**Tests**: Required. This is a human-safety-critical daemon feature. The tasks below track remaining
+MVP stabilization work only; earlier checked-off implementation work is provisional until verified
+through tests, the server build, `server-start`, and the actual launch path.
 
-**Organization**: Tasks are grouped by user story so the remaining work can be implemented and
-validated incrementally from the current partially implemented state. User Story 1 restores
-trustworthy immediate live hiding, User Story 2 restores truthful recovery and truthful operator
-status, and User Story 3 restores useful operator commands and coverage reporting.
+**Organization**: Tasks are ordered to stabilize the minimal server-runnable daemon first:
+automatic live hiding, recovery/reconciliation/nightly fallback, truthful degraded status,
+`server-start`, command surface separation, `make build-server`, and actual launch-path evidence.
 
 ## Format: `[ID] [P?] [Story?] Description`
 
-- **[P]**: Can run in parallel with other `[P]` tasks in the same phase because it touches
-  different files and does not depend on incomplete work in that phase
-- **[Story]**: User story identifier from `spec.md`
-- Every task names the exact file paths it changes or validates
+- **[P]**: Can run in parallel because it touches different files and does not depend on incomplete
+  tasks in the same phase.
+- **[Story]**: User story identifier from `spec.md`.
+- Every task names exact file paths.
 
 ## Phase 1: Setup
 
-**Purpose**: Re-ground the work on the actual deployment path and capture the compatibility baseline
-before deeper implementation changes.
+**Purpose**: Freeze scope, preserve current work, and prepare the rsync-ready server artifact plus
+one-command detached server launch path.
 
-- [X] T001 Capture the actual launch-path baseline, current operator workflow, and current runtime-status versus command-report behavior in `suppressor/docs/operations.md`
-- [X] T002 [P] Add older `runtime_status.json`, `command_report.json`, stale PID, and legacy `current_day_recheck` fixture coverage in `suppressor/tests/config_and_state.rs`
-- [X] T003 [P] Record the operator-first status questions, current TUI pain points, and primary-row expectations in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T001 Capture the current dirty suppressor implementation baseline and provisional-completion warning in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T002 Verify the additive `build-server` Makefile target by running `make -C suppressor -n build-server` and recording the expected artifact path in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T003 Verify whether `cargo-zigbuild` and `zig` are installed for the real `make build-server` command and record missing prerequisites in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T004 Record the planned `server-start` launch receipt, safe failure modes, and launch-path evidence requirements in `specs/001-real-time-suppression/quickstart.md`
 
 ---
 
 ## Phase 2: Foundational
 
-**Purpose**: Shared contracts, compatibility-safe state, and scheduler foundations that block all
-remaining user-story work.
+**Purpose**: Re-establish daemon invariants that block every story: live work must not starve,
+status must not lie, scheduled work must be bounded, and the deployed binary must start detached
+with truthful PID/status/log evidence.
 
-**Critical**: No user-story phase should proceed until these shared contracts are in place.
+**Critical**: No user story work can be trusted until this phase is complete.
 
-- [X] T004 Add additive runtime-state fields for precise lag, current task, revision URLs, offline intervals, and rollback-aware compatibility notices in `suppressor/src/state.rs`
-- [X] T005 [P] Add backward-compatible load and migration-needed diagnostic tests for older runtime-state and command-report shapes in `suppressor/tests/config_and_state.rs`
-- [X] T006 Add config support and compatibility aliases for rolling last-24h daytime verification and randomized nightly full recheck in `suppressor/src/config.rs` and `suppressor/config.toml`
-- [X] T007 [P] Add scheduler helper tests for rolling last-24h window calculation, randomized daytime delay selection, and randomized nightly full-recheck selection in `suppressor/src/scheduler.rs`
-- [X] T008 Add shared revision URL and recovery-anchor selection helpers in `suppressor/src/mw_api.rs` and `suppressor/src/runtime.rs`
-- [X] T009 [P] Add runtime-status contract tests for precise lag fields, current task serialization, and compatibility-notice serialization in `suppressor/src/runtime.rs` and `suppressor/tests/config_and_state.rs`
-- [X] T010 Add bounded daemon-runtime versus command-report isolation helpers and compatibility parsing in `suppressor/src/state.rs` and `suppressor/src/commands.rs`
+- [ ] T005 [P] Add or repair a shared throttle/backoff contract test covering live hiding, catch-up, reconciliation, and one-shot command callers in `suppressor/tests/config_and_state.rs`
+- [ ] T006 [P] Add or repair stale PID and stale `runtime_status.json` compatibility tests that must produce non-healthy status in `suppressor/tests/config_and_state.rs` and `suppressor/src/tui_status.rs`
+- [ ] T007 [P] Add or repair `server-start` CLI parsing, preflight, duplicate live daemon, stale PID, detached child, log redirection, and startup-timeout tests in `suppressor/src/cli.rs`, `suppressor/src/commands.rs`, `suppressor/src/app.rs`, and `suppressor/src/tui_status.rs`
+- [ ] T008 [P] Add or repair scheduler overlap tests proving rolling last-24h verification and nightly full recheck cannot block live hiding in `suppressor/src/scheduler.rs` and `suppressor/src/reconcile.rs`
+- [ ] T009 Implement the minimum shared throttle/backoff state needed by live hiding, catch-up, reconciliation, and command reports in `suppressor/src/state.rs`, `suppressor/src/runtime.rs`, `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, and `suppressor/src/commands.rs`
+- [ ] T010 Implement the additive `server-start` detached launch command, non-sensitive launch receipt, log redirection, startup wait, and safe-failure behavior in `suppressor/src/cli.rs`, `suppressor/src/app.rs`, `suppressor/src/commands.rs`, `suppressor/src/config.rs`, `suppressor/src/state.rs`, and `suppressor/src/runtime.rs`
+- [ ] T011 Ensure runtime status derives non-healthy or degraded protection when backoff, stale runtime, failed scheduled verification, stale full-recheck evidence, or invalid launch-path evidence is active in `suppressor/src/runtime.rs` and `suppressor/src/tui_status.rs`
 
-**Checkpoint**: Shared runtime, config, and compatibility surfaces are ready for story work.
+**Checkpoint**: Live hiding can remain independent from slower work, blocked or stale evidence
+cannot appear healthy, and the deployed binary has a verified detached launch path.
 
 ---
 
-## Phase 3: User Story 1 - Hide New Sensitive Edits Immediately (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 - Hide New Sensitive Edits Immediately (Priority: P1)
 
-**Goal**: Eligible watched-page edits are detected, queued, hidden, and recorded immediately
+**Goal**: Eligible watched-page edits are detected, queued, hidden or dry-run recorded, and surfaced
 without waiting for manual refreshes or scheduled reconciliation.
 
-**Independent Test**: With the daemon running, publish or simulate a qualifying edit on a watched
-page and verify the edit is queued immediately, hidden within the live target, and recorded in the
-operator surface without manual reload.
+**Independent Test**: Simulate or publish one watched eligible edit while the daemon is running and
+confirm immediate queueing, hide or dry-run outcome, `last_successful_hide_at` or dry-run outcome
+update, and operator status update.
 
 ### Tests for User Story 1
 
-- [X] T011 [P] [US1] Add live stream tests for watched recentchange classification, duplicate suppression, and queue handoff in `suppressor/src/stream.rs`
-- [X] T012 [P] [US1] Add runtime and worker tests for final live outcomes, `last_successful_hide_at` updates, and observed-to-queue timing in `suppressor/src/runtime.rs` and `suppressor/src/worker.rs`
-- [X] T013 [P] [US1] Add source-refresh trigger tests for suppression-list deltas and request-page immediate catch-up in `suppressor/src/stream.rs` and `suppressor/src/catchup.rs`
+- [ ] T012 [P] [US1] Add or repair watched recentchange-to-live-queue tests in `suppressor/src/stream.rs` and `suppressor/src/recentchange.rs`
+- [ ] T013 [P] [US1] Add or repair live worker outcome tests for hidden, already-hidden, skipped, retrying, and blocked states in `suppressor/src/worker.rs` and `suppressor/src/runtime.rs`
+- [ ] T014 [P] [US1] Add or repair live latency and bounded metrics tests for observed-to-queue and queue-to-hide evidence in `suppressor/src/metrics.rs` and `suppressor/src/runtime.rs`
 
 ### Implementation for User Story 1
 
-- [X] T014 [US1] Refactor live recentchange handling into explicit watched-edit dispatch helpers in `suppressor/src/stream.rs` and `suppressor/src/recentchange.rs`
-- [X] T015 [US1] Persist last successful hide details, live outcome source, and safe revision URLs in `suppressor/src/worker.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/state.rs`
-- [X] T016 [US1] Record observed-to-queue and observed-to-hide latency metrics without unbounded samples in `suppressor/src/metrics.rs` and `suppressor/src/runtime.rs`
-- [X] T017 [US1] Complete immediate source-refresh catch-up semantics for `Удзельнік:Wizardist/SuppressionList` and request-page triggers in `suppressor/src/stream.rs`, `suppressor/src/cache/source.rs`, and `suppressor/src/catchup.rs`
-- [X] T018 [US1] Keep live hiding independent from scheduled reconciliation and manual reload paths in `suppressor/src/stream.rs` and `suppressor/src/runtime.rs`
-- [X] T019 [US1] Surface last observed watched edit, queued live action, and last successful hide snapshots in `suppressor/src/tui_status.rs`
+- [ ] T015 [US1] Ensure live recentchange dispatch bypasses scheduled reconciliation queues and remains bounded in `suppressor/src/stream.rs`, `suppressor/src/worker.rs`, and `suppressor/src/runtime.rs`
+- [ ] T016 [US1] Ensure successful live hides and dry-run live outcomes persist safe revision URLs, final outcome source, and recovery anchors in `suppressor/src/worker.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/state.rs`
+- [ ] T017 [US1] Ensure source-list and request-page changes trigger immediate bounded catch-up without manual reload in `suppressor/src/stream.rs`, `suppressor/src/cache/source.rs`, and `suppressor/src/catchup.rs`
+- [ ] T018 [US1] Ensure the primary status surface shows last observed watched edit, queued live action, last successful hide, latest live issue, and current launch path in `suppressor/src/tui_status.rs` and `suppressor/src/tui_view.rs`
+- [ ] T019 [US1] Run targeted live-path tests and record the result in `specs/001-real-time-suppression/quickstart.md`
 
-**Checkpoint**: User Story 1 is complete when a new watched edit is hidden and recorded immediately
-without manual action, and source-page triggers start immediate bounded follow-up.
+**Checkpoint**: A new watched edit is handled by the daemon live path without manual action or
+waiting for nightly reconciliation.
 
 ---
 
 ## Phase 4: User Story 2 - Detect And Recover From Real-Time Stalls (Priority: P2)
 
-**Goal**: A running daemon that is stale, gapped, throttled, or otherwise ineffective becomes
-visibly non-healthy, recovers from the last successful hide where possible, performs the approved
-scheduled verification work, keeps failed verification or stale full watched-set coverage visible
-as trust problems, and presents operator-first truthful status.
+**Goal**: Stale, gapped, throttled, or ineffective protection becomes visibly non-healthy, recovery
+starts from the last successful hide, and daytime/nightly verification remains truthful and bounded.
 
-**Independent Test**: Simulate silent starvation, reconnect noise, a true gap, throttled recovery,
-stale prior artifacts, a failed scheduled verification, and an overdue checkpoint map; verify the
-daemon recovers from the correct anchor, scheduled verification runs are recorded truthfully,
-failed verification does not clear on an unrelated stream reopen, and the primary status view shows
-accurate protection state, next action, and full watched-set freshness evidence.
+**Independent Test**: Simulate stream stall, reconnect noise, true gap, API 429, failed scheduled
+verification, and stale checkpoint evidence; confirm recovery scope, bounded backoff, and degraded
+status remain visible until real recovery or verification clears them.
 
 ### Tests for User Story 2
 
-- [X] T020 [P] [US2] Add stream watchdog tests for silent starvation, reconnect, invalid resume, and ordinary reopen without false startup recovery in `suppressor/src/stream.rs`
-- [X] T021 [P] [US2] Add recovery-anchor and stale-state convergence tests for `last_successful_hide_at` recovery and fallback-anchor reporting in `suppressor/src/catchup.rs` and `suppressor/src/runtime.rs`
-- [X] T022 [P] [US2] Add bounded API freshness-probe, precise lag calculation, and MediaWiki timestamp plus `badtimestamp` classification tests in `suppressor/src/mw_api.rs` and `suppressor/src/runtime.rs`
-- [X] T023 [P] [US2] Add scheduler and overlap tests for rolling last-24h daytime verification, randomized nightly full recheck, and overlap with source-triggered or manual recovery in `suppressor/src/scheduler.rs` and `suppressor/src/reconcile.rs`
-- [X] T024 [P] [US2] Extend TUI and runtime-derivation tests for failed scheduled-verification visibility, checkpoint-freshness summaries, stale PID/runtime truth, latest actionable issue persistence, daemon-vs-command truth, and wrapped-row latest-follow behavior in `suppressor/src/tui_view.rs`, `suppressor/src/tui_status.rs`, and `suppressor/src/runtime.rs`
+- [ ] T020 [P] [US2] Add or repair recovery-anchor tests for `last_successful_hide_at`, fallback-anchor reporting, and no arbitrary recent-window truncation in `suppressor/src/catchup.rs` and `suppressor/src/runtime.rs`
+- [ ] T021 [P] [US2] Add or repair stream transition tests for startup recovery, ordinary reopen, reconnect noise, and true gap recovery in `suppressor/src/stream.rs`
+- [ ] T022 [P] [US2] Add or repair scheduled verification tests for rolling last-24h daytime windows, randomized nightly full recheck, and overlap behavior in `suppressor/src/scheduler.rs` and `suppressor/src/reconcile.rs`
+- [ ] T023 [P] [US2] Add or repair TUI/status derivation tests for degraded protection, failed verification visibility, stale full-recheck freshness, launch-path truth, and command-vs-daemon truth in `suppressor/src/tui_status.rs`, `suppressor/src/tui_view.rs`, and `suppressor/src/runtime.rs`
 
 ### Implementation for User Story 2
 
-- [X] T025 [US2] Implement automatic gap recovery from `last_successful_hide_at` with explicit fallback-anchor reporting in `suppressor/src/catchup.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/stream.rs`
-- [X] T026 [US2] Implement bounded freshness probing and wall-clock lag recalculation using compatibility seconds plus precise milliseconds in `suppressor/src/mw_api.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/state.rs`
-- [X] T027 [US2] Gate startup, reconnect-noise, true gap recovery, and ordinary reopen transitions in `suppressor/src/stream.rs` and `suppressor/src/runtime.rs`
-- [X] T028 [US2] Implement randomized rolling last-24h daytime verification and randomized nightly full recheck scheduling with shared backoff awareness in `suppressor/src/scheduler.rs`, `suppressor/src/reconcile.rs`, and `suppressor/src/config.rs`
-- [X] T029 [US2] Persist explicit current-task, recovery-window, recent offline interval, and latest actionable issue fields in `suppressor/src/runtime.rs` and `suppressor/src/state.rs`
-- [X] T030 [US2] Extend the primary TUI status panel and derived runtime view with full watched-set freshness evidence, latest failed daytime or nightly verification outcome, and degraded-trust rows that de-emphasize bookkeeping fields in `suppressor/src/tui_status.rs` and `suppressor/src/tui_view.rs`
-- [ ] T031 [US2] Surface compatibility or migration-needed diagnostics, approval text, rollback or fallback guidance, and stale PID/runtime cross-checks for invalid prior setup in `suppressor/src/runtime.rs`, `suppressor/src/state.rs`, and `suppressor/src/tui_view.rs`
-- [ ] T032 [US2] Make latest-follow log rendering row-accurate and keep daemon and command logs visibly distinct in `suppressor/src/tui.rs` and `suppressor/src/tui_view.rs`
-- [ ] T033 [US2] Share throttle or backoff state across live lookups, gap recovery, source-refresh catch-up, scheduled verification, reconciliation, and command surfaces, keep degraded live protection, failed scheduled verification, stale full watched-set coverage, and coalesced failure summaries visible while that state is active, and prevent stream reopen from clearing that state until a later successful verification or recovery does so in `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_status.rs`
+- [ ] T024 [US2] Implement or repair automatic recovery from `last_successful_hide_at` with explicit fallback-anchor status in `suppressor/src/catchup.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/stream.rs`
+- [ ] T025 [US2] Implement or repair rolling last-24h daytime verification and randomized nightly full recheck scheduling with exact scope labels in `suppressor/src/scheduler.rs`, `suppressor/src/reconcile.rs`, and `suppressor/src/config.rs`
+- [ ] T026 [US2] Ensure repeated API failures coalesce into bounded warning summaries with retry/backoff visibility in `suppressor/src/mw_api.rs`, `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, and `suppressor/src/runtime.rs`
+- [ ] T027 [US2] Ensure stream reopen cannot clear degraded live protection, failed scheduled verification, stale full-recheck evidence, or invalid launch-path evidence before successful verification clears it in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/tui_status.rs`
+- [ ] T028 [US2] Run targeted recovery, scheduler, backoff, and status tests and record the result in `specs/001-real-time-suppression/quickstart.md`
 
-**Checkpoint**: User Story 2 is complete when stale or throttled protection cannot appear healthy,
-recovery starts from the last successful hide, scheduled verification is truthful, stale full
-watched-set coverage is surfaced explicitly, and the primary status view answers the operator’s
-core questions.
+**Checkpoint**: A running daemon cannot look healthy when live hiding, recovery, reconciliation,
+nightly fallback, launch-path evidence, or throttled work is blocked, stale, or unresolved.
 
 ---
 
 ## Phase 5: User Story 3 - Verify Accident-Window Coverage (Priority: P3)
 
-**Goal**: Operators can run useful catch-up and coverage actions with clear defaults, explicit
-last-24h verification, direct revision links, and bounded reports that never replace daemon
-realtime truth.
+**Goal**: Operators can run useful emergency catch-up and coverage checks with clear windows,
+bounded reports, direct revision links, and no confusion with daemon-owned realtime truth.
 
-**Independent Test**: Run emergency catch-up and last-24h coverage from the TUI or CLI and verify
-the exact window, safe revision links, unresolved next actions, and daemon-vs-command separation.
+**Independent Test**: Run emergency catch-up and `Last 24 hours` coverage from CLI or TUI and
+confirm exact window labels, bounded command report, safe revision links, unresolved next actions,
+and unchanged daemon-owned realtime status.
 
 ### Tests for User Story 3
 
-- [ ] T034 [P] [US3] Add command tests for anchor-based emergency catch-up defaults, explicit `Last 24 hours` preset labeling, and bounded command-report output in `suppressor/src/commands.rs`
-- [ ] T035 [P] [US3] Add TUI action tests for plain-language labels, last-24h preset wiring, refresh-status semantics, and reload-watched-pages semantics in `suppressor/src/tui.rs`
-- [ ] T036 [P] [US3] Add report rendering tests for revision links, unresolved next actions, and command-report versus daemon-status separation in `suppressor/src/tui_view.rs` and `suppressor/src/commands.rs`
+- [ ] T029 [P] [US3] Add or repair command tests for anchor-based emergency catch-up defaults and explicit `Last 24 hours` preset labeling in `suppressor/src/commands.rs`
+- [ ] T030 [P] [US3] Add or repair command-report compatibility and bounded unresolved-list tests in `suppressor/src/state.rs` and `suppressor/src/commands.rs`
+- [ ] T031 [P] [US3] Add or repair TUI action and log separation tests for reload watched pages, refresh status, command output, and daemon output in `suppressor/src/tui.rs` and `suppressor/src/tui_view.rs`
 
 ### Implementation for User Story 3
 
-- [X] T037 [US3] Make emergency catch-up default to the active recovery-anchor window when available in `suppressor/src/commands.rs` and `suppressor/src/runtime.rs`
-- [X] T038 [US3] Add a clearly labeled `Last 24 hours` coverage preset across `suppressor/src/cli.rs`, `suppressor/src/app.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui.rs`
-- [X] T039 [US3] Render safe revision URLs and next actions in catch-up and coverage outputs in `suppressor/src/catchup.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_view.rs`
-- [X] T040 [US3] Relabel TUI actions and descriptions in plain language, including dry-run, refresh status, reload watched pages, and full watched-set recheck, in `suppressor/src/tui.rs` and `suppressor/src/tui_view.rs`
-- [ ] T041 [US3] Keep bounded command-report surfaces compatible and distinct from daemon truth in `suppressor/src/state.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_status.rs`
+- [ ] T032 [US3] Ensure emergency catch-up defaults to the active recovery anchor when available and otherwise uses the bounded recent window in `suppressor/src/commands.rs` and `suppressor/src/runtime.rs`
+- [ ] T033 [US3] Ensure the `Last 24 hours` preset is wired through CLI, app, commands, and TUI without requiring timestamp input in `suppressor/src/cli.rs`, `suppressor/src/app.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui.rs`
+- [ ] T034 [US3] Ensure one-shot command reports stay bounded, compatible, and visibly separate from daemon truth in `suppressor/src/state.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_status.rs`
+- [ ] T035 [US3] Ensure safe revision URLs and unresolved next actions render in catch-up, coverage, and TUI report surfaces in `suppressor/src/catchup.rs`, `suppressor/src/commands.rs`, and `suppressor/src/tui_view.rs`
+- [ ] T036 [US3] Run targeted command and TUI report tests and record the result in `specs/001-real-time-suppression/quickstart.md`
 
-**Checkpoint**: User Story 3 is complete when operators can run useful coverage actions with clear
-windows, clear labels, safe links, and no confusion about what the daemon itself is doing.
+**Checkpoint**: Operator commands provide useful bounded evidence without impersonating daemon
+health.
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-**Purpose**: Close the release-evidence gap with docs, benchmark safety, low-spec verification, and
-final compatibility approval evidence.
+**Purpose**: Complete only the release evidence required by the active suppressor MVP freeze.
 
-- [ ] T042 [P] Add benchmark safety, burst-of-10 controlled-event, and allow-list tests for `Удзельнік:Plaga med Bot/suppressor/tests` in `suppressor/src/commands.rs`, `suppressor/tests/api_integration.rs`, and `suppressor/tests/config_and_state.rs`
-- [ ] T043 [P] Implement benchmark and low-spec verification entry points in `suppressor/src/commands.rs`, `suppressor/src/cli.rs`, and `suppressor/src/app.rs`
-- [ ] T044 [P] Update operator docs for live states, recovery anchor, last-24h preset, randomized verification, reconciliation freshness evidence, and authoritative launch-path guidance in `suppressor/README.md` and `suppressor/docs/operations.md`
-- [ ] T045 [P] Update implementation and runtime-boundary docs for scheduler semantics, status contracts, stale-runtime cross-checks, checkpoint-freshness evidence, bounded state, and operator-first TUI design in `suppressor/docs/implementation.md` and `suppressor/docs/runtime-boundaries.md`
-- [ ] T046 [P] Update testing strategy and quickstart verification for anchor recovery, scheduler runs, operator-first TUI, reconciliation freshness truth, benchmark safety, and compatibility approval checks in `suppressor/docs/testing-strategy.md` and `specs/001-real-time-suppression/quickstart.md`
-- [ ] T047 Run `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` and `rtk cargo test --manifest-path suppressor/Cargo.toml`, fixing regressions in `suppressor/tests/config_and_state.rs` and `suppressor/tests/api_integration.rs`
-- [ ] T048 Run `rtk python3 tools/doc_workflow.py all` and record the docs-gate result in `specs/001-real-time-suppression/quickstart.md`
-- [ ] T049 Restart the daemon through the actual launch path, verify PID/binary/runtime truth alignment, run the benchmark and low-spec checks, and capture compatibility approval evidence plus reconciliation-freshness and release-readiness results in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
-- [ ] T050 Evaluate whether the compatibility or migration-warning pattern should be generalized and, if so, document it in `specs/000-repo-governance/research.md`
-- [ ] T051 [P] Add controlled rights/session failure reporting tests for live hiding and operator surfaces in `suppressor/src/worker.rs`, `suppressor/src/runtime.rs`, and `suppressor/tests/api_integration.rs`
+- [ ] T037 Run `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` and fix MVP regressions in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/tui_status.rs`, `suppressor/tests/config_and_state.rs`, and `suppressor/tests/api_integration.rs`
+- [ ] T038 Run `make -C suppressor build-server` and record either the built artifact path or missing local prerequisite in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T039 Verify the actual launch path with the built binary, `server-start` where rsync deployment is used, PID/runtime truth, detached log path, terminal logout survival, and daemon-owned status evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T040 Run a controlled live or dry-run watched-edit smoke check and record live hiding or dry-run outcome evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T041 Measure idle daemon plus TUI resource usage, queue depth, state size, detached log growth, and warning summary bounds on the deployment host in `suppressor/docs/operations.md`
+- [ ] T042 Update operator and runtime docs with the MVP launch path, `make build-server`, `server-start`, recovery anchor, rolling last-24h verification, nightly full recheck, and degraded-status meanings in `suppressor/README.md`, `suppressor/docs/operations.md`, and `suppressor/docs/runtime-boundaries.md`
+- [ ] T043 Update implementation and testing docs with the shared backoff contract, scheduler semantics, timestamp formatting lesson, detached server-start launch checks, and minimum server verification path in `suppressor/docs/implementation.md` and `suppressor/docs/testing-strategy.md`
+- [ ] T044 Run `rtk python3 tools/doc_workflow.py all` and record the result or the known inactive-`002` metadata blocker in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T045 Produce the final MVP go/no-go checklist with test, build, detached server-start launch, live-hide, recovery, reconciliation, nightly, backoff, and rollback evidence in `specs/001-real-time-suppression/quickstart.md`
 
 ---
 
@@ -177,69 +168,58 @@ final compatibility approval evidence.
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies. Establishes the actual deployment and compatibility
-  baseline.
-- **Foundational (Phase 2)**: Depends on Setup and blocks all story work because state, config, and
-  compatibility contracts must be explicit first.
-- **User Story 1 (Phase 3)**: Depends on Foundational and delivers the MVP live-protection path.
-- **User Story 2 (Phase 4)**: Depends on Foundational and is required before production trust,
-  because truthful recovery and truthful operator status are still missing.
-- **User Story 3 (Phase 5)**: Depends on Foundational and reuses the shared recovery and report
-  contracts.
-- **Polish (Phase 6)**: Depends on the desired user stories being complete.
+- **Setup (Phase 1)**: No dependencies. Establishes the current baseline, server-build path, and
+  detached server-start evidence contract.
+- **Foundational (Phase 2)**: Depends on Setup and blocks all stories because shared backoff,
+  runtime truth, bounded scheduler behavior, and detached launch correctness determine daemon
+  safety.
+- **User Story 1 (Phase 3)**: Depends on Foundational and is the first live-protection MVP slice.
+- **User Story 2 (Phase 4)**: Depends on Foundational and must complete before production trust
+  because stale, throttled, or launch-path-broken protection cannot appear healthy.
+- **User Story 3 (Phase 5)**: Depends on Foundational and can proceed after US1 live-path evidence
+  is stable.
+- **Polish (Phase 6)**: Depends on US1, US2, and `server-start` for MVP release; US3 is required
+  before treating command/coverage surfaces as safe.
 
 ### User Story Dependencies
 
-- **US1 (P1)**: Can start immediately after Foundational and should be completed first.
-- **US2 (P2)**: Can start after Foundational, but it is safest after US1 live-path changes settle
-  because it depends on the final live outcome and recovery-anchor behavior.
-- **US3 (P3)**: Can start after Foundational and parallelize with late US2 work once command-report
-  isolation and compatibility helpers are in place.
-
-### Within Each User Story
-
-- Write the story tests first and confirm they fail against the current behavior.
-- Implement the minimum code needed to satisfy the story’s independent test.
-- Keep resource bounds, compatibility behavior, and daemon-vs-command truth intact while making the
-  story pass.
-- Validate the story independently before moving on.
+- **US1 (P1)**: First daemon MVP slice; complete before deployment trust.
+- **US2 (P2)**: Production-trust slice; complete before claiming stable daemon operation.
+- **US3 (P3)**: Operator-command evidence slice; complete before relying on catch-up/coverage
+  commands during incidents.
 
 ### Parallel Opportunities
 
-- Phase 1 tasks T002 and T003 can run in parallel after the baseline path is known.
-- Phase 2 tasks T005, T007, and T009 can run in parallel across fixtures, scheduler tests, and
-  runtime contract tests.
-- US1 test tasks T011 through T013 can run in parallel.
-- US2 test tasks T020 through T024 can run in parallel across stream, catch-up, API, scheduler,
-  reconciliation-freshness, and TUI surfaces.
-- US3 test tasks T034 through T036 can run in parallel across commands and TUI surfaces.
-- Polish tasks T042 through T046 and T051 can run in parallel once the code paths stabilize.
+- T005, T006, T007, and T008 can run in parallel across different foundational test surfaces.
+- T012, T013, and T014 can run in parallel for US1 tests.
+- T020, T021, T022, and T023 can run in parallel for US2 tests.
+- T029, T030, and T031 can run in parallel for US3 tests.
+- T042 and T043 can run in parallel after code behavior stabilizes.
 
 ---
 
 ## Parallel Example: User Story 1
 
-```bash
-Task: "T011 [US1] Add live stream tests for watched recentchange classification, duplicate suppression, and queue handoff in suppressor/src/stream.rs"
-Task: "T012 [US1] Add runtime and worker tests for final live outcomes, last_successful_hide_at updates, and observed-to-queue timing in suppressor/src/runtime.rs and suppressor/src/worker.rs"
-Task: "T013 [US1] Add source-refresh trigger tests for suppression-list deltas and request-page immediate catch-up in suppressor/src/stream.rs and suppressor/src/catchup.rs"
+```text
+Task: "T012 [P] [US1] Add or repair watched recentchange-to-live-queue tests in suppressor/src/stream.rs and suppressor/src/recentchange.rs"
+Task: "T013 [P] [US1] Add or repair live worker outcome tests for hidden, already-hidden, skipped, retrying, and blocked states in suppressor/src/worker.rs and suppressor/src/runtime.rs"
+Task: "T014 [P] [US1] Add or repair live latency and bounded metrics tests for observed-to-queue and queue-to-hide evidence in suppressor/src/metrics.rs and suppressor/src/runtime.rs"
 ```
 
 ## Parallel Example: User Story 2
 
-```bash
-Task: "T020 [US2] Add stream watchdog tests for silent starvation, reconnect, invalid resume, and ordinary reopen without false startup recovery in suppressor/src/stream.rs"
-Task: "T022 [US2] Add bounded API freshness-probe and precise lag calculation tests in suppressor/src/mw_api.rs and suppressor/src/runtime.rs"
-Task: "T023 [US2] Add scheduler and overlap tests for rolling last-24h daytime verification, randomized nightly full recheck, and overlap with source-triggered or manual recovery in suppressor/src/scheduler.rs and suppressor/src/reconcile.rs"
-Task: "T024 [US2] Extend TUI and runtime-derivation tests for failed scheduled-verification visibility, checkpoint-freshness summaries, stale PID/runtime truth, latest actionable issue persistence, daemon-vs-command truth, and wrapped-row latest-follow behavior in suppressor/src/tui_view.rs, suppressor/src/tui_status.rs, and suppressor/src/runtime.rs"
+```text
+Task: "T020 [P] [US2] Add or repair recovery-anchor tests for last_successful_hide_at, fallback-anchor reporting, and no arbitrary recent-window truncation in suppressor/src/catchup.rs and suppressor/src/runtime.rs"
+Task: "T022 [P] [US2] Add or repair scheduled verification tests for rolling last-24h daytime windows, randomized nightly full recheck, and overlap behavior in suppressor/src/scheduler.rs and suppressor/src/reconcile.rs"
+Task: "T023 [P] [US2] Add or repair TUI/status derivation tests for degraded protection, failed verification visibility, stale full-recheck freshness, launch-path truth, and command-vs-daemon truth in suppressor/src/tui_status.rs, suppressor/src/tui_view.rs, and suppressor/src/runtime.rs"
 ```
 
 ## Parallel Example: User Story 3
 
-```bash
-Task: "T034 [US3] Add command tests for anchor-based emergency catch-up defaults, explicit Last 24 hours preset labeling, and bounded command-report output in suppressor/src/commands.rs"
-Task: "T035 [US3] Add TUI action tests for plain-language labels, last-24h preset wiring, refresh-status semantics, and reload-watched-pages semantics in suppressor/src/tui.rs"
-Task: "T036 [US3] Add report rendering tests for revision links, unresolved next actions, and command-report versus daemon-status separation in suppressor/src/tui_view.rs and suppressor/src/commands.rs"
+```text
+Task: "T029 [P] [US3] Add or repair command tests for anchor-based emergency catch-up defaults and explicit Last 24 hours preset labeling in suppressor/src/commands.rs"
+Task: "T030 [P] [US3] Add or repair command-report compatibility and bounded unresolved-list tests in suppressor/src/state.rs and suppressor/src/commands.rs"
+Task: "T031 [P] [US3] Add or repair TUI action and log separation tests for reload watched pages, refresh status, command output, and daemon output in suppressor/src/tui.rs and suppressor/src/tui_view.rs"
 ```
 
 ---
@@ -248,30 +228,25 @@ Task: "T036 [US3] Add report rendering tests for revision links, unresolved next
 
 ### MVP First
 
-1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational
-3. Complete Phase 3: User Story 1
-4. Stop and validate the independent US1 live-protection flow
-
-### Incremental Delivery
-
-1. Setup plus Foundational establishes the compatible runtime and scheduler contracts.
-2. US1 restores immediate live protection.
-3. US2 restores truthful recovery and operator trust.
-4. US3 restores useful operator commands and coverage evidence.
-5. Phase 6 closes benchmark, low-spec, docs, and compatibility approval evidence.
+1. Complete Phase 1 and Phase 2.
+2. Complete US1 live daemon path.
+3. Complete US2 recovery/reconciliation/nightly truth.
+4. Run the shortest suppressor test gate.
+5. Build the server artifact with `make -C suppressor build-server`.
+6. Verify the actual launch path with `server-start` where rsync deployment is used, then run one
+   controlled live or dry-run watched edit.
+7. Only then complete US3 command/report hardening and final docs evidence.
 
 ### Suggested MVP Scope
 
-The functional MVP is **Setup + Foundational + User Story 1**.  
-Production-trust readiness requires **User Story 2** before the daemon should be treated as safely
-recovered from this incident.
+The active safety-freeze MVP is Phase 1 + Phase 2 + US1 + US2 + T037 through T041. US3 and T042
+through T045 are required before broader operator-command trust or feature close-out.
 
----
+### Guardrails
 
-## Notes
-
-- `[P]` tasks touch different files or contracts and can be split across workers.
-- User story labels map directly to the stories in `spec.md` for traceability.
-- This file preserves the current checked state where implementation or verification work has
-  already been completed and refreshes the remaining backlog against the current spec and plan.
+- Do not start unrelated `biblio`, inactive `002`, broad docs, new service, or cosmetic TUI work.
+- Do not treat checked tasks or generated text as release evidence.
+- Do not log sensitive article content, hidden text, cookies, tokens, credentials, or `.env`
+  values.
+- Do not let reconciliation, catch-up, scheduled verification, or detached launch checks starve live
+  hiding.

@@ -10,16 +10,12 @@ docmeta:
 
 <!--
 Sync Impact Report
-Version change: 1.5.0 -> 1.6.0
+Version change: 1.6.0 -> 1.7.0
 Modified principles:
-- Added V. Compatibility, Non-Destructive Change, And Explicit Approval
-- IV. Deterministic Documentation, Safe Writes, And Honest Status (expanded overwrite and
-  truthful-surface boundaries)
-- VI. Spec Kit First For Non-Trivial Work (expanded disruptive-change planning requirements)
-- VII. Resource Economy, Robustness, And Durable Lessons (renumbered after new principle)
-- Workflow And Quality Gates (expanded compatibility, migration, and approval requirements)
+- Added VIII. Active Human-Safety Freeze For Suppressor MVP
+- Workflow And Quality Gates (added active safety-freeze routing and exit requirements)
 Added sections:
-- V. Compatibility, Non-Destructive Change, And Explicit Approval
+- VIII. Active Human-Safety Freeze For Suppressor MVP
 Removed sections:
 - None
 Templates requiring updates:
@@ -29,11 +25,15 @@ Templates requiring updates:
 - ✅ README.md
 - ✅ specs/000-repo-governance/spec.md
 - ✅ specs/000-repo-governance/quickstart.md
+- ✅ .specify/feature.json
 - ✅ .specify/extensions/docs/README.md
-- ✅ reviewed, no update required: .specify/extensions/docs/commands/speckit.docs.md
+- ✅ .specify/extensions/docs/commands/speckit.docs.md
 - ⚠ `.specify/templates/commands/*.md` is not present in this repo; repo-local command guidance was checked in `.specify/extensions/docs/commands/` instead
 Follow-up TODOs:
-- None
+- Docs gate is blocked by unrelated inactive feature metadata:
+  `specs/002-fix-git-commit/checklists/requirements.md` lacks YAML frontmatter. Do not resolve
+  this during the active suppressor MVP freeze unless the human owner explicitly allows touching
+  inactive `002` artifacts.
 -->
 
 # Wiki Scripts Constitution
@@ -114,6 +114,21 @@ processes, public services, or dependencies require evidence that they improve i
 robustness, or operator control more than they increase overhead. Incident lessons MUST be preserved
 in tests, operator docs, code comments, or governance docs before the feature closes.
 
+### VIII. Active Human-Safety Freeze For Suppressor MVP
+
+When an active feature is declared human-safety-critical by the human owner, repo work MUST route
+only to that feature and the minimum direct enablers needed to make it safe. During the active
+`specs/001-real-time-suppression/` freeze, agents MUST NOT start or continue unrelated `biblio`,
+workflow-polish, broad docs, refactor, or new-feature work unless the human owner explicitly releases
+the freeze or the work is required to make the suppressor daemon run safely. The MVP target is a
+minimal, stable, server-runnable suppressor daemon that automatically hides eligible watched edits,
+keeps the live path independent from slower work, performs automatic recovery/reconciliation and
+nightly fallback checks, reports non-healthy status truthfully, and can be verified through the
+actual launch path. Architecture experiments, large rewrites, new services, cosmetic TUI work, and
+non-essential optimization MUST wait until that MVP is stable. Token and time economy are mandatory:
+agents MUST use narrow context, small patches, and the shortest meaningful tests, but MUST NOT skip
+critical daemon, recovery, reconciliation, or safety verification.
+
 ## Language And Deployment Policy
 
 - Python is the default language for smaller and faster-turnaround wiki automation.
@@ -177,6 +192,13 @@ in tests, operator docs, code comments, or governance docs before the feature cl
 - Tooling, logging, and metrics MUST avoid secrets and sensitive payloads.
 - Operator surfaces, CLIs, and Makefiles SHOULD stay small, well-described, and layered. Prefer a
   few clear entrypoints over long flat command lists that only make sense after rereading docs.
+- If a human-safety freeze is active, `.specify/feature.json` MUST point at the active safety feature
+  or be ignored in favor of the explicit human instruction. Any conflicting active feature pointer
+  MUST be corrected before planning or implementation continues.
+- During the active suppressor MVP freeze, production-readiness claims MUST mean the daemon has been
+  verified on the actual launch path for automatic live hiding, recovery/reconciliation, nightly
+  fallback, truthful non-healthy status, bounded failure behavior, and the minimum test evidence
+  required by `specs/001-real-time-suppression/quickstart.md`.
 
 ## Governance
 
@@ -202,4 +224,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.6.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-04-28
+**Version**: 1.7.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-05

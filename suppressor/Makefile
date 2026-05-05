@@ -1,16 +1,19 @@
 MAKEFLAGS += --no-print-directory
 
 CARGO ?= cargo
+ZIGBUILD ?= cargo zigbuild
 CONFIG ?= ./config.toml
 ENV_FILE ?= ./.env
 ARGS ?=
 REVID ?=
+SERVER_TARGET ?= aarch64-unknown-linux-musl
+SERVER_BINARY ?= target/$(SERVER_TARGET)/release/suppressor
 LOG_LEVEL ?= warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn
 LOG_FORMAT ?= text
 
 RUN_ENV = RUST_LOG=$(LOG_LEVEL) BEWIKI_LOG_FORMAT=$(LOG_FORMAT) BEWIKI_ENV_FILE=$(ENV_FILE)
 
-.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid emergency-catchup coverage-report nightly-sweep-now print-effective-config build release test fmt lint check
+.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint check
 
 define REQUIRE_CONFIG
 	@if [ -f "$(CONFIG)" ]; then :; else \
@@ -46,6 +49,7 @@ help:
 		'' \
 		'Developer commands:' \
 		'  make build' \
+		'  make build-server' \
 		'  make release' \
 		'  make test [ARGS="..."]' \
 		'  make fmt' \
@@ -55,6 +59,7 @@ help:
 		'Variables:' \
 		'  CONFIG=./config.toml' \
 		'  ENV_FILE=./.env' \
+		'  SERVER_TARGET=aarch64-unknown-linux-musl' \
 		'  LOG_LEVEL=warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn' \
 		'  LOG_FORMAT=text'
 
@@ -118,6 +123,10 @@ print-effective-config:
 
 build:
 	$(CARGO) build $(ARGS)
+
+build-server:
+	$(ZIGBUILD) --release --target "$(SERVER_TARGET)" $(ARGS)
+	@printf 'server binary: %s\n' "$(SERVER_BINARY)"
 
 release:
 	$(CARGO) build --release $(ARGS)

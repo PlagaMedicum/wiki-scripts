@@ -27,6 +27,16 @@ diagnostics.
 {
   "daemon_state": "running",
   "dry_run": false,
+  "launch_path": {
+    "kind": "server-start",
+    "pid": 43217,
+    "binary_path": "/opt/suppressor/suppressor",
+    "config_path": "/opt/suppressor/config.toml",
+    "pid_file": "/opt/suppressor/state/daemon.pid",
+    "runtime_status_file": "/opt/suppressor/state/runtime_status.json",
+    "log_path": "/opt/suppressor/state/daemon.log",
+    "started_at": "2026-04-29T08:30:00Z"
+  },
   "last_notice": "rolling last-24h verification completed",
   "last_notice_at": "2026-04-29T09:10:03Z",
   "resource_economy": {
@@ -145,7 +155,7 @@ The compact primary operator view must answer these questions without requiring 
 
 The primary view should therefore render, in priority order:
 
-1. `Protection`: colored protection state plus PID from the supervisor surface and daemon uptime.
+1. `Protection`: colored protection state plus PID, actual launch path, and daemon uptime.
 2. `Current work`: idle, gap recovery, rolling last-24h verification, nightly full recheck,
    source refresh, or backoff, with progress and exact window or full-scope label.
 3. `Lag`: wall-clock lag with sub-second precision under one second and the lag source.
@@ -198,6 +208,10 @@ The primary view should not spend its first rows on:
   typically `https://be.wikipedia.org/wiki/Special:Diff/<revid>`.
 - `daemon_started_at` records the start of the current continuous protection session used for TUI
   uptime.
+- `launch_path.kind` records the actual authoritative launch path for this run, such as
+  `tui-managed`, `systemd`, `server-start`, or another explicit supervisor label.
+- `launch_path.pid`, `pid_file`, `runtime_status_file`, and `log_path` must remain non-sensitive and
+  must let the operator verify a detached `server-start` daemon after closing the SSH terminal.
 - `current_task` records the background task the operator should care about now, even if lower-level
   reconciliation counters still exist elsewhere.
 - `latest_actionable_issue` is preferred over raw error codes for primary rendering. Raw
@@ -346,3 +360,5 @@ Rules:
   the richer daemon-owned runtime contract.
 - If a deployment is not systemd-managed, the operator surface must state the actual authoritative
   path instead of silently assuming a unit exists.
+- A detached `server-start` launch must identify itself as `server-start` or equivalent
+  detached-binary wording so it is not confused with a TUI-managed child or a systemd unit.

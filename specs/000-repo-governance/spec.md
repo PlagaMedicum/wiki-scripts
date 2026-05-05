@@ -29,6 +29,9 @@ tradeoffs.
   code, tests, governance docs, or explicit comments after review.
 - Low-spec local operation is a default constraint for operational tools. Resource economy must
   support robustness, performance, and documentation quality, not replace them.
+- An active human-safety freeze is in effect for `specs/001-real-time-suppression/`. Until the
+  human owner releases it, repo work stays on `suppressor` MVP stabilization and the smallest direct
+  enablers needed for that daemon to run safely.
 
 ## Stable Documentation Model
 
@@ -108,6 +111,12 @@ tradeoffs.
 ### Suppressor
 
 - `suppressor` remains intentionally narrow and safety-sensitive.
+- The current priority is the `specs/001-real-time-suppression/` MVP: a minimal stable
+  server-runnable daemon with automatic live hiding, automatic recovery/reconciliation, nightly
+  fallback checks, truthful non-healthy status, bounded failure behavior, and actual-launch-path
+  verification.
+- During the active MVP freeze, unrelated tool work, broad refactors, new services, cosmetic TUI
+  changes, and non-essential optimization are deferred unless explicitly approved by the human owner.
 - Keep one daemon and one local supervisor TUI for now.
 - The daemon should process edits made by the same account and hide them too.
 - Avoid feedback loops aggressively, especially around any journalling or follow-on actions.

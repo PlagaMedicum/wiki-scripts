@@ -37,11 +37,22 @@ fn stale_pid_notice(paths: &RuntimePaths, pid: i32) -> CompatibilityNotice {
         severity: "warning".to_string(),
         detected_at: Some(Utc::now()),
         previous_value: Some(paths.pid_file.display().to_string()),
-        expected_value: Some("running daemon pid plus runtime_status.json".to_string()),
+        expected_value: Some(
+            "running daemon pid plus a matching runtime_status.json updated by the active supervisor"
+                .to_string(),
+        ),
         summary: format!("pid file points to a non-running process ({pid})"),
         operator_action:
-            "remove the stale pid marker or restart suppressor through the active supervisor before trusting healthy status"
+            "remove the stale pid marker or restart suppressor through the active supervisor so pid and runtime status are recreated together"
                 .to_string(),
+        approval_text: Some(
+            "trust healthy status again only after the shown pid is running and the runtime_status.json surface is updating for that daemon"
+                .to_string(),
+        ),
+        rollback_path: Some(
+            "fall back to the last trusted launch path, remove the stale pid marker, and confirm the replacement daemon rewrites runtime_status.json"
+                .to_string(),
+        ),
         blocking: true,
     }
 }
@@ -135,6 +146,8 @@ pub(crate) fn collect_status(
                     &paths.runtime_status_file,
                     "readable runtime_status.json surface",
                     "replace or remove the unreadable runtime status file before trusting suppressor status",
+                    "trust healthy status again only after the active daemon rewrites a readable runtime_status.json surface",
+                    "restart the last trusted daemon workflow and verify that it writes a readable runtime_status.json surface",
                 ),
             );
             snapshot.status_error = Some(compact_status_error("runtime", format!("{error:#}")))
@@ -152,6 +165,8 @@ pub(crate) fn collect_status(
                     &paths.command_report_file(),
                     "bounded command-report surface",
                     "rerun the command or remove the unreadable command report file before trusting the last command summary",
+                    "trust the last command summary again only after the current binary regenerates a readable bounded command report",
+                    "remove the unreadable command report and rerun the last trusted command workflow",
                 ),
             );
             snapshot.status_error =
@@ -263,31 +278,30 @@ fn populate_recheck_freshness_derivatives(
             .last_nightly_full_recheck_result
             .as_deref()
             .is_some_and(|result| result.starts_with("failed:"));
-    let stale_coverage =
-        freshness.total_pages > 0 && freshness.pages_older_than_target > 0;
+    let stale_coverage = freshness.total_pages > 0 && freshness.pages_older_than_target > 0;
     status.reconciliation.freshness = Some(freshness.clone());
 
     if verification_failed || stale_coverage {
-        let should_replace_issue = status
-            .realtime
-            .latest_actionable_issue
-            .as_ref()
-            .is_none_or(|issue| {
-                matches!(
-                    issue.source.as_str(),
-                    "" | "last-24h-verification"
-                        | "full-watched-set-recheck"
-                        | "full-watched-set-freshness"
-                )
-            });
+        let should_replace_issue =
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .is_none_or(|issue| {
+                    matches!(
+                        issue.source.as_str(),
+                        "" | "last-24h-verification"
+                            | "full-watched-set-recheck"
+                            | "full-watched-set-freshness"
+                    )
+                });
         if should_replace_issue {
-            status.realtime.latest_actionable_issue = if let Some(issue) =
-                scheduled_verification_issue(&freshness, now)
-            {
-                Some(issue)
-            } else {
-                Some(full_recheck_freshness_issue(&freshness, now))
-            };
+            status.realtime.latest_actionable_issue =
+                if let Some(issue) = scheduled_verification_issue(&freshness, now) {
+                    Some(issue)
+                } else {
+                    Some(full_recheck_freshness_issue(&freshness, now))
+                };
         }
         if matches!(status.realtime.state.as_str(), "" | "unknown" | "healthy") {
             status.realtime.state = "unhealthy".to_string();
@@ -380,9 +394,8 @@ fn scheduled_verification_issue(
             source: "last-24h-verification".to_string(),
             severity: "error".to_string(),
             summary: format!("Last 24 hours verification {result}"),
-            next_action:
-                "inspect the latest verification log or rerun Last 24 hours verification"
-                    .to_string(),
+            next_action: "inspect the latest verification log or rerun Last 24 hours verification"
+                .to_string(),
             detected_at: Some(detected_at),
         });
     let nightly = freshness
@@ -393,9 +406,8 @@ fn scheduled_verification_issue(
             source: "full-watched-set-recheck".to_string(),
             severity: "error".to_string(),
             summary: format!("full watched-set recheck {result}"),
-            next_action:
-                "inspect the latest recheck log or rerun the full watched-set recheck"
-                    .to_string(),
+            next_action: "inspect the latest recheck log or rerun the full watched-set recheck"
+                .to_string(),
             detected_at: Some(detected_at),
         });
     nightly.or(daytime)
@@ -412,8 +424,9 @@ fn full_recheck_freshness_issue(
             "full watched-set coverage is stale for {}/{} pages",
             freshness.pages_older_than_target, freshness.total_pages
         ),
-        next_action: "run the full watched-set recheck and confirm stale-page count returns to zero"
-            .to_string(),
+        next_action:
+            "run the full watched-set recheck and confirm stale-page count returns to zero"
+                .to_string(),
         detected_at: Some(detected_at),
     }
 }
@@ -642,6 +655,20 @@ mod tests {
                 .map(|notice| notice.blocking),
             Some(true)
         );
+        assert!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref())
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref())
+                .is_some()
+        );
     }
 
     #[test]
@@ -676,6 +703,20 @@ mod tests {
                 .as_ref()
                 .map(|notice| notice.blocking),
             Some(true)
+        );
+        assert!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref())
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref())
+                .is_some()
         );
         assert!(
             snapshot
@@ -717,6 +758,20 @@ mod tests {
                 .as_ref()
                 .map(|notice| notice.blocking),
             Some(true)
+        );
+        assert!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref())
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref())
+                .is_some()
         );
         assert!(
             snapshot
@@ -903,7 +958,10 @@ mod tests {
         let freshness = status.reconciliation.freshness.as_ref().unwrap();
         assert_eq!(freshness.total_pages, 2);
         assert_eq!(freshness.pages_older_than_target, 2);
-        assert_eq!(freshness.oldest_full_check_title.as_deref(), Some("Old page"));
+        assert_eq!(
+            freshness.oldest_full_check_title.as_deref(),
+            Some("Old page")
+        );
         assert_eq!(status.realtime.state, "unhealthy");
         assert_eq!(
             status
@@ -931,9 +989,7 @@ mod tests {
             realtime: RealtimeRuntimeStatus {
                 state: "healthy".to_string(),
                 last_daytime_verification_at: Some(now),
-                last_daytime_verification_result: Some(
-                    "failed: non-json-response".to_string(),
-                ),
+                last_daytime_verification_result: Some("failed: non-json-response".to_string()),
                 ..RealtimeRuntimeStatus::default()
             },
             ..RuntimeStatus::default()

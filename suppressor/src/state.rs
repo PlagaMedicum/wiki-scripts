@@ -43,6 +43,8 @@ pub struct CompatibilityNotice {
     pub expected_value: Option<String>,
     pub summary: String,
     pub operator_action: String,
+    pub approval_text: Option<String>,
+    pub rollback_path: Option<String>,
     pub blocking: bool,
 }
 
@@ -51,6 +53,8 @@ pub fn compatibility_notice_for_unreadable_surface(
     path: &Path,
     expected_value: &str,
     operator_action: &str,
+    approval_text: &str,
+    rollback_path: &str,
 ) -> CompatibilityNotice {
     CompatibilityNotice {
         scope: scope.to_string(),
@@ -60,6 +64,8 @@ pub fn compatibility_notice_for_unreadable_surface(
         expected_value: Some(expected_value.to_string()),
         summary: format!("existing {scope} surface could not be parsed safely"),
         operator_action: operator_action.to_string(),
+        approval_text: Some(approval_text.to_string()),
+        rollback_path: Some(rollback_path.to_string()),
         blocking: true,
     }
 }
@@ -585,6 +591,10 @@ mod tests {
                 severity: "warning".to_string(),
                 summary: "legacy report shape detected".to_string(),
                 operator_action: "trust the new report output".to_string(),
+                approval_text: Some(
+                    "confirm the current report format before trusting it".to_string(),
+                ),
+                rollback_path: Some("rerun the last trusted report workflow".to_string()),
                 ..CompatibilityNotice::default()
             }),
             realtime: RealtimeRuntimeStatus {
@@ -680,6 +690,20 @@ mod tests {
         );
         assert_eq!(
             loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref()),
+            Some("confirm the current report format before trusting it")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref()),
+            Some("rerun the last trusted report workflow")
+        );
+        assert_eq!(
+            loaded
                 .realtime
                 .latest_recovery_summary
                 .as_ref()
@@ -708,6 +732,10 @@ mod tests {
                 severity: "warning".to_string(),
                 summary: "older runtime artifact detected".to_string(),
                 operator_action: "review compatibility guidance".to_string(),
+                approval_text: Some(
+                    "confirm the daemon is writing the current runtime shape".to_string(),
+                ),
+                rollback_path: Some("restart the last trusted daemon workflow".to_string()),
                 ..CompatibilityNotice::default()
             }),
             realtime: RealtimeRuntimeStatus {
@@ -768,6 +796,20 @@ mod tests {
                 .map(|notice| notice.summary.as_str()),
             Some("older runtime artifact detected")
         );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref()),
+            Some("confirm the daemon is writing the current runtime shape")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref()),
+            Some("restart the last trusted daemon workflow")
+        );
     }
 
     #[test]
@@ -815,6 +857,8 @@ mod tests {
             Path::new("/tmp/runtime_status.json"),
             "readable runtime_status.json surface",
             "replace or remove the unreadable runtime status file before trusting suppressor status",
+            "trust healthy status again only after the active daemon rewrites a readable runtime_status.json surface",
+            "restart the last trusted daemon workflow and verify that it writes a readable runtime_status.json surface",
         );
 
         assert_eq!(notice.scope, "runtime-status");
@@ -826,6 +870,18 @@ mod tests {
         assert_eq!(
             notice.expected_value.as_deref(),
             Some("readable runtime_status.json surface")
+        );
+        assert_eq!(
+            notice.approval_text.as_deref(),
+            Some(
+                "trust healthy status again only after the active daemon rewrites a readable runtime_status.json surface"
+            )
+        );
+        assert_eq!(
+            notice.rollback_path.as_deref(),
+            Some(
+                "restart the last trusted daemon workflow and verify that it writes a readable runtime_status.json surface"
+            )
         );
         assert!(notice.blocking);
     }

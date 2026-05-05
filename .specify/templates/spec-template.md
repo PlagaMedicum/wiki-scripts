@@ -22,6 +22,9 @@ docmeta:
   - Tested independently
   - Deployed independently
   - Demonstrated to users independently
+
+  If an active human-safety freeze exists, User Story 1 MUST be the smallest stable safety MVP and
+  must not be displaced by unrelated cleanup, broad docs, cosmetic UI, or architecture experiments.
 -->
 
 ### User Story 1 - [Brief Title] (Priority: P1)
@@ -115,6 +118,9 @@ docmeta:
   `specs/000-repo-governance/research.md` instead of duplicating it in feature-local question docs.
 - Do not claim registry-managed review or approval state inside feature-local docs; use a local
   metadata header and keep `.specify/doc-registry.json` as the source of truth for managed docs.
+- If an active safety freeze applies, include requirements that keep work on the declared feature and
+  define the minimum stable daemon/server behavior, actual-launch-path verification, and non-healthy
+  failure reporting needed before the freeze can be released.
 
 ### Key Entities *(include if feature involves data)*
 

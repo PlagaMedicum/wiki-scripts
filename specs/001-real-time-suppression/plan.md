@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Implementation plan for restoring urgent real-time suppressor hiding.
-  source: speckit-plan on 2026-04-29
+  source:
+  - speckit-plan on 2026-04-29
+  - speckit-plan stabilization update on 2026-05-05
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -23,59 +25,85 @@ behind a later healthy stream reopen. The implementation should preserve the cur
 daemon plus TUI deployment, keep status and command surfaces backward-compatible where practical,
 and emit explicit migration or fallback guidance when compatibility cannot be preserved.
 
+Constitution v1.7.0 puts this feature under an active human-safety freeze. The current plan is
+therefore a stabilization reset: defer unrelated work, broad refactors, cosmetic TUI polish, new
+services, and nonessential optimization until the minimal server-runnable daemon MVP is proven. The
+critical path is automatic live hiding, automatic recovery/reconciliation, nightly fallback, shared
+throttle/backoff safety, truthful non-healthy status, actual-launch-path verification, a repeatable
+aarch64 Linux musl release build ready for `rsync` to the server, and a one-command detached
+server-start path from the deployed binary.
+
 ## Technical Context
 
-**Language/Version**: Rust edition 2024 in the existing `suppressor` crate  
+**Language/Version**: Rust edition 2024 in the existing `suppressor` crate
 **Primary Dependencies**: `tokio`, `reqwest`, `reqwest-eventsource`, `serde`, `serde_json`,
-`chrono`, `rand`, `tracing`, `metrics`, `clap`, `ratatui`, `crossterm`, `wiremock`  
+`chrono`, `rand`, `tracing`, `metrics`, `clap`, `ratatui`, `crossterm`, `wiremock`
 **Storage**: Local JSON/text state under `suppressor/state/`, including
 `runtime_status.json`, `command_report.json`, `processed_revids.json`,
-`nightly_sweep_progress.json`, `last_event_id.txt`, `daemon.pid`, and the suppression-list cache  
-**Testing**: `cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1`,
-full `cargo test`, targeted `wiremock` API tests, scheduler and status-contract tests, TUI/status
-render tests, compatibility fixtures for older state/report shapes, controlled benchmark checks
-against `Удзельнік:Plaga med Bot/suppressor/tests`, and the repo docs gate
-`python3 tools/doc_workflow.py all`  
+`nightly_sweep_progress.json`, `last_event_id.txt`, `daemon.pid`, server-start log evidence, and
+the suppression-list cache
+**Testing**: MVP gate uses `rtk cargo test --manifest-path suppressor/Cargo.toml --
+--test-threads=1`, targeted tests for shared throttle/backoff, runtime-status truth, daemon-vs-
+command isolation, scheduler/reconciliation visibility, and a dry-run or controlled live
+launch-path smoke check. Full `rtk cargo test --manifest-path suppressor/Cargo.toml`, controlled
+benchmark checks against `Удзельнік:Plaga med Bot/suppressor/tests`, and the repo docs gate remain
+release evidence but must not displace the live daemon stabilization path.
 **Target Platform**: Linux local host running one daemon plus the local supervisor TUI for
-be.wikipedia.org  
-**Project Type**: Single Rust CLI/daemon/TUI tool inside `suppressor/`  
+be.wikipedia.org; deployment artifact target is
+`target/aarch64-unknown-linux-musl/release/suppressor` built with
+`cargo zigbuild --release --target aarch64-unknown-linux-musl` for rsync to the server; the server
+host must support an additive `server-start` command that starts the daemon detached from the SSH
+terminal without relying on systemd, tmux, screen, or shell `nohup`
+**Project Type**: Single Rust CLI/daemon/TUI tool inside `suppressor/`
 **Performance Goals**: At least 95% of eligible live edits hidden within 1 second and 99% within
 5 seconds under normal availability; stale or ineffective protection surfaced within 10 seconds;
 recovery from missed edits since the last successful hide completed or reported unresolved within 2
 minutes for gaps up to 30 minutes; at least one randomized daytime rolling-24h verification and
 one randomized nightly full recheck recorded per uninterrupted 24-hour daemon period; failed
 scheduled verification or stale full watched-set coverage surfaced to the operator within 10
-seconds of status inspection  
-**Resource Goals**: Bounded queues, bounded API concurrency, bounded unresolved samples, bounded
-warning summaries, compact status/report state, no busy loops, no unbounded title or revision
-retention, and low enough idle or active CPU and memory for one daemon plus one TUI on a low-spec
-local machine without sacrificing latency, recovery, or documentation evidence  
+seconds of status inspection
+**Resource Goals**: MVP defaults must keep live hiding isolated from slower work. Initial release
+budgets: live hide queue bounded to a configured cap with visible degradation before saturation;
+catch-up/reconciliation API concurrency no higher than 2 by default; live hide execution not blocked
+behind scheduled reconciliation; unresolved samples capped to a small operator list; warning
+summaries capped and coalesced by root cause; normal status/report state kept compact enough for
+local JSON reads; normal logs rate-limited so repeated API failures do not create log storms; no
+busy loops; idle daemon plus TUI must be measured on the deployment host; any budget relaxation must
+be documented with evidence and must not delay live hiding or hide non-healthy status.
 **Compatibility/Migration**: Preserve the current config layout and machine-readable status/report
 surfaces additively where possible. Existing `current_day_recheck` settings should continue to load
 as the scheduler input for daytime rolling-24h verification until a compatible rename or alias is
 introduced. Existing `nightly_sweep` settings remain valid, with optional additive fields if
 randomized nightly-hour selection needs more configuration. `runtime_status.json` and
 `command_report.json` must continue to load older shapes safely; missing new fields must degrade to
-non-healthy or migration-needed diagnostics instead of false healthy status. If a new operator
+non-healthy or migration-needed diagnostics instead of false healthy status. Add `server-start` as
+a new CLI entrypoint; keep `run`, `dry-run`, TUI-managed start, systemd assets, and one-shot
+commands available. The detached start path must identify itself as the active launch path in
+operator evidence and must not silently replace systemd/TUI assumptions. If a new operator
 workflow, launch path, or machine-readable surface cannot remain compatible, the release must ship
 an explicit approval point, migration steps, and fallback or rollback path to the last trusted
-workflow before it is treated as production-ready  
+workflow before it is treated as production-ready. Add the server build path additively to
+`suppressor/Makefile`; the existing `build` and `release` targets remain unchanged, and the new
+target prints the rsync-ready artifact path.
 **Constraints**: Keep scope limited to be.wiki public RevDel for `user|comment`; do not log
 sensitive article text, hidden content, tokens, cookies, or credentials; do not rely on manual
 reload or nightly reconciliation as the primary live-protection path; do not add extra OS services
 or public network surfaces for this feature; keep operator labels plain-language and directly
 actionable; render safe revision identifiers as clickable URLs or equivalent browser-openable
-targets; report lag truthfully with sub-second detail when the value is under one second  
+targets; report lag truthfully with sub-second detail when the value is under one second; detached
+server start must not log secrets, must not fabricate config or auth material, must not leave a
+child attached to the operator's terminal, and must not report success until PID and runtime-status
+evidence are trustworthy
 **Architecture Constraints**: Preserve one deployable daemon/TUI package, but keep internals
 microservice-like: stream ingestion, cache refresh, catch-up, verification scheduling, MediaWiki
 transport, worker execution, runtime state, command reports, and TUI rendering communicate through
 explicit structs, enums, and bounded channels. The long-running daemon remains the only writer of
 daemon realtime truth. One-shot commands may emit bounded report surfaces but must not overwrite the
-daemon-owned runtime status surface  
+daemon-owned runtime status surface
 **Minimalism Constraints**: Prefer additive changes to existing modules and state files. Avoid new
 dependencies, new always-on background loops, new persistent artifacts, or large refactors unless
 they directly improve correctness, compatibility, observability, or bounded resource behavior for
-this incident  
+this incident
 **Scale/Scope**: Approximately 1.4k watched titles, one live recentchange stream, one local
 operator, one daemon process, bursty recentchange input, and no new public network service
 
@@ -102,16 +130,24 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
   must be regenerated from this plan before implementation continues.
 - Resource Economy, Robustness, And Durable Lessons: PASS. The plan includes bounded state,
   concurrency, logging, and low-spec verification without relaxing latency or recovery goals.
+- Active Human-Safety Freeze For Suppressor MVP: PASS. The active pointer is
+  `specs/001-real-time-suppression/`, the work remains inside `suppressor/` and direct feature
+  artifacts, and the plan defers unrelated cleanup until the server-runnable daemon MVP is proven.
 
 **Document impact**:
 
+- Update [suppressor/Makefile](/home/plagamed/Documents/wiki/scripts/suppressor/Makefile) with an
+  additive `build-server` target that runs
+  `cargo zigbuild --release --target aarch64-unknown-linux-musl` and prints the rsync-ready binary
+  path.
 - Update [suppressor/README.md](/home/plagamed/Documents/wiki/scripts/suppressor/README.md) for
   live protection semantics, dry-run meaning, emergency catch-up meaning, and the operator entry
   points that are actually authoritative.
 - Update
   [suppressor/docs/operations.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/operations.md)
-  for the new primary status vocabulary, last-successful-hide recovery anchor, rolling last-24h
-  verification, randomized nightly full recheck, and compatibility or migration approval workflow.
+  for the new primary status vocabulary, one-command `server-start` background launch path,
+  last-successful-hide recovery anchor, rolling last-24h verification, randomized nightly full
+  recheck, and compatibility or migration approval workflow.
 - Update
   [suppressor/docs/runtime-boundaries.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/runtime-boundaries.md)
   for the daemon-owned runtime surface, command-report isolation, status compatibility loading, and
@@ -124,7 +160,8 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
   [suppressor/docs/testing-strategy.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/testing-strategy.md)
   with scheduler, compatibility, last-24h preset, revision-link, and low-spec verification cases.
 - No change is currently expected for `.specify/doc-registry.json`,
-  `specs/000-repo-governance/spec.md`, or the constitution itself.
+  `specs/000-repo-governance/spec.md`, or the constitution itself during this planning update; the
+  active freeze is already recorded in constitution v1.7.0.
 - If the compatibility or migration-warning pattern produces reusable repo-wide guidance beyond
   `suppressor`, capture that generalized lesson in
   [specs/000-repo-governance/research.md](/home/plagamed/Documents/wiki/scripts/specs/000-repo-governance/research.md)
@@ -232,6 +269,9 @@ share ambiguous state.
   transitions.
 - `commands.rs`: one-shot operator actions and bounded command reports that never overwrite daemon
   realtime truth.
+- `commands.rs` plus a small launch helper if needed: additive `server-start` orchestration,
+  including local setup checks, duplicate/stale PID handling, detached child spawn, log redirection,
+  startup wait, and the non-sensitive launch receipt printed to the operator.
 - `tui_status.rs`, `tui_view.rs`, `tui.rs`, and `tui_process.rs`: operator-first status assembly,
   action launching, daemon-vs-command log separation, and primary vs secondary TUI rendering.
 
@@ -243,11 +283,34 @@ No constitution violations identified.
 
 ## Implementation Phases
 
+### Phase -1 - MVP Stabilization Reset
+
+- Treat the current checked-off task list as provisional until the daemon is verified through the
+  actual launch path. A checked task is not release evidence by itself.
+- Stop broad TUI/layout polish and unrelated docs/workflow work. Only keep UI changes that make
+  daemon health, latest hide, backoff, reconciliation, or nightly fallback truth visible.
+- Add a `suppressor/Makefile` server build target for
+  `cargo zigbuild --release --target aarch64-unknown-linux-musl`, printing
+  `target/aarch64-unknown-linux-musl/release/suppressor` for rsync/deploy.
+- Add a `server-start` CLI command so the rsynced binary can prepare local runtime paths, start the
+  daemon detached from the SSH terminal, print PID/status/log evidence, and return only after the
+  daemon-owned runtime surface proves the background process is alive.
+- Revalidate the live path first: recentchange detection, watched-page match, queue handoff,
+  RevDel execution or dry-run outcome, `last_successful_hide_at`, and status update.
+- Revalidate shared throttle/backoff next so catch-up, source refresh, daytime verification,
+  nightly full recheck, and one-shot commands cannot starve live hiding or make the daemon look
+  healthy while protection is blocked.
+- Revalidate automatic reconciliation and nightly fallback with exact scope labels and bounded work:
+  rolling last 24 hours during the day, full watched-set recheck at night.
+- Run the shortest meaningful test gate first, then the actual server build and launch-path smoke
+  check. Full benchmarks and broad docs close-out remain after the daemon MVP is stable.
+
 ### Phase 0 - Compatibility Baseline And Actual Runtime Grounding
 
 - Confirm the authoritative runtime in current deployment is still the TUI-managed child daemon for
-  the user’s host, and preserve support for the optional `systemd` path without assuming it is the
-  default verification route.
+  the user’s host, then add the detached `server-start` path as an explicit server deployment route
+  while preserving support for the optional `systemd` path without assuming it is the default
+  verification route.
 - Record the currently shipped config, runtime-status, command-report, and PID-file shapes as the
   compatibility baseline for additive changes and migration fixtures.
 - Confirm how runtime truth is cross-checked against the live process and launched binary so a
@@ -320,6 +383,14 @@ No constitution violations identified.
   coverage age.
 - Run suppressor tests, docs workflow, and controlled benchmark checks. Restart the real deployment
   path in use and verify the TUI plus runtime surfaces reflect the new fields and layout.
+- Build the server artifact with the Makefile wrapper for
+  `cargo zigbuild --release --target aarch64-unknown-linux-musl`, verify the binary exists at
+  `target/aarch64-unknown-linux-musl/release/suppressor`, and record the rsync/deploy path in the
+  operator quickstart.
+- After rsync deployment, verify `./suppressor --config ./config.toml server-start` prepares the
+  runtime paths, starts the daemon detached from the SSH terminal, prints PID/status/log evidence,
+  survives terminal logout, and fails safely for missing config/secrets, stale PID, duplicate live
+  daemon, unwritable state/log paths, or runtime-status timeout.
 - Before release trust is claimed for any incompatible surface change, produce explicit evidence of:
   the compatibility verdict, required human approval checkpoint, required operator migration steps,
   and the fallback or rollback path to the last trusted workflow.

@@ -12,6 +12,12 @@ docmeta:
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
+If an active human-safety freeze is in effect, tasks MUST stay on the declared safety feature and
+the smallest direct enablers. For the active suppressor MVP freeze, prioritize a stable
+server-runnable daemon with automatic live hiding, recovery/reconciliation, nightly fallback,
+truthful non-healthy status, bounded failure behavior, actual-launch-path verification, and the
+shortest meaningful tests before unrelated work or polish.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -232,6 +238,10 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 3. Complete Phase 3: User Story 1
 4. **STOP and VALIDATE**: Test User Story 1 independently
 5. Deploy/demo if ready
+
+If the feature is under an active human-safety freeze, do not treat demo readiness as enough. STOP
+only after the safety MVP runs through its actual launch path and the minimum daemon/recovery
+verification required by the active feature quickstart has passed.
 
 ### Incremental Delivery
 

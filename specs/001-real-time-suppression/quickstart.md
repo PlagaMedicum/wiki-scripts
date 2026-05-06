@@ -8,6 +8,7 @@ docmeta:
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan human-review queue update on 2026-05-06
   - user approval on 2026-05-07
+  - live-hide incident update on 2026-05-07
 ---
 
 # Quickstart: Real-Time Suppression Recovery
@@ -45,6 +46,34 @@ cosmetic UI work. Verify this path first:
 5. Recovery/reconciliation and nightly fallback are scheduled or running with truthful non-healthy
    status when blocked.
 6. Rate-limit/backoff does not starve live hiding and does not show false healthy status.
+
+## Active Live-Hide Incident Recorded On 2026-05-07
+
+The operator provided a RecentChanges screenshot from 2026-05-07 showing
+`Пратэсты ў Беларусі (2020—2021)` edited by `Plaga med` while the public `заблакаваць` action was
+still available. This is a failed T041 live-hide smoke result. The page is present in the repo-local
+suppression-list cache, so the next implementation pass must assume a live-path failure until target
+server evidence proves otherwise.
+
+Immediate handling:
+
+1. If the exposed revision ID is known, hide it manually or run emergency catch-up before waiting for
+   any code fix.
+2. Collect only non-secret target-server facts needed to classify the failure: running PID/binary,
+   `runtime_status.json` freshness, `launch_path`, last observed event, last matching title/revision,
+   latest outcome, latest actionable issue, queue depth, whether the visible revision is in
+   `processed_revids.json`, and whether the page title is in the server cache.
+3. Do not use stale local repo state as server proof. The checked-in `suppressor/state/` snapshot is
+   useful only as old baseline evidence.
+4. Fix the first failing boundary in the live path before broad docs, resource sampling, or TUI
+   polish: event observation, watched-title match, processed-revision skip, queue handoff, RevDel/auth
+   result, or stale/wrong deployed binary.
+5. Add a regression with a synthetic recentchange for `Пратэсты ў Беларусі (2020—2021)` by
+   `Plaga med` or the configured bot/operator username. Same-account eligible edits must dispatch as
+   live watched revisions and must not be silently skipped.
+
+Until this incident is fixed and retested on the deployed path, the MVP is blocked even if T040
+launch evidence or T042 resource evidence is later collected.
 
 ## Local Evidence Recorded On 2026-05-05
 
@@ -267,9 +296,9 @@ suppressor freeze because it is outside `001-real-time-suppression`.
 
 ## Current MVP Go/No-Go Recorded On 2026-05-06
 
-Decision: BLOCK target-host deployment trust until T040, T041, and T042 evidence is recorded.
-T039 records the config-stability block and Q001 now approves path 1: target-host config migration
-to the reviewed tracked baseline.
+Decision: BLOCK target-host deployment trust until the May 7 T041 live-hide incident is fixed and
+T040, T041, and T042 evidence is recorded. T039 records the config-stability block and Q001 now
+approves path 1: target-host config migration to the reviewed tracked baseline.
 
 Current human-review packet:
 
@@ -292,7 +321,8 @@ Current human-review packet:
 - BLOCK detached server-start deployment trust: target-host PID/runtime/log evidence and SSH
   logout-survival evidence are still missing.
 - BLOCK live-hide deployment trust: no target-host live or controlled dry-run watched-edit smoke
-  result is recorded yet.
+  result is recorded yet, and the 2026-05-07 screenshot is a failed smoke result for a watched
+  political page.
 - BLOCK recovery/reconciliation/nightly deployment trust: local scheduler and status tests pass,
   but target-host recovery, rolling last-24h verification, and nightly full-recheck evidence remain
   pending.
@@ -383,6 +413,65 @@ Before accepting T040 launch evidence, record:
 6. For approved path 1, the non-secret post-migration launch evidence: `server-start` receipt,
    PID/runtime/log paths, daemon-owned status freshness, and terminal logout survival.
 
+## T040 Evidence Acceptance Contract
+
+T040 is an evidence gate, not a new config decision. Q001 approved path 1: target-host config
+migration to the reviewed tracked baseline. Do not make further config edits to satisfy T040 unless
+a new human-reviewed config decision is recorded first.
+
+An already-started daemon can satisfy T040 only when the evidence shows it was started after the
+Q001-approved config migration by the deployed binary through
+`./suppressor --config ./config.toml server-start`. The operator may provide the original
+non-secret receipt, or the same receipt fields reconstructed from safe command output and
+daemon-owned status. If that receipt cannot be shown, if `launch_path` is not `server-start`, or if
+the PID/status/log evidence cannot be tied to the same process, keep T040 blocked until a fresh
+`server-start` run can be performed safely or a duplicate-live-daemon diagnostic is recorded.
+
+Acceptable T040 evidence is limited to:
+
+- command line with config path, without environment values
+- receipt fields: mode, PID, config path, PID file, runtime-status path, detached log path, and
+  `launch_path=server-start`
+- PID liveness and expected suppressor binary path when available
+- `runtime_status.json` metadata or safe excerpts showing `launch_path=server-start`, PID matching
+  the live process, and daemon-owned status freshness
+- detached log path plus evidence that stdout/stderr go there, without copying raw log payloads
+- reconnect evidence after closing the SSH terminal: same PID alive and daemon-owned status still
+  fresh after reconnect
+- operator statement that the server config was backed up or can be rolled back to the last trusted
+  config, plus the safe field names changed by the path 1 migration
+
+Forbidden evidence includes `.env` values, passwords, cookies, tokens, session material, raw hidden
+text, sensitive article content, full unredacted logs, and any command output that embeds secrets.
+
+Daemon-owned status freshness for T040 means all of the following:
+
+- the printed or recorded PID is alive at inspection time
+- the PID in `runtime_status.json` or the launch-path object matches the live process when present
+- `runtime_status.json` has a daemon timestamp, heartbeat, or file modification time no older than
+  10 seconds at inspection
+- a second inspection within 10 seconds shows the status timestamp, heartbeat, or file modification
+  time still advancing or still inside the 10-second freshness window
+- the status labels the launch path as `server-start` or equivalent detached-binary wording
+
+Partial evidence outcomes:
+
+- PID alive but stale or unrelated `runtime_status.json`: block T040 and record stale status.
+- Fresh status but `launch_path` is not `server-start`: block T040 for the rsync `server-start`
+  path and record the actual launch path separately.
+- Receipt present but missing PID, runtime-status path, log path, or config path: block T040 until
+  the missing field is supplied or a fresh `server-start` receipt is captured.
+- PID and status pass before logout but reconnect evidence is missing: keep the daemon running if it
+  is protecting edits, but keep T040 and MVP deployment trust blocked.
+- Target-host access interruption, duplicate live daemon, stale PID, missing receipt, or stale
+  runtime status keeps RQ002 open; do not mark T040 complete by implication from T041 live-smoke or
+  T042 resource evidence.
+
+If the daemon is currently protecting edits but T040 evidence is incomplete, do not stop it only to
+make documentation cleaner. Preserve protection, record the missing evidence, and keep deployment
+trust blocked until the missing T040 evidence is collected or an explicit human go/no-go decision is
+recorded.
+
 The 2026-05-06 target-host failure `missing field realtime` blocks deployment trust until this gate
 is resolved. Do not add `[realtime]` or any other section to the server config as an unreviewed
 shortcut; either migrate through the reviewed evidence path or run a binary that fails safely with a
@@ -467,14 +556,16 @@ Verification:
 2. Confirm the command creates required runtime directories but does not create, print, or persist
    credentials.
 3. Confirm the printed PID is alive and matches the expected suppressor binary.
-4. Confirm `runtime_status.json` is daemon-owned, updates within 10 seconds, and records
-   `launch_path=server-start` or equivalent detached-binary wording.
+4. Confirm `runtime_status.json` is daemon-owned and satisfies the T040 freshness contract above:
+   matching PID when present, status timestamp or file mtime no older than 10 seconds, a second
+   fresh inspection within 10 seconds, and `launch_path=server-start` or equivalent
+   detached-binary wording.
 5. Confirm daemon stdout/stderr goes to the printed log path, not the SSH terminal.
 6. Close the SSH terminal and reconnect.
 7. Confirm the PID is still alive and the status file continues updating.
-8. If config, auth secrets, state/log paths, stale PID, duplicate live daemon, or startup status
-   verification fail, treat the launch as failed; do not trust a partial or orphaned background
-   process.
+8. If config, auth secrets, state/log paths, stale PID, duplicate live daemon, startup status
+   verification, receipt capture, or logout-survival evidence fail, treat T040 as blocked; do not
+   trust a partial or orphaned background process.
 
 ## Target Server Environment Assumptions
 
@@ -490,6 +581,9 @@ The documented MVP deployment assumes:
 - A local shell is available to invoke `./suppressor --config ./config.toml server-start`, but
   systemd, tmux, screen, shell `&`, and `nohup` are not required and are not authoritative evidence
   for this path.
+- Target-host evidence may be supplied manually by the human operator because the repo-local agent
+  may not have server access. Manual evidence must follow the no-secret evidence rules above and is
+  accepted only for the listed safe receipt/status/path fields.
 
 If any assumption is false, deployment evidence must either name the substitute target and
 verification path explicitly or block production trust.

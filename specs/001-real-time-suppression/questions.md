@@ -29,6 +29,8 @@ Approved path:
 - The server config was updated by the human operator.
 - The daemon was started by the human operator.
 
-Remaining evidence for T040: record non-secret `server-start` receipt, PID/runtime/log paths,
-daemon-owned status freshness, and terminal logout survival. Do not include credentials, `.env`
-values, cookies, tokens, or sensitive page content.
+Remaining evidence for T040: record the non-secret `server-start` receipt, or equivalent safe
+receipt fields for the already-started daemon if the original receipt is unavailable, plus
+PID/runtime/log paths, daemon-owned status freshness, and terminal logout survival. Do not include
+credentials, `.env` values, cookies, tokens, raw logs with sensitive material, or sensitive page
+content.

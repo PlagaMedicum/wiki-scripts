@@ -139,6 +139,17 @@ reviewed tracked baseline. The human operator reports that the server config was
 daemon was started. The next required evidence is T040: non-secret `server-start` receipt,
 PID/runtime/log paths, daemon-owned status freshness, and terminal logout survival.
 
+T040 may use an already-started daemon only if the operator evidence ties that process to the
+Q001-approved config migration and the deployed binary's
+`./suppressor --config ./config.toml server-start` command. If the original receipt is unavailable,
+the safe replacement evidence is the same receipt fields from daemon-owned status and local process
+inspection: mode, PID, config path, PID file, `runtime_status.json` path, detached log path, and
+`launch_path=server-start`. `runtime_status.json` must match the live PID when present, have a
+daemon timestamp or file mtime no older than 10 seconds at inspection, and remain fresh on a second
+inspection within 10 seconds. After closing the SSH terminal and reconnecting, the same PID must be
+alive and daemon-owned status must still be fresh. Do not record `.env` values, passwords, cookies,
+tokens, session material, raw hidden text, sensitive article content, or full unredacted logs.
+
 Rollback or fallback until then: keep target-host deployment blocked, use the last trusted
 binary/config/state workflow if one exists, or use manual emergency catch-up while a reviewed fix is
 prepared. No T040 launch evidence counts until this config gate has a reviewed pass path.
@@ -188,9 +199,26 @@ to the server, start the daemon with one binary command:
 The receipt must include mode, PID, config path, PID file, `runtime_status.json` path, detached log
 path, and `launch_path=server-start`. Trust this launch only after reconnecting to the server and
 confirming the same PID is still alive, stdout/stderr are going to the printed log path, and
-daemon-owned `runtime_status.json` continues updating. Missing config, missing secrets, unwritable
-state/log paths, duplicate daemon, startup timeout, stale PID, stale runtime status, or unhealthy
-startup evidence blocks deployment trust.
+daemon-owned `runtime_status.json` continues updating under the 10-second freshness rule above.
+Missing receipt fields, missing config, missing secrets, unwritable state/log paths, duplicate
+daemon, startup timeout, stale PID, stale runtime status, non-`server-start` launch labels, missing
+logout-survival evidence, or unhealthy startup evidence blocks deployment trust. A running daemon
+may continue protecting edits while evidence is incomplete, but T040 and MVP deployment trust stay
+blocked until the missing evidence is recorded.
+
+## 2026-05-07 Live-Hide Incident
+
+The operator reported a RecentChanges screenshot on 2026-05-07 where
+`Пратэсты ў Беларусі (2020—2021)` still had a public `заблакаваць` action after a `Plaga med` edit.
+Treat this as failed T041 live-hide evidence. That title is expected to be watched, and
+same-account eligible edits must not be filtered out. If the exposed revision ID is known, hide it
+manually or run emergency catch-up before waiting for code changes.
+
+For the hotfix, collect only safe server facts: PID/binary, launch path, runtime-status freshness,
+last observed event, last matching title/revision, latest outcome, latest actionable issue, queue
+depth, processed-revision presence for the exposed revision if known, and whether the page title is
+in the server cache. Do not copy secrets or raw sensitive logs. Fix the first failed boundary in the
+live path before spending time on resource samples or broader close-out.
 
 ## 2026-04-28 Baseline Evidence
 

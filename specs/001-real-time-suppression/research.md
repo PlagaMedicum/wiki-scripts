@@ -8,10 +8,36 @@ docmeta:
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
   - speckit-plan human-review queue update on 2026-05-06
+  - speckit-plan live-hide incident update on 2026-05-07
 ---
 
 # Research: Real-Time Suppression Recovery
 
+
+## Decision: Treat the May 7 visible watched edit as the immediate live-hide incident
+
+**Rationale**: The 2026-05-07 RecentChanges screenshot shows a watched political page,
+`Пратэсты ў Беларусі (2020—2021)`, with a still-available public hide action after a live edit by
+`Plaga med`. The repo-local cache includes that title, and the feature already requires
+same-account edits to be processed. Therefore the next implementation pass should not add broader
+planning or polish. It should isolate the smallest live-path boundary that failed: the server daemon
+did not see the event, matched the wrong wiki/title, used a stale watched cache, treated the revision
+as already processed, failed to queue work, failed RevDel/auth after queueing, or the visible server
+is running a stale or wrong binary.
+
+The operator should preserve protection first: if an exposed revision ID is known, hide it manually
+or run emergency catch-up before waiting for a code fix. After that, use non-secret server evidence
+to classify the failure and add a regression test around a watched political page edited by the
+same operator account.
+
+**Alternatives considered**:
+
+- Continue collecting full T040/T042 deployment evidence first. Rejected because the daemon is
+  visibly failing the primary live-hide requirement now.
+- Treat this as another config-policy problem. Rejected unless server evidence shows config prevents
+  live hiding; Q001 already approved the config migration path.
+- Broaden into a large rewrite of stream/cache/worker architecture. Rejected because the incident
+  needs a small hotfix at the actual failing boundary.
 
 ## Decision: Automatic recovery anchors on `last_successful_hide_at`
 

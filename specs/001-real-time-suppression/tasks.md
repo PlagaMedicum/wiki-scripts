@@ -8,6 +8,8 @@ docmeta:
   - speckit-tasks server-start update on 2026-05-05
   - speckit-tasks config-stability update on 2026-05-06
   - speckit-tasks Q001 launch-evidence update on 2026-05-07
+  - live-hide incident update on 2026-05-07
+  - speckit-tasks live-hotfix decomposition on 2026-05-07
 ---
 
 # Tasks: Real-Time Suppression Recovery
@@ -53,6 +55,12 @@ automatic live hiding, recovery/reconciliation/nightly fallback, truthful degrad
 - Q001 is answered: the human owner approved path 1, target-host config migration to the reviewed
   tracked baseline. T040 is now blocked only on non-secret post-migration launch evidence, not on
   another config policy decision.
+- The 2026-05-07 RecentChanges screenshot is failed T041 evidence. Use T040 only for the minimal
+  non-secret server status needed to identify the running daemon; then fix T041 live hiding before
+  spending time on T042 resource samples or broader close-out.
+- T047 through T052 are the active May 7 hotfix slice that decomposes failed T041 evidence into
+  immediate protection, regression, smallest code fix, rebuild, relaunch, and smoke proof. They
+  block T042 resource sampling and production trust.
 
 ## Phase 1: Setup
 
@@ -179,8 +187,27 @@ health.
 - [X] T037 After Phase 2, US1, and US2 daemon-critical changes are complete, rerun `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` and fix MVP regressions in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/tui_status.rs`, `suppressor/tests/config_and_state.rs`, and `suppressor/tests/api_integration.rs`
 - [X] T038 After the T037-valid source tree and any build-input edits are complete, rerun `make -C suppressor build-server` and record either the built artifact path or missing local prerequisite in `specs/001-real-time-suppression/quickstart.md`
 - [X] T039 Resolve the config-stability gate for the target-host `missing field realtime` failure by recording the reviewed config baseline or documented divergence, non-secret `print-effective-config` result or config/migration-needed diagnostic, explicit human review evidence, compatibility or migration decision, rollback/fallback path, and no-background-config-edit confirmation in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
-- [ ] T040 Verify the actual launch path after the Q001-approved path 1 target-host config migration with the built binary, `server-start` where rsync deployment is used, the non-secret `server-start` receipt, PID/runtime/log paths, daemon-owned status freshness, terminal logout survival, and no-secret migration evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
-- [ ] T041 Run a controlled live or dry-run watched-edit smoke check and record live hiding or dry-run outcome evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T040 Capture the minimal actual launch/status evidence after the Q001-approved path 1 target-host config migration with the built binary, `server-start` where rsync deployment is used, non-secret PID/runtime/log paths, daemon-owned status freshness, and no-secret migration evidence needed to identify the running daemon before the live-hide hotfix in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T041 Preserve protection for the 2026-05-07 visible watched edit when a revision ID is known by manual hide or `emergency-catchup`, capture only the non-secret live-path facts needed to locate the failure boundary, and record the incident target, known revid/status, processed-revid/cache observations, and immediate operator action in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+
+## Phase 6a: May 7 Live-Hide Incident Hotfix
+
+**Purpose**: Fix the active watched political edit live path before resource sampling or broader
+close-out. Do not change config shape or deployment-required config keys in this phase.
+
+- [ ] T047 [US1] Add a regression proving a watched political recentchange on `Пратэсты ў Беларусі (2020—2021)` by `Plaga med` or the configured operator username dispatches as a live watched revision and is not filtered as own-account, bot, or non-watched noise in `suppressor/src/stream.rs` and `suppressor/src/recentchange.rs`
+- [ ] T048 [US1] Add a regression or diagnostic covering processed-revision and live-queue handoff for the visible incident revision so an unprocessed watched revid cannot be skipped silently and duplicate or already-processed skips are surfaced in `suppressor/src/runtime.rs` and `suppressor/tests/config_and_state.rs`
+- [ ] T049 [US1] Implement the smallest code fix for the first failing live-path boundary found by T041, T047, and T048 without changing config shape or deployment-required config keys in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/worker.rs`
+- [ ] T050 [US1] Run the targeted live dispatch, queue handoff, and worker regression tests after T049 and record commands, pass/fail result, and any remaining blocker in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T051 Rebuild the server artifact after the live-path code fix with `make -C suppressor build-server` using the `build-server` target in `suppressor/Makefile` and record the artifact path or local prerequisite blocker in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T052 Restart or relaunch the target-host daemon with the rebuilt binary, rerun one controlled watched-page live or dry-run smoke for the same-account case, and record daemon PID/status freshness, outcome, and any rollback in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+
+---
+
+## Phase 6b: Post-Hotfix Resource And Close-Out Evidence
+
+**Purpose**: Run only after the May 7 live-hide hotfix is proven or explicitly blocked.
+
 - [ ] T042 Measure at least 10 minutes of idle daemon-alone and daemon-plus-TUI CPU/RSS, one active live/recovery/backoff sample, live and recovery/reconciliation queue depths versus caps, API concurrency, state/report file sizes, detached log growth rate, and coalesced-warning counts on the deployment host; record pass/fail against SC-011 bounds in `suppressor/docs/operations.md`
 - [X] T043 Update operator and runtime docs with the MVP launch path, `make build-server`, `server-start`, recovery anchor, rolling last-24h verification, nightly full recheck, config-stability review, and degraded-status meanings in `suppressor/README.md`, `suppressor/docs/operations.md`, and `suppressor/docs/runtime-boundaries.md`
 - [X] T044 Update implementation and testing docs with the shared backoff contract, scheduler semantics, timestamp formatting lesson, detached server-start launch checks, config-stability review gate, and minimum server verification path in `suppressor/docs/implementation.md` and `suppressor/docs/testing-strategy.md`
@@ -205,6 +232,11 @@ health.
   is stable.
 - **Polish (Phase 6)**: Depends on US1, US2, and `server-start` for MVP release; US3 is required
   before treating command/coverage surfaces as safe.
+- **May 7 Live-Hide Hotfix (Phase 6a)**: Depends on T040 and T041 incident facts, blocks T042
+  resource sampling and production trust, and must finish T047 through T052 before any broader
+  close-out.
+- **Post-Hotfix Evidence (Phase 6b)**: Depends on Phase 6a unless Phase 6a records an explicit
+  blocker; T042 resource evidence must not be used to hide a failed live-protection path.
 
 ### User Story Dependencies
 
@@ -219,6 +251,10 @@ health.
 - T012, T013, and T014 can run in parallel for US1 tests.
 - T020, T021, T022, and T023 can run in parallel for US2 tests.
 - T029, T030, and T031 can run in parallel for US3 tests.
+- T047 and T048 may run in parallel only if ownership is split between the
+  `suppressor/src/stream.rs` and `suppressor/src/recentchange.rs` test path versus the
+  `suppressor/src/runtime.rs` and `suppressor/tests/config_and_state.rs` queue/processed-state
+  path; otherwise keep the hotfix sequential.
 - T043 and T044 can run in parallel after code behavior stabilizes.
 
 ---
@@ -258,16 +294,20 @@ Task: "T031 [P] [US3] Add or repair TUI action and log separation tests for relo
 3. Complete US2 recovery/reconciliation/nightly truth.
 4. Run the shortest suppressor test gate.
 5. Build the server artifact with `make -C suppressor build-server`.
-6. Treat the config-stability gate as Q001-approved path 1 and record post-migration T040 evidence.
-7. Verify the actual launch path with `server-start` where rsync deployment is used, then run one
-   controlled live or dry-run watched edit and the deployment-host resource sample.
-8. Keep US3 command/report hardening and final docs evidence closed only if they remain consistent
+6. Treat the config-stability gate as Q001-approved path 1 and capture only the T040 server status
+   needed to identify the actual daemon.
+7. Execute T041 and T047 through T052: preserve the exposed revision when known, add the same-account
+   watched-page regression, fix the first failing live boundary, run targeted tests, rebuild,
+   relaunch, and prove one controlled live or dry-run watched edit.
+8. Run T042 deployment-host resource sampling only after T052 passes or records an explicit blocker.
+9. Keep US3 command/report hardening and final docs evidence closed only if they remain consistent
    with the config-stability and deployment evidence.
 
 ### Suggested MVP Scope
 
-The active safety-freeze MVP is Phase 1 + Phase 2 + US1 + US2 + T037 through T042. US3 and T043
-through T046 are required before broader operator-command trust or feature close-out.
+The active safety-freeze MVP is Phase 1 + Phase 2 + US1 + US2 + T037 through T042 plus T047 through
+T052. US3 and T043 through T046 are required before broader operator-command trust or feature
+close-out.
 
 ### Guardrails
 

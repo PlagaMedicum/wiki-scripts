@@ -78,6 +78,9 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T011 Add operator-visible status or diagnostics for recovery, backlog, and resource pressure
 - [ ] T012 Add compatibility fixtures, migration guardrails, and explicit approval checkpoints for
   schema/config/state/CLI/operator-surface changes
+- [ ] T013 Add human-reviewed config-change evidence and compatibility fixtures for any changed
+  config file, schema, default, environment variable, loading semantic, or deployment-required
+  section
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -165,6 +168,9 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Move unresolved standing-governance review follow-up into `specs/000-repo-governance/research.md` instead of leaving inline TODO markers in maintained docs
 - [ ] TXXX Add migration notes, compatibility verification, rollback/fallback checks, and
   operator prompts for any change that can invalidate a previous setup or machine-readable surface
+- [ ] TXXX Add config-change review notes, motivation, backward-compatibility evidence,
+  migration-needed diagnostics, deployment verification, and rollback/fallback steps for any config
+  change
 - [ ] TXXX Run `make docs` or `python3 tools/doc_workflow.py all`
 - [ ] TXXX Update `specs/000-repo-governance/spec.md` or `research.md` if the change affects repo policy
 - [ ] TXXX Code cleanup and refactoring
@@ -275,6 +281,9 @@ With multiple developers:
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
 - Avoid: silent destructive edits, unapproved setup-breaking refactors, incompatible schema/state
   rewrites without migration steps, or changes that disrupt prior setups without explicit approval
+- Avoid: unreviewed config churn, required config keys without compatibility fixtures, default
+  changes without documented motivation, and server config edits used as a shortcut around a real
+  migration or diagnostic requirement
 - Avoid: unbounded queues, busy loops, unlimited log spam, unnecessary long-running processes, and
   new dependencies that do not pay for their resource and failure-mode cost
 - Avoid: treating resource economy as permission to lower performance targets or omit durable

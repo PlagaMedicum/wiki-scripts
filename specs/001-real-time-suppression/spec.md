@@ -182,8 +182,8 @@ As the suppressor operator, I need confidence that edits made after the suppress
 
 - **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds; release evidence must report p95 and p99 for the controlled realtime path.
 - **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, including cases where fresh events continue but the latest live hide outcome is failed, throttled, blocked, or unresolved, the operator console shows a non-healthy state and current lag measured against the latest observed target-wiki event or a bounded API freshness probe when the stream is silent.
-- **SC-003**: After daemon restart or real-time recovery, eligible watched-page edits missed in the preceding 30 minutes are either hidden or reported unresolved within 2 minutes.
-- **SC-003a**: For restart or recovery gaps up to 30 minutes, eligible watched-page edits missed since the recorded last successful hide are either hidden or reported unresolved within 2 minutes, and the operator surface shows that recovery start point explicitly.
+- **SC-003**: For daemon restart or real-time recovery gaps up to 30 minutes, eligible watched-page edits missed since the recorded `last_successful_hide_at` timestamp, or since an explicitly documented older trusted fallback anchor when that timestamp is unavailable, are either hidden or reported unresolved within 2 minutes.
+- **SC-003a**: Recovery evidence MUST name the selected anchor, covered window start and end, outcome counts, unresolved samples, and whether the anchor was `last_successful_hide_at` or a fallback; the daemon MUST NOT declare healthy until that selected window is hidden or reported unresolved.
 - **SC-004**: Accident-window verification accounts for 100% of eligible watched-page edits in the selected window as hidden, already hidden, skipped, failed, or unresolved.
 - **SC-005**: The operator can distinguish "running and hiding", "running but catching up", "running but unhealthy", "blocked by rights/session/wiki error", and "one-shot operator command output" from the console without inspecting raw logs.
 - **SC-006**: Automated or controlled verification covers immediate hiding, feed stall recovery, missed-edit catch-up, duplicate event handling, a burst of at least 10 controlled eligible events across watched pages, public `user|comment` RevDel safety boundaries, and rights/session failure reporting.
@@ -191,7 +191,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **SC-008**: Catch-up and coverage tests prove that MediaWiki timestamp parameters contain no fractional precision and that a mocked `badtimestamp` response is surfaced as a classified non-retryable API failure instead of thousands of per-page warnings.
 - **SC-009**: Runtime warning output for a repeated catch-up/API root cause is coalesced into an aggregate summary with counts and safe samples, and the TUI remains readable on a compact terminal.
 - **SC-010**: A benchmark run using `Удзельнік:Plaga med Bot/suppressor/tests` creates only bot-marked test edits, accounts for every benchmark revision, and records publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
-- **SC-011**: Low-spec verification records idle and active resource use for daemon plus TUI, and default configuration keeps queues, concurrency, state files, and logs bounded while meeting the realtime and recovery targets.
+- **SC-011**: Low-spec verification records idle and active resource use for daemon alone and daemon plus TUI, including CPU percentage, RSS memory, live queue depth and cap, catch-up or reconciliation queue depth and cap, API concurrency, runtime-status size, command-report size, processed-revision state size, detached log growth rate, and coalesced-warning counts. MVP release evidence MUST include at least a 10-minute idle sample plus one active live/recovery/backoff sample on the deployment host, and it MUST block release unless API concurrency remains at or below the default cap of 2, queues stay below their configured caps or surface degraded status before saturation, status/report files remain below 1 MiB each, repeated-root-cause log growth stays below 10 MiB/hour or has a documented mitigation, and no measured field shows unbounded growth after the active sample returns idle.
 - **SC-012**: Durable suppressor docs and targeted code comments/tests capture the incident lessons, performance evidence, and operational checks needed to prevent recurrence, including timestamp formatting, source-triggered catch-up, API error classification, warning coalescing, and benchmark safety.
 - **SC-013**: Once catch-up or backoff ends and no other blocking or recovery condition remains, the operator console leaves the transient recovery state within 10 seconds and shows the resulting healthy, unhealthy, reconnecting, or blocked state.
 - **SC-014**: During a one-shot diagnostic, coverage, benchmark, or reporting action, the operator can still identify daemon-owned real-time state, the source of the latest actionable problem, and the newest daemon evidence from the console without manual refresh or raw-log inspection.
@@ -228,6 +228,12 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - A deployed server host already has or receives the required `config.toml` and `.env`/environment
   secrets through an operator-controlled path; the `server-start` command may create runtime
   directories and log files, but it must not generate, store, print, or rsync credentials.
+- The target server for the documented MVP deployment is a Linux host that can run the
+  aarch64-unknown-linux-musl suppressor binary, invoke it from a local shell, keep a detached child
+  alive after SSH logout through the binary's own process-detach behavior, reach be.wikipedia.org,
+  and write the configured state directory, PID file, runtime status file, cache files, and
+  detached log path. The MVP deployment MUST NOT assume systemd, tmux, screen, shell backgrounding,
+  or `nohup` are available or authoritative.
 
 ## Documentation Impact
 

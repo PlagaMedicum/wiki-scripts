@@ -941,6 +941,63 @@ mod tests {
     }
 
     #[test]
+    fn server_start_rejects_zero_status_timeout_before_preflight() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+
+        let error = run_server_start(config_path, false, 0, None, false).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("status-timeout-seconds greater than zero")
+        );
+    }
+
+    #[test]
+    fn server_start_probe_rejects_stale_runtime_launch_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = test_runtime_paths(&temp);
+        let pid = std::process::id() as i32;
+        let spawned_at = Utc::now();
+        save_text_atomic(&paths.pid_file, &pid.to_string()).unwrap();
+        save_json_atomic(
+            &paths.runtime_status_file,
+            &RuntimeStatus {
+                daemon_state: "running".to_string(),
+                dry_run: false,
+                launch_path: Some(LaunchPathSnapshot {
+                    kind: SERVER_START_LAUNCH_KIND.to_string(),
+                    pid,
+                    config_path: paths.config_path.display().to_string(),
+                    pid_file: paths.pid_file.display().to_string(),
+                    runtime_status_file: paths.runtime_status_file.display().to_string(),
+                    log_path: Some(paths.state_dir.join("daemon.log").display().to_string()),
+                    started_at: Some(spawned_at - TimeDelta::seconds(1)),
+                    ..LaunchPathSnapshot::default()
+                }),
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+
+        match probe_server_start(
+            &paths,
+            &paths.state_dir.join("daemon.log"),
+            pid,
+            false,
+            spawned_at,
+        ) {
+            ServerStartProbe::Pending(reason) => {
+                assert!(reason.contains("runtime launch_path is stale"));
+            }
+            ServerStartProbe::Ready(_) | ServerStartProbe::Failed(_) => {
+                panic!("expected stale launch path to remain pending")
+            }
+        }
+    }
+
+    #[test]
     fn formats_compact_auth_status_lines() {
         let auth = AuthState {
             username: "ExampleBot".to_string(),

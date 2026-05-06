@@ -32,6 +32,10 @@ This command runs the same final gate as `make docs`:
   verification, recovery/status evidence, and incident lessons have been captured before treating
   the docs gate as complete. Concision is fine; missing performance evidence or operational lessons
   is not.
+- If tracked config files, config schema, defaults, environment variable names, loading semantics,
+  or deployment-required sections changed, confirm the docs capture the motivation, explicit human
+  review evidence, compatibility or migration behavior, deployment-path verification, and
+  rollback/fallback notes before treating the docs gate as complete.
 - If an active human-safety freeze is in effect, confirm the docs gate is run for the active safety
   feature and its direct enablers only. During the active suppressor MVP freeze, unrelated docs or
   workflow cleanup must not displace `specs/001-real-time-suppression/` release evidence.

@@ -106,8 +106,191 @@ size: 9.5M
   into a new session, redirects stdout/stderr to the selected log, and prints success only after
   PID and daemon-owned `runtime_status.json` agree on a fresh `launch_path=server-start`.
 - Actual server logout-survival verification is still pending. Do not treat the new launch path as
-  production-proven until T039 records that the rsynced binary survives terminal logout and keeps
+  production-proven until T040 records that the rsynced binary survives terminal logout and keeps
   updating daemon-owned status on the deployment host.
+
+## Evidence Freshness And Expiry
+
+The local test and server-build results above are useful snapshots, not permanent release evidence.
+They expire for final MVP purposes after any daemon-critical edit to `suppressor/src/`,
+`suppressor/tests/`, `suppressor/Cargo.toml`, `suppressor/Cargo.lock`, `suppressor/Makefile`, or
+launch/build code.
+
+T037 and T038 must be rerun after Phase 2, US1, and US2 daemon-critical changes are complete.
+Rerunning only before those changes proves the earlier snapshot, not the final daemon. Docs-only
+edits do not by themselves require the server binary to be rebuilt, but any docs change that alters
+the authoritative command, config, launch, or release-evidence contract must be reflected before the
+final go/no-go checklist is accepted.
+
+## Phase 2 Local Evidence Recorded On 2026-05-06
+
+- Shared backoff/status/server-start/reconciliation focused tests passed:
+  `backoff` 11 passed, `stale_pid` 3 passed, `collect_status` 7 passed, `server_start` 9 passed,
+  and `queued_reconciliation` 1 passed.
+- Full serial suppressor test gate passed after the Phase 2 shared-backoff/status slice:
+
+```bash
+rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1
+```
+
+Observed result:
+
+```text
+198 passed (5 suites)
+```
+
+- This is Phase 2 evidence only. It does not complete T037 because final T037/T038 evidence must be
+  rerun after US1 and US2 daemon-critical changes are complete.
+
+## US1 Local Evidence Recorded On 2026-05-06
+
+- Watched recentchange and live-queue tests passed:
+  `watched_revision` 5 passed and `live_queue` 2 passed.
+- Live outcome and latency tests passed:
+  `dispatch_action` 3 passed, `record_action_completed` 1 passed,
+  `worker_marks_live_action` 1 passed, `last_successful_hide` 4 passed, `live_hide` 3 passed, and
+  `latency` 2 passed.
+- Source refresh and primary status rendering checks passed:
+  `source_refresh` 4 passed, `populate_runtime_derivatives` 6 passed, and `status_lines` 3 passed.
+- Full serial suppressor test gate passed after the US1 live-path slice:
+
+```bash
+rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1
+```
+
+Observed result:
+
+```text
+201 passed (5 suites)
+```
+
+- This is local dry-run/unit evidence for US1. It does not replace the later deployment-host live or
+  controlled dry-run smoke check required by T041.
+
+## US2 And MVP Test/Build Evidence Recorded On 2026-05-06
+
+- Recovery-anchor and stream-transition tests passed:
+  `recovery` 14 passed, `stream` 30 passed, and `stream_open` 3 passed.
+- Scheduler, verification, backoff, and status truth tests passed:
+  `scheduler` 7 passed, `verification` 3 passed, `backoff` 12 passed, and `status` 30 passed.
+- Reconciliation failure tests now prove repeated per-page verification failures are coalesced,
+  preserve retry/backoff visibility, and mark last-24h verification as failed instead of completed:
+  `reconciliation_failures` 1 passed and `current_day_page_failures` 1 passed.
+- Stale full watched-set freshness evidence is preserved across stream reopen:
+  `stale_full_recheck` 1 passed.
+- Full serial suppressor test gate passed after Phase 2, US1, and US2 daemon-critical changes:
+
+```bash
+rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1
+```
+
+Observed result:
+
+```text
+204 passed (5 suites)
+```
+
+- The first local `make build-server` attempt was blocked only by sandboxed Zig cache writes under
+  `/home/plagamed/.cache/zig`. The approved normal-cache rerun passed:
+
+```bash
+rtk make -C suppressor build-server
+```
+
+Observed result:
+
+```text
+Finished release profile [optimized] target(s) in 1m 32s
+server binary: target/aarch64-unknown-linux-musl/release/suppressor
+```
+
+Verified artifact:
+
+```text
+suppressor/target/aarch64-unknown-linux-musl/release/suppressor
+ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+size: 10010264 bytes
+```
+
+- This completes local T037/T038 evidence for the current source tree. Any later daemon-critical
+  edit to Rust source, tests, Cargo files, Makefile, or launch/build code expires this evidence.
+- Config-stability review, deployment-host `server-start` logout survival, controlled watched-edit
+  smoke evidence, and resource measurements remain pending for T039 through T042.
+
+## US3 Local Evidence Recorded On 2026-05-06
+
+- Command/report hardening was verified without Rust source edits in this pass, so the prior local
+  T037/T038 source-tree evidence remained fresh at the time of this US3 check. Later maintained-doc
+  edits still do not change the built binary, but any later Rust, Cargo, Makefile, or launch/build
+  code edit expires T037/T038 again.
+- Emergency catch-up default-window behavior passed:
+  `default_recovery_window` 2 passed and `default_catchup` 2 passed.
+- Command surface and command-report tests passed:
+  `command` 38 passed, `catchup` 19 passed, `report` 20 passed, `unresolved` 4 passed, and
+  `collect_status` 7 passed.
+- `Last 24 hours` preset and TUI separation tests passed:
+  `last_24` 5 passed, `tui` 24 passed, and `status_lines` 3 passed.
+- This completes local US3 evidence for bounded emergency catch-up defaults, explicit
+  `Last 24 hours` labeling without timestamp input, command-report compatibility, bounded
+  unresolved samples, safe revision URLs, next-action rendering, and daemon-vs-command status
+  separation.
+
+## Maintained Docs Evidence Recorded On 2026-05-06
+
+- Operator docs now name the current MVP launch path: build with `make build-server`, rsync
+  `target/aarch64-unknown-linux-musl/release/suppressor`, then start on the server with
+  `./suppressor --config ./config.toml server-start`.
+- Runtime-boundary docs now distinguish daemon-owned `runtime_status.json` from one-shot
+  `command_report.json`, name `server-start` PID/status/log evidence, and keep rolling
+  `Last 24 hours` verification distinct from nightly full watched-set recheck.
+- Implementation/testing docs now preserve the shared backoff contract, scheduler semantics,
+  timestamp-formatting lesson, detached launch checks, command-report isolation, and the minimum
+  server verification path.
+- Docs workflow result:
+
+```bash
+rtk python3 tools/doc_workflow.py all
+```
+
+Observed result:
+
+```text
+Doc metadata lint failed:
+  specs/002-fix-git-commit/checklists/requirements.md: missing YAML frontmatter
+Doc metadata already in sync.
+```
+
+The blocker is the known inactive `002` metadata issue. It was not fixed during the active
+suppressor freeze because it is outside `001-real-time-suppression`.
+
+## Current MVP Go/No-Go Recorded On 2026-05-06
+
+Decision: BLOCK target-host deployment trust until T039, T040, T041, and T042 evidence is
+collected on the deployment host.
+
+- ACCEPT local test evidence: `rtk cargo test --manifest-path suppressor/Cargo.toml --
+  --test-threads=1` passed with `204 passed`.
+- ACCEPT local server-build evidence: `rtk make -C suppressor build-server` produced the
+  aarch64 Linux musl binary at `target/aarch64-unknown-linux-musl/release/suppressor`.
+- ACCEPT local command/report evidence: emergency catch-up defaults, `Last 24 hours`,
+  command-report compatibility, bounded unresolved samples, safe revision URLs, and daemon-vs-
+  command status separation passed targeted tests.
+- BLOCK config-stability trust: the target-host `missing field realtime` failure requires reviewed
+  config baseline or migration-needed evidence before launch trust.
+- BLOCK detached server-start deployment trust: target-host PID/runtime/log evidence and SSH
+  logout-survival evidence are still missing.
+- BLOCK live-hide deployment trust: no target-host live or controlled dry-run watched-edit smoke
+  result is recorded yet.
+- BLOCK recovery/reconciliation/nightly deployment trust: local scheduler and status tests pass,
+  but target-host recovery, rolling last-24h verification, and nightly full-recheck evidence remain
+  pending.
+- BLOCK deployment-host resource trust: the required 10-minute daemon-alone and daemon-plus-TUI
+  resource samples are not recorded yet.
+- ROLLBACK/FALLBACK decision: if `server-start` creates a duplicate daemon, orphaned child, false
+  healthy status, failed live-hide evidence, failed recovery evidence, or unacceptable resource
+  growth, stop the newly started daemon when it can be identified safely, restore the last trusted
+  binary/config/state workflow, and use the last trusted launch path or manual emergency catch-up
+  until a corrected build passes this gate.
 
 ## Primary Status Questions
 
@@ -168,6 +351,28 @@ suppressor/target/aarch64-unknown-linux-musl/release/suppressor
 Use that path as the rsync source after the test gate passes. Do not record server credentials,
 tokens, cookies, or `.env` values in release evidence.
 
+## Config Stability And Human Review Gate
+
+Config is a stable operator contract. Do not change server config, tracked config, config schema,
+defaults, environment variable names, config loading semantics, or deployment-required sections as
+a background workaround.
+
+Before accepting T040 launch evidence, record:
+
+1. The config path used by the deployed binary.
+2. Whether the server config matches the reviewed tracked baseline or is an operator-managed
+   deployment config with a documented divergence.
+3. The non-secret result of `./suppressor --config ./config.toml print-effective-config`, or the
+   exact config/migration-needed diagnostic if config loading fails.
+4. For any config-affecting change, the concrete motivation, explicit human review evidence,
+   compatibility fixture or migration diagnostic, exact migration steps, rollback/fallback to the
+   last trusted config, and post-change `server-start` verification.
+
+The 2026-05-06 target-host failure `missing field realtime` blocks deployment trust until this gate
+is resolved. Do not add `[realtime]` or any other section to the server config as an unreviewed
+shortcut; either migrate through the reviewed evidence path or run a binary that fails safely with a
+reviewed migration-needed diagnostic.
+
 ## Detached Server Start Check
 
 After copying the binary to the server and placing `config.toml` plus `.env` or equivalent
@@ -191,17 +396,37 @@ launch_path=server-start
 
 Verification:
 
-1. Confirm the command creates required runtime directories but does not create, print, or persist
+1. Confirm the config stability and human review gate above has passed or produced a documented
+   block decision.
+2. Confirm the command creates required runtime directories but does not create, print, or persist
    credentials.
-2. Confirm the printed PID is alive and matches the expected suppressor binary.
-3. Confirm `runtime_status.json` is daemon-owned, updates within 10 seconds, and records
+3. Confirm the printed PID is alive and matches the expected suppressor binary.
+4. Confirm `runtime_status.json` is daemon-owned, updates within 10 seconds, and records
    `launch_path=server-start` or equivalent detached-binary wording.
-4. Confirm daemon stdout/stderr goes to the printed log path, not the SSH terminal.
-5. Close the SSH terminal and reconnect.
-6. Confirm the PID is still alive and the status file continues updating.
-7. If config, auth secrets, state/log paths, stale PID, duplicate live daemon, or startup status
+5. Confirm daemon stdout/stderr goes to the printed log path, not the SSH terminal.
+6. Close the SSH terminal and reconnect.
+7. Confirm the PID is still alive and the status file continues updating.
+8. If config, auth secrets, state/log paths, stale PID, duplicate live daemon, or startup status
    verification fail, treat the launch as failed; do not trust a partial or orphaned background
    process.
+
+## Target Server Environment Assumptions
+
+The documented MVP deployment assumes:
+
+- A Linux host that can execute the rsynced
+  `target/aarch64-unknown-linux-musl/release/suppressor` binary.
+- A deployment directory containing the binary, `config.toml`, and an operator-controlled `.env` or
+  equivalent environment source.
+- Writable configured parents for the state directory, `daemon.pid`, `runtime_status.json`, cache
+  files, and detached log path.
+- Network access to be.wikipedia.org and an operator account with suppressor rights for live mode.
+- A local shell is available to invoke `./suppressor --config ./config.toml server-start`, but
+  systemd, tmux, screen, shell `&`, and `nohup` are not required and are not authoritative evidence
+  for this path.
+
+If any assumption is false, deployment evidence must either name the substitute target and
+verification path explicitly or block production trust.
 
 ## Compatibility Approval Check
 
@@ -347,6 +572,39 @@ Before trusting a new version in the operator environment:
 5. Measure idle and active CPU, memory, queue depth, state size, and warning-summary counts for the
    daemon alone and daemon plus TUI.
 6. Confirm bounded-state behavior under repeated failure storms.
+
+Minimum resource evidence for T042:
+
+- Measure at least 10 minutes idle for daemon alone and daemon plus TUI.
+- Measure one active sample that includes live handling plus recovery, reconciliation, or backoff.
+- Record CPU percentage, RSS memory, live queue depth/cap, recovery or reconciliation queue
+  depth/cap, API concurrency, `runtime_status.json` size, `command_report.json` size,
+  `processed_revids.json` size, detached log growth rate, and coalesced-warning counts.
+- Block release if API concurrency exceeds the default cap of 2 without documented approval, a queue
+  reaches its cap without degraded status, `runtime_status.json` or `command_report.json` exceeds
+  1 MiB, repeated-root-cause log growth exceeds 10 MiB/hour without mitigation, or any field keeps
+  growing monotonically after the active sample returns idle.
+
+## Deployment Go/No-Go And Rollback Gate
+
+Accept the MVP deployment only when the final evidence bundle includes fresh T037 and T038 results,
+passing `server-start` logout-survival evidence on the target host, one live or controlled dry-run
+watched-edit smoke result, recovery-from-anchor evidence, rolling last-24h verification evidence,
+nightly full-recheck evidence or a documented scheduled wait with non-healthy status while pending,
+shared backoff evidence, T039 config-stability evidence, and T042 resource evidence within bounds.
+
+Block the deployment if any of those checks fail, are stale, are local-only when deployment-host
+evidence is required, or leave the daemon looking healthy while live hiding, recovery,
+reconciliation, nightly, launch-path, or resource evidence is missing or failed.
+
+Rollback or fall back when the new binary, config, state shape, or launch path creates a duplicate
+daemon, orphaned child, false healthy status, missing live-hide evidence, failed recovery evidence,
+unreviewed config requirement, config migration failure, or unacceptable resource growth. The
+rollback path is to stop the newly started daemon when it can be identified safely, restore the last
+trusted binary/config/state workflow, and use the last trusted launch path or manual emergency
+catch-up until a corrected build passes this gate. If no last trusted workflow is available, keep
+the deployment blocked and record the human go/no-go decision explicitly instead of treating
+degraded evidence as success.
 
 ## Production Readiness Gate
 

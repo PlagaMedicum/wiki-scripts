@@ -26,7 +26,7 @@ docmeta:
 
 ## Requirement Consistency
 
-- [x] CHK010 Are detached launch requirements consistent between spec, plan, operator-command contract, runtime-status contract, quickstart, data model, and tasks? [Consistency, Spec §FR-035, Plan §Phase -1, Tasks §T007/T010/T039]
+- [x] CHK010 Are detached launch requirements consistent between spec, plan, operator-command contract, runtime-status contract, quickstart, data model, and tasks? [Consistency, Spec §FR-035, Plan §Phase -1, Tasks §T007/T010/T040]
 - [x] CHK011 Are `server-start` requirements consistent with the daemon-owned runtime truth rule so the launcher does not overwrite or impersonate daemon status? [Consistency, Spec §FR-021, Contract §Runtime Status]
 - [x] CHK012 Are detached launch failure requirements consistent with stale PID and stale runtime-status requirements instead of creating a second false-healthy status path? [Consistency, Spec §FR-029, Contract §Failure behavior]
 - [x] CHK013 Are build and launch requirements consistently scoped so `make build-server` produces the rsync artifact while `server-start` starts the deployed artifact on the server? [Consistency, Spec §FR-034..FR-035, Quickstart §Server Build Check]
@@ -35,7 +35,7 @@ docmeta:
 
 - [x] CHK014 Can server-start success be objectively measured by PID liveness, runtime-status freshness, launch-path label, log-path output, and terminal logout survival within the specified startup window? [Measurability, Spec §SC-021]
 - [x] CHK015 Are startup timeout and status freshness criteria quantified enough to avoid vague "started successfully" interpretations? [Measurability, Spec §SC-021, Contract §Required behavior]
-- [x] CHK016 Are release-readiness requirements tied to evidence from tests, server build, detached launch, live or dry-run smoke check, and resource/log bounds rather than task completion alone? [Acceptance Criteria, Tasks §T037..T045, Quickstart §Production Readiness Gate]
+- [x] CHK016 Are release-readiness requirements tied to evidence from tests, server build, detached launch, live or dry-run smoke check, and resource/log bounds rather than task completion alone? [Acceptance Criteria, Tasks §T037..T046, Quickstart §Production Readiness Gate]
 
 ## Scenario Coverage
 
@@ -47,7 +47,7 @@ docmeta:
 
 - [x] CHK020 Are dependencies on local `config.toml`, `.env` or process environment, runtime state paths, PID file, runtime-status file, and log path documented without assuming one supervisor is always authoritative? [Dependency, Spec §Assumptions, Data Model §DetachedDaemonLaunch]
 - [x] CHK021 Are rollback or fallback expectations documented when detached launch changes or invalidates a previously trusted operator launch workflow? [Compatibility, Spec §FR-028, Plan §Compatibility/Migration]
-- [x] CHK022 Are low-spec resource and log-volume expectations extended to detached operation, including detached log growth and no busy-loop startup waiting? [Non-Functional, Plan §Resource Goals, Tasks §T041]
+- [x] CHK022 Are low-spec resource and log-volume expectations extended to detached operation, including detached log growth and no busy-loop startup waiting? [Non-Functional, Plan §Resource Goals, Tasks §T042]
 
 ## Notes
 

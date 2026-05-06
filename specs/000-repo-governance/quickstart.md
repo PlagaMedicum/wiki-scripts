@@ -36,6 +36,10 @@ specify check
    If the change can invalidate previous setups, schemas, configs, state files, machine-readable
    surfaces, or authoritative launch paths, document the compatibility strategy, migration steps,
    fallback/rollback, and the required human approval point before implementation.
+   If the change touches tracked config files, config schema, defaults, environment variable names,
+   loading semantics, or deployment-required config sections, document the concrete motivation,
+   explicit human review evidence, compatibility or migration behavior, rollback/fallback, and
+   deployment-path verification before trusting it on a server.
    For safety-, reliability-, or performance-sensitive work, state resource goals, bounded
    concurrency/state/logging, recovery/status behavior, low-spec verification, and how incident
    lessons will be preserved.
@@ -93,6 +97,10 @@ python3 tools/doc_workflow.py all
 - Do not execute destructive edits, broad rewrites, setup-breaking refactors, or incompatible
   schema/state/surface changes on assumption. Get explicit human approval and record the migration
   path first.
+- Do not make config churn in the background. Config edits, schema/default changes, environment
+  variable changes, and new required server config sections need a documented reason, explicit
+  human review, compatibility or migration evidence, and rollback/fallback notes before production
+  trust.
 
 ## Repo-Local Refresh
 

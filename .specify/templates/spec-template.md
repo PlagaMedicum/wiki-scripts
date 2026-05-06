@@ -83,6 +83,9 @@ docmeta:
 - How does system handle [error scenario]?
 - What happens when the feature encounters older config/state/schema/artifact shapes from a
   previous setup?
+- If config files, config schema, defaults, environment variable names, loading semantics, or
+  deployment-required sections change, what specific human-reviewed motivation justifies that
+  config change?
 - If the change can invalidate a previous setup or workflow, what migration, rollback, or operator
   prompt is required?
 
@@ -107,6 +110,11 @@ docmeta:
 - If the change can invalidate previous setups, schemas, configs, state files, machine-readable
   surfaces, or authoritative launch paths, include explicit requirements for compatibility,
   migration, rollback/fallback, and required human approval before disruptive execution.
+- If the change touches config files, config schema, defaults, environment variable names, config
+  loading semantics, or deployment-required config sections, include explicit requirements for the
+  motivation, human review evidence, backward-compatible behavior, migration diagnostics,
+  rollback/fallback, and deployment verification. Do not add required config keys or server config
+  edits as an unreviewed workaround.
 - For safety-, reliability-, or performance-sensitive work, include requirements for low-spec
   operation, bounded queues/concurrency/state/logging, recovery behavior, and operator-visible
   status where those constraints affect correctness or trust. Resource economy must not weaken
@@ -143,6 +151,9 @@ docmeta:
 - **SC-005**: [Resource-economy outcome, e.g., "The feature stays within the agreed CPU, memory, queue, or log-volume budget"]
 - **SC-006**: [Durable-lesson outcome, e.g., "The incident lesson is captured in tests, docs, or a narrowly useful comment"]
 - **SC-007**: [Documentation outcome, e.g., "Operator or maintainer docs preserve the evidence needed to repeat the decision"]
+- **SC-008**: [Config-stability outcome, if config changes: "Every config change has a documented
+  motivation, human review evidence, compatibility fixture or migration diagnostic, and rollback
+  path before production trust"]
 
 ## Assumptions
 

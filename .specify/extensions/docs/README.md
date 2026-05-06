@@ -26,6 +26,11 @@ resource goals, low-spec verification, recovery/status evidence, and durable inc
 be present in the affected maintained or project-local docs. Documentation can be concise, but it
 must not drop the performance evidence or operational lessons needed to repeat the decision.
 
+Config changes are part of that evidence. If tracked config files, config schema, defaults,
+environment variable names, loading semantics, or deployment-required sections changed, the docs
+gate must preserve the specific motivation, explicit human review evidence, compatibility or
+migration behavior, deployment-path verification, and rollback/fallback notes.
+
 If an active human-safety freeze is in effect, the docs gate must preserve that routing rule and the
 minimum release evidence for the active safety feature. During the active suppressor MVP freeze,
 that evidence belongs in `specs/001-real-time-suppression/` and `suppressor/` docs, not in unrelated

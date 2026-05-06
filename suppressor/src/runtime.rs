@@ -22,8 +22,8 @@ use crate::reconcile::{
 };
 use crate::state::{
     ActionableIssueSnapshot, ApiFailureSnapshot, CoverageSummary, CurrentTaskSnapshot,
-    NightlySweepProgress, ProcessedRevidsState, RuntimeStatus, SourceListRefresh,
-    SuppressionOutcomeSnapshot, load_json, save_json_atomic,
+    NightlySweepProgress, ProcessedRevidsState, RuntimeStatus, SharedBackoffSnapshot,
+    SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic,
 };
 
 pub struct RecoveryWindowSelection {
@@ -344,6 +344,8 @@ pub struct ReconcilePassContext {
     pub(crate) timezone: String,
     pub(crate) batch_sleep_ms: u64,
     pub(crate) batch_limit: usize,
+    pub(crate) warning_sample_limit: usize,
+    pub(crate) rate_limit_backoff_default_seconds: u64,
     pub(crate) persistence: CachePersistence,
     pub(crate) client: MediaWikiClient,
     pub(crate) cache: Arc<RwLock<RuntimeCache>>,
@@ -434,6 +436,11 @@ impl ReconciliationRuntime {
             timezone: self.config.nightly_sweep.timezone.clone(),
             batch_sleep_ms: self.config.nightly_sweep.batch_sleep_ms,
             batch_limit,
+            warning_sample_limit: self.config.catchup.warning_sample_limit,
+            rate_limit_backoff_default_seconds: self
+                .config
+                .catchup
+                .rate_limit_backoff_default_seconds,
             persistence: if self.dry_run {
                 CachePersistence::Ephemeral
             } else {
@@ -849,8 +856,7 @@ impl AppRuntime {
     pub async fn mark_realtime_stream_open(&self) {
         self.update_runtime_status(|status| {
             let now = Utc::now();
-            let backoff_until = active_backoff_until(status.realtime.backoff_until, now);
-            status.realtime.backoff_until = backoff_until;
+            let backoff_until = retain_runtime_backoff(status, now);
             let next_state = converged_realtime_state_after_stream_open(&status.realtime, now);
             if status.realtime.state != next_state {
                 status.realtime.state = next_state.clone();
@@ -909,7 +915,7 @@ impl AppRuntime {
             let now = Utc::now();
             let observed_at = observed_at.unwrap_or(now);
             let lag_millis = (now - observed_at).num_milliseconds().max(0);
-            let backoff_until = active_backoff_until(status.realtime.backoff_until, now);
+            let backoff_until = retain_runtime_backoff(status, now);
             status.realtime.last_event_observed_at = Some(observed_at);
             status.realtime.last_freshness_probe_source = Some("stream".to_string());
             status.realtime.current_lag_seconds = Some(lag_millis / 1000);
@@ -923,7 +929,6 @@ impl AppRuntime {
                 status.realtime.state = next_state;
                 status.realtime.last_state_changed_at = Some(now);
             }
-            status.realtime.backoff_until = backoff_until;
             status.realtime.latest_notice = Some(if let Some(until) = backoff_until {
                 format!(
                     "observed target-wiki event; recovery backoff until {}",
@@ -1040,14 +1045,21 @@ impl AppRuntime {
             status.realtime.last_reconnect_reason = Some(reconnect_reason);
             status.realtime.latest_error_code = Some(error_code);
             begin_offline_interval_if_needed(&mut status.realtime, now);
-            status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
-                source: "stream".to_string(),
-                severity: "error".to_string(),
-                summary: notice.clone(),
-                next_action: "wait for the stream to reopen and verify the next watched edit"
-                    .to_string(),
-                detected_at: Some(now),
-            });
+            if !status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .is_some_and(actionable_issue_blocks_stream_healthy)
+            {
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "stream".to_string(),
+                    severity: "error".to_string(),
+                    summary: notice.clone(),
+                    next_action: "wait for the stream to reopen and verify the next watched edit"
+                        .to_string(),
+                    detected_at: Some(now),
+                });
+            }
             status.realtime.current_task = Some(CurrentTaskSnapshot {
                 task_kind: "reconnecting".to_string(),
                 label: notice.clone(),
@@ -1222,6 +1234,18 @@ impl AppRuntime {
                     .unwrap_or_else(|| "inspect auth, API, or network state".to_string()),
                 detected_at: Some(now),
             });
+            if snapshot.retryable
+                && let Some(seconds) = snapshot.retry_after_seconds
+            {
+                let until = now + chrono::TimeDelta::seconds(seconds as i64);
+                set_shared_backoff(
+                    status,
+                    snapshot.operation.as_str(),
+                    "api-retry-after",
+                    until,
+                    now,
+                );
+            }
             status.realtime.latest_error = Some(snapshot);
         })
         .await;
@@ -1230,7 +1254,15 @@ impl AppRuntime {
     pub async fn record_source_refresh(&self, refresh: SourceListRefresh) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
-            let active_deferred_until = active_backoff_until(refresh.deferred_until, now);
+            let active_deferred_until = refresh.deferred_until.and_then(|until| {
+                set_shared_backoff(
+                    status,
+                    "source-refresh",
+                    "source-refresh-deferred",
+                    until,
+                    now,
+                )
+            });
             let notice = format!(
                 "source refresh {} new={} removed={} catchup={}",
                 refresh.outcome,
@@ -1241,7 +1273,6 @@ impl AppRuntime {
             if active_deferred_until.is_some() {
                 status.realtime.state = "catching-up".to_string();
                 status.realtime.last_state_changed_at = Some(now);
-                status.realtime.backoff_until = active_deferred_until;
                 set_background_current_task(
                     status,
                     CurrentTaskSnapshot {
@@ -1327,7 +1358,7 @@ impl AppRuntime {
 
     pub async fn current_backoff_until(&self) -> Option<DateTime<Utc>> {
         let status = self.reconcile.runtime_status.lock().await;
-        active_backoff_until(status.realtime.backoff_until, Utc::now())
+        active_runtime_backoff_until(&status.realtime, Utc::now())
     }
 
     pub async fn default_recovery_window(&self, end: DateTime<Utc>) -> RecoveryWindowSelection {
@@ -1351,7 +1382,12 @@ impl AppRuntime {
     pub async fn mark_recovery_completed(&self, summary: CoverageSummary) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
-            let backoff_until = active_backoff_until(summary.backoff_until, now);
+            let backoff_until = summary
+                .backoff_until
+                .and_then(|until| {
+                    set_shared_backoff(status, "recovery", "rate-limit-backoff", until, now)
+                })
+                .or_else(|| retain_runtime_backoff(status, now));
             let notice = render_recovery_notice(&summary);
             status.realtime.state = if backoff_until.is_some() {
                 "catching-up".to_string()
@@ -1363,7 +1399,6 @@ impl AppRuntime {
             status.realtime.last_state_changed_at = Some(now);
             status.realtime.catchup_active = false;
             status.realtime.last_recovery_completed_at = Some(now);
-            status.realtime.backoff_until = backoff_until;
             set_background_current_task(
                 status,
                 if let Some(until) = backoff_until {
@@ -1476,7 +1511,7 @@ impl AppRuntime {
             record_observed_to_hide_latency_ms(elapsed_ms);
         }
         self.update_runtime_status(move |status| {
-            let backoff_until = active_backoff_until(status.realtime.backoff_until, completed_at);
+            let backoff_until = retain_runtime_backoff(status, completed_at);
             status.realtime.queue_depth = queue_depth;
             status.realtime.last_action_completed_at = Some(completed_at);
             if outcome == "hidden" || outcome == "already-hidden" {
@@ -1585,6 +1620,81 @@ fn active_backoff_until(
     now: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
     backoff_until.filter(|until| *until > now)
+}
+
+fn active_runtime_backoff_until(
+    status: &crate::state::RealtimeRuntimeStatus,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let legacy_until = active_backoff_until(status.backoff_until, now);
+    let shared_until = status
+        .shared_backoff
+        .as_ref()
+        .and_then(|snapshot| active_backoff_until(snapshot.backoff_until, now));
+    match (legacy_until, shared_until) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(until), None) | (None, Some(until)) => Some(until),
+        (None, None) => None,
+    }
+}
+
+pub(crate) fn shared_backoff_paths() -> Vec<String> {
+    [
+        "catch-up",
+        "reconciliation",
+        "source-refresh",
+        "one-shot-command",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+pub(crate) fn set_shared_backoff(
+    status: &mut RuntimeStatus,
+    source: &str,
+    reason: &str,
+    until: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let active_until = active_backoff_until(Some(until), now)?;
+    let selected_until = active_runtime_backoff_until(&status.realtime, now)
+        .map(|existing| existing.max(active_until))
+        .unwrap_or(active_until);
+    status.realtime.backoff_until = Some(selected_until);
+    status.realtime.shared_backoff = Some(SharedBackoffSnapshot {
+        source: source.to_string(),
+        reason: reason.to_string(),
+        backoff_until: Some(selected_until),
+        affected_paths: shared_backoff_paths(),
+        live_hiding_blocked: false,
+        recorded_at: Some(now),
+    });
+    Some(selected_until)
+}
+
+fn retain_runtime_backoff(status: &mut RuntimeStatus, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let active_until = active_runtime_backoff_until(&status.realtime, now);
+    status.realtime.backoff_until = active_until;
+    if active_until.is_none() {
+        status.realtime.shared_backoff = None;
+    } else if status
+        .realtime
+        .shared_backoff
+        .as_ref()
+        .and_then(|snapshot| active_backoff_until(snapshot.backoff_until, now))
+        .is_none()
+    {
+        status.realtime.shared_backoff = active_until.map(|until| SharedBackoffSnapshot {
+            source: "legacy-runtime".to_string(),
+            reason: "legacy-backoff-until".to_string(),
+            backoff_until: Some(until),
+            affected_paths: shared_backoff_paths(),
+            live_hiding_blocked: false,
+            recorded_at: Some(now),
+        });
+    }
+    active_until
 }
 
 fn offline_interval_active(status: &crate::state::RealtimeRuntimeStatus) -> bool {
@@ -1741,22 +1851,41 @@ fn apply_reconciliation_completed_status(
             completed_at,
         ));
     } else if !status.realtime.catchup_active
-        && active_backoff_until(status.realtime.backoff_until, completed_at).is_none()
+        && active_runtime_backoff_until(&status.realtime, completed_at).is_none()
         && !latest_live_outcome_is_degraded(&status.realtime)
         && !latest_recovery_summary_is_degraded(&status.realtime)
         && !has_scheduled_verification_failure(&status.realtime)
+        && !latest_persistent_issue_is_degraded(&status.realtime, mode)
     {
         status.realtime.state = "healthy".to_string();
         status.realtime.last_state_changed_at = Some(completed_at);
-        clear_actionable_issue_if_source(
-            &mut status.realtime,
-            &[
-                "last-24h-verification",
-                "full-watched-set-recheck",
-                "recovery",
-                "stream",
-            ],
-        );
+        if mode == ReconcileMode::Full {
+            clear_actionable_issue_if_source(
+                &mut status.realtime,
+                &[
+                    "last-24h-verification",
+                    "full-watched-set-recheck",
+                    "full-watched-set-freshness",
+                    "recovery",
+                    "stream",
+                ],
+            );
+        } else {
+            clear_actionable_issue_if_source(
+                &mut status.realtime,
+                &[
+                    "last-24h-verification",
+                    "full-watched-set-recheck",
+                    "recovery",
+                    "stream",
+                ],
+            );
+        }
+    } else if latest_persistent_issue_blocks_stream_healthy(&status.realtime)
+        && matches!(status.realtime.state.as_str(), "" | "unknown" | "healthy")
+    {
+        status.realtime.state = "unhealthy".to_string();
+        status.realtime.last_state_changed_at = Some(completed_at);
     }
     status.last_notice = Some(notice);
     status.last_notice_at = Some(completed_at);
@@ -1792,6 +1921,38 @@ fn has_scheduled_verification_failure(status: &crate::state::RealtimeRuntimeStat
             .last_nightly_full_recheck_result
             .as_deref()
             .is_some_and(|result| result.starts_with("failed:"))
+}
+
+fn latest_persistent_issue_is_degraded(
+    status: &crate::state::RealtimeRuntimeStatus,
+    completed_mode: ReconcileMode,
+) -> bool {
+    status
+        .latest_actionable_issue
+        .as_ref()
+        .is_some_and(|issue| {
+            if completed_mode == ReconcileMode::Full && issue.source == "full-watched-set-freshness"
+            {
+                return false;
+            }
+            actionable_issue_blocks_stream_healthy(issue)
+        })
+}
+
+fn latest_persistent_issue_blocks_stream_healthy(
+    status: &crate::state::RealtimeRuntimeStatus,
+) -> bool {
+    status
+        .latest_actionable_issue
+        .as_ref()
+        .is_some_and(actionable_issue_blocks_stream_healthy)
+}
+
+fn actionable_issue_blocks_stream_healthy(issue: &ActionableIssueSnapshot) -> bool {
+    matches!(
+        issue.source.as_str(),
+        "full-watched-set-freshness" | "launch-path" | "pid-file" | "runtime-status"
+    )
 }
 
 fn clear_actionable_issue_if_source(
@@ -1935,7 +2096,7 @@ fn converged_realtime_state_after_stream_open(
     status: &crate::state::RealtimeRuntimeStatus,
     now: DateTime<Utc>,
 ) -> String {
-    if status.catchup_active || active_backoff_until(status.backoff_until, now).is_some() {
+    if status.catchup_active || active_runtime_backoff_until(status, now).is_some() {
         return "catching-up".to_string();
     }
     if matches!(status.state.as_str(), "blocked")
@@ -1950,7 +2111,10 @@ fn converged_realtime_state_after_stream_open(
     if latest_live_outcome_is_degraded(status) {
         return "unhealthy".to_string();
     }
-    if latest_recovery_summary_is_degraded(status) || has_scheduled_verification_failure(status) {
+    if latest_recovery_summary_is_degraded(status)
+        || has_scheduled_verification_failure(status)
+        || latest_persistent_issue_blocks_stream_healthy(status)
+    {
         return "unhealthy".to_string();
     }
     if status.last_event_observed_at.is_none() && status.state == "starting" {
@@ -1966,7 +2130,7 @@ fn converged_realtime_state_after_stream_event(
     status: &crate::state::RealtimeRuntimeStatus,
     now: DateTime<Utc>,
 ) -> String {
-    if status.catchup_active || active_backoff_until(status.backoff_until, now).is_some() {
+    if status.catchup_active || active_runtime_backoff_until(status, now).is_some() {
         return "catching-up".to_string();
     }
     if matches!(status.state.as_str(), "blocked")
@@ -1981,7 +2145,10 @@ fn converged_realtime_state_after_stream_event(
     if latest_live_outcome_is_degraded(status) {
         return "unhealthy".to_string();
     }
-    if latest_recovery_summary_is_degraded(status) || has_scheduled_verification_failure(status) {
+    if latest_recovery_summary_is_degraded(status)
+        || has_scheduled_verification_failure(status)
+        || latest_persistent_issue_blocks_stream_healthy(status)
+    {
         return "unhealthy".to_string();
     }
     "healthy".to_string()
@@ -2276,6 +2443,145 @@ mod tests {
         assert!(latency.observed_to_queue.latest_ms.unwrap() >= 1_000);
     }
 
+    #[tokio::test]
+    async fn dispatch_action_records_processed_live_revision_as_already_hidden() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        harness.runtime.processed.write().await.insert(88);
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![88],
+                event_id: Some("evt-88".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+
+        let status = harness.runtime_status.lock().await.clone();
+        let outcome = status.realtime.latest_outcome.as_ref().unwrap();
+        assert!(harness.work_rx.try_recv().is_err());
+        assert_eq!(outcome.outcome, "already-hidden");
+        assert_eq!(outcome.reason_code.as_deref(), Some("already-processed"));
+        assert_eq!(outcome.mode, RevDelMode::Live.label());
+    }
+
+    #[tokio::test]
+    async fn dispatch_action_records_duplicate_live_revision_as_skipped() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![88],
+                event_id: Some("evt-88-a".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![88],
+                event_id: Some("evt-88-b".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+
+        let status = harness.runtime_status.lock().await.clone();
+        let outcome = status.realtime.latest_outcome.as_ref().unwrap();
+        assert!(harness.work_rx.try_recv().is_ok());
+        assert!(harness.work_rx.try_recv().is_err());
+        assert_eq!(outcome.outcome, "skipped");
+        assert_eq!(outcome.reason_code.as_deref(), Some("duplicate-queued"));
+        assert_eq!(outcome.mode, RevDelMode::Live.label());
+    }
+
+    #[tokio::test]
+    async fn record_action_completed_surfaces_blocked_and_retrying_live_outcomes() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![88],
+                event_id: Some("evt-88".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        let action = harness.work_rx.try_recv().unwrap();
+
+        harness
+            .runtime
+            .record_action_completed(&action, "blocked", Some("permissiondenied".to_string()), 1)
+            .await;
+        let blocked = harness.runtime_status.lock().await.clone();
+        assert_eq!(blocked.realtime.state, "blocked");
+        assert_eq!(
+            blocked
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("live-hide")
+        );
+        assert_eq!(
+            blocked
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .map(|outcome| outcome.outcome.as_str()),
+            Some("blocked")
+        );
+
+        harness
+            .runtime
+            .record_action_completed(&action, "retrying", Some("rate-limited".to_string()), 2)
+            .await;
+        let retrying = harness.runtime_status.lock().await.clone();
+        assert_eq!(retrying.realtime.state, "unhealthy");
+        assert_eq!(
+            retrying
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .map(|outcome| outcome.outcome.as_str()),
+            Some("retrying")
+        );
+    }
+
     #[test]
     fn reconciliation_status_updates_preserve_active_live_hide_task() {
         let started_at = Utc.with_ymd_and_hms(2026, 4, 30, 9, 0, 0).unwrap();
@@ -2490,6 +2796,81 @@ mod tests {
 
         assert_eq!(active_backoff_until(Some(expired), now), None);
         assert_eq!(active_backoff_until(Some(active), now), Some(active));
+    }
+
+    #[test]
+    fn active_runtime_backoff_uses_shared_snapshot_and_filters_expired_values() {
+        let now = DateTime::parse_from_rfc3339("2026-04-25T17:10:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let shared_until = now + TimeDelta::seconds(45);
+        let legacy_until = now + TimeDelta::seconds(5);
+        let expired = now - TimeDelta::seconds(1);
+
+        let status = crate::state::RealtimeRuntimeStatus {
+            backoff_until: Some(legacy_until),
+            shared_backoff: Some(SharedBackoffSnapshot {
+                source: "recovery".to_string(),
+                reason: "rate-limit-backoff".to_string(),
+                backoff_until: Some(shared_until),
+                affected_paths: shared_backoff_paths(),
+                live_hiding_blocked: false,
+                recorded_at: Some(now),
+            }),
+            ..crate::state::RealtimeRuntimeStatus::default()
+        };
+
+        assert_eq!(
+            active_runtime_backoff_until(&status, now),
+            Some(shared_until)
+        );
+
+        let expired_status = crate::state::RealtimeRuntimeStatus {
+            backoff_until: Some(expired),
+            shared_backoff: Some(SharedBackoffSnapshot {
+                backoff_until: Some(expired),
+                ..SharedBackoffSnapshot::default()
+            }),
+            ..crate::state::RealtimeRuntimeStatus::default()
+        };
+
+        assert_eq!(active_runtime_backoff_until(&expired_status, now), None);
+    }
+
+    #[tokio::test]
+    async fn api_retry_after_records_shared_backoff_without_blocking_live_hiding_contract() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+
+        harness
+            .runtime
+            .record_api_failure(ApiFailureSnapshot {
+                class: "http-status".to_string(),
+                http_status: Some(429),
+                retryable: true,
+                retry_after_seconds: Some(30),
+                operation: "revisiondelete".to_string(),
+                message: "rate limited".to_string(),
+                occurred_at: Some(Utc::now()),
+                ..ApiFailureSnapshot::default()
+            })
+            .await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        let shared = status.realtime.shared_backoff.as_ref().unwrap();
+        assert_eq!(shared.source, "revisiondelete");
+        assert_eq!(shared.reason, "api-retry-after");
+        assert_eq!(shared.affected_paths, shared_backoff_paths());
+        assert!(!shared.live_hiding_blocked);
+        assert_eq!(status.realtime.backoff_until, shared.backoff_until);
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("revisiondelete")
+        );
     }
 
     #[test]
@@ -2709,6 +3090,44 @@ mod tests {
                 .latest_actionable_issue
                 .as_ref()
                 .is_some_and(|issue| issue.summary.contains("Last 24 hours verification failed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_open_keeps_stale_full_recheck_freshness_unhealthy() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .update_runtime_status(|status| {
+                status.realtime.last_event_observed_at = Some(Utc::now() - TimeDelta::seconds(2));
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "full-watched-set-freshness".to_string(),
+                    severity: "warning".to_string(),
+                    summary: "full watched-set coverage is stale for 7/10 pages".to_string(),
+                    next_action: "run the full watched-set recheck".to_string(),
+                    detected_at: Some(Utc::now()),
+                });
+            })
+            .await;
+        runtime
+            .mark_stream_reconnecting(
+                "stream-error".to_string(),
+                "temporary network timeout".to_string(),
+                "real-time stream reconnecting after error".to_string(),
+            )
+            .await;
+
+        runtime.mark_realtime_stream_open().await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("full-watched-set-freshness")
         );
     }
 

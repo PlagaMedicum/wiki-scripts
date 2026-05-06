@@ -6,6 +6,7 @@ docmeta:
   source:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
+  - speckit-plan config-stability update on 2026-05-06
 ---
 
 # Contract: Operator Commands
@@ -32,6 +33,24 @@ unless an explicit compatibility notice says otherwise:
 
 CLI command names should stay backward-compatible where practical. TUI labels may become clearer
 than the raw CLI name, but that relabeling must be plain-language and documented.
+
+## Config Stability Contract
+
+Config files, config schema, defaults, environment variable names, config loading semantics, and
+deployment-required config sections are human-reviewed operator contracts.
+
+Rules:
+
+- Operator commands may validate config and print safe effective-config diagnostics, but they must
+  not generate credentials, edit server config, or silently add required config sections.
+- A config-affecting code or docs change must have a documented motivation, explicit human review,
+  compatibility or migration behavior, rollback/fallback, and server verification before
+  production trust.
+- `server-start` must fail safely for missing or incompatible config. The failure should be
+  operator-visible and migration-needed or blocked; it must not present a healthy or detached
+  daemon receipt.
+- `print-effective-config` must not expose secrets and must not normalize a missing required config
+  into an unreviewed production contract.
 
 ## Action Semantics
 
@@ -209,6 +228,8 @@ Required output:
 
 - Effective config path and resolved important runtime settings.
 - Clear indication of live versus dry-run defaults.
+- Whether the config loaded from the reviewed deployment path or failed before runtime trust.
+- No credentials, tokens, cookies, or `.env` values.
 
 ### Hide one revision by ID
 
@@ -259,6 +280,19 @@ Optional inputs:
 - `--dry-run` to start the background daemon in dry-run mode.
 - `--status-timeout-seconds <n>` to override the bounded startup wait.
 - `--log-file <path>` to choose the detached stdout/stderr log path.
+
+Target server assumptions:
+
+- The host is Linux and can execute the deployed `aarch64-unknown-linux-musl` suppressor binary, or
+  the release evidence names a different explicitly built target.
+- The operator can run one local shell command from the deployment directory, but the launch result
+  must not depend on systemd, tmux, screen, shell backgrounding, or `nohup`.
+- The configured `config.toml`, `.env` or equivalent environment secrets, state directory, PID file
+  parent, runtime-status parent, cache parent, and detached log parent are readable or writable as
+  required by the same user that runs the binary.
+- The server can reach be.wikipedia.org and the operator account has the expected suppression
+  rights for live mode; missing network, auth, or rights evidence is a blocked launch or smoke
+  result, not a degraded-success result.
 
 Required behavior:
 

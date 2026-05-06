@@ -31,8 +31,19 @@ The daemon:
 - bounded catch-up for startup, reconnect, stale-stream recovery, and operator commands
 - source-list edits refresh the cache, diff watched titles, and start title-scoped catch-up for newly added titles
 - request-page edits start immediate recent-window catch-up over the current watched set
+- recovery defaults to `last_successful_hide_at` when present and labels fallback recent windows
+  explicitly
+- rolling `Last 24 hours` verification and nightly full watched-set recheck are separate scheduler
+  scopes with separate operator evidence
 - MediaWiki API timestamps are serialized through one UTC second-precision formatter
-- repeated catch-up API failures are classified and coalesced by root cause
+- repeated live, catch-up, command, and reconciliation API failures are classified and coalesced by
+  root cause
+- shared throttle/backoff state feeds runtime status so blocked recovery or verification cannot
+  appear healthy while live protection or operator commands are affected
+- one-shot command reports persist to bounded `command_report.json` instead of overwriting
+  daemon-owned realtime truth
+- `server-start` launches the deployed binary as a detached child and verifies PID/runtime/log
+  evidence before printing success
 - runtime status with a dedicated realtime health section
 - reconciliation and backfill support
 - local cache and local state persistence
@@ -75,12 +86,15 @@ sub-second realtime path is healthy.
   refresh orchestration, and live candidate routing.
 - `cache/`: suppression-list parsing, redirect-enriched watched-title cache, and watched-title
   diffing.
-- `catchup.rs`: bounded recovery windows, optional title scopes, per-revision accounting, and
-  warning aggregation.
+- `commands.rs`: one-shot command orchestration, bounded command-report persistence, and detached
+  `server-start` launch verification.
+- `catchup.rs`: bounded recovery windows, optional title scopes, per-revision accounting, safe
+  unresolved revision links, next-action text, and warning aggregation.
 - `mw_api.rs`: MediaWiki transport, shared timestamp formatting, response parsing, retryability, and
   safe API failure classification.
-- `runtime.rs` and `state.rs`: bounded queue status, source-refresh snapshots, latest classified
-  errors, recovery summaries, and local JSON compatibility.
+- `runtime.rs` and `state.rs`: bounded queue status, shared backoff, source-refresh snapshots,
+  latest classified errors, recovery summaries, command-report contracts, and local JSON
+  compatibility.
 - `worker.rs`: RevDel submission, retry/relogin/token-refresh flow, final outcome recording, and
   blocked-state persistence.
 - `tui_status.rs` and `tui_view.rs`: read-only local status collection and compact operator
@@ -100,5 +114,21 @@ API failures are reduced to `ApiFailureSnapshot`: class, API code, HTTP status, 
 retryability, operation, safe sample title/revision, and a short redacted message. Response bodies,
 cookies, tokens, hidden text, and raw comments are not persisted.
 
-Catch-up does not log one warning per watched title for the same transport/API failure. It counts
-failures by classified root cause and preserves only the configured number of safe sample titles.
+Catch-up and reconciliation do not log one warning per watched title for the same transport/API
+failure. They count failures by classified root cause and preserve only the configured number of
+safe sample titles. Repeated failures set shared backoff evidence and keep scheduled verification
+failed or degraded until a later successful run clears it.
+
+## Scheduler And Launch Contracts
+
+The daytime scheduler uses a rolling `now-24h .. now` window, not a calendar-day-from-midnight
+window. The nightly scheduler is a full watched-set recheck and must stay labeled separately from
+the rolling verification path. Stream reopen, idle status, or a fresh recentchange event must not
+clear failed scheduled verification, stale full-recheck freshness, or shared backoff evidence on
+their own.
+
+`server-start` is additive. It keeps `run`, `dry-run`, TUI-managed starts, and optional systemd
+starts available, but it provides the current rsync server path: prepare runtime parents, validate
+auth inputs without printing secrets, refuse duplicate live daemons, detach stdout/stderr to a log,
+start a new session, and wait until PID file plus daemon-owned `runtime_status.json` agree on a
+fresh `launch_path=server-start`.

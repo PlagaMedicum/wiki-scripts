@@ -6,6 +6,7 @@ docmeta:
   source:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
+  - speckit-plan config-stability update on 2026-05-06
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -477,6 +478,33 @@ Validation rules:
   receipt or detached log path.
 - The detached child must not depend on the invoking terminal after `server-start` exits.
 
+## ConfigReviewEvidence
+
+Represents the human-reviewed evidence that a config-affecting change or deployment config
+divergence is safe to trust.
+
+Fields:
+
+- `config_path`: Path to the config used by the binary.
+- `surface`: `tracked-config`, `schema`, `default`, `environment-variable`, `loading-semantic`, or
+  `deployment-required-section`.
+- `motivation`: Concrete runtime, safety, compatibility, or operator-control reason for the change.
+- `human_review`: Explicit review reference or approval note.
+- `compatibility_verdict`: `unchanged`, `backward-compatible`, `migration-needed`, or `blocked`.
+- `previous_config_fixture`: Safe fixture or summary of the prior config shape, without secrets.
+- `migration_steps`: Exact operator steps required when compatibility is not automatic.
+- `rollback_steps`: How to return to the last trusted config or launch workflow.
+- `server_verification`: Target-host command or evidence proving the reviewed config path loads or
+  fails safely.
+
+Validation rules:
+
+- Config edits, schema/default changes, env-var changes, loading changes, and new required
+  deployment sections require this evidence before production trust.
+- Evidence must not include credentials, tokens, cookies, `.env` values, or sensitive page content.
+- A missing or incompatible config blocks `server-start` trust unless the diagnostic is explicitly
+  reviewed and migration-needed rather than false healthy.
+
 ## MvpReleaseEvidence
 
 Represents the minimum evidence required before the active safety freeze can be considered ready to
@@ -486,6 +514,8 @@ Fields:
 
 - `tests_passed`: Result for the shortest required suppressor test gate.
 - `server_artifact`: `DeploymentArtifact`.
+- `config_review`: Optional `ConfigReviewEvidence`; required when config differs from the reviewed
+  tracked baseline or any config-affecting change is part of the release.
 - `detached_launch`: Optional `DetachedDaemonLaunch` for rsync-to-server verification.
 - `launch_path_verified`: Whether the actual server launch path was used.
 - `live_hiding_verified`: Whether live or controlled dry-run hiding was observed through the daemon.

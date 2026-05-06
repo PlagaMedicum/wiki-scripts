@@ -41,7 +41,7 @@ docmeta:
 - [x] CHK019 Can live-hide latency success criteria be objectively measured with publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings? [Measurability, Spec §SC-001, Spec §SC-010]
 - [x] CHK020 Are stale or ineffective monitoring criteria measurable for both silent streams and fresh streams with failed, throttled, blocked, or unresolved live outcomes? [Measurability, Spec §SC-002]
 - [x] CHK021 Are restart and recovery success criteria reconciled so SC-003 and SC-003a do not define duplicate or conflicting recovery windows? [Conflict, Spec §SC-003, Spec §SC-003a]
-- [x] CHK022 Are MVP go/no-go requirements specified with objective evidence for tests, server build, launch path, live hiding, recovery, reconciliation, nightly fallback, backoff, and rollback? [Completeness, Tasks §T034..T042, Quickstart §Active MVP Critical Path]
+- [x] CHK022 Are MVP go/no-go requirements specified with objective evidence for tests, server build, config stability, launch path, live hiding, recovery, reconciliation, nightly fallback, backoff, and rollback? [Completeness, Tasks §T034..T046, Quickstart §Active MVP Critical Path]
 - [x] CHK023 Are resource-economy success criteria measurable on the deployment host for idle daemon plus TUI, queue depth, state size, API concurrency, and warning summaries? [Measurability, Spec §SC-011, Plan §Resource Goals]
 - [x] CHK024 Are server-build acceptance criteria measurable without embedding rsync destination, credentials, tokens, cookies, or `.env` values in release evidence? [Acceptance Criteria, Spec §SC-020, Data Model §DeploymentArtifact]
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use suppressor::config::{AppConfig, RuntimePaths};
 use suppressor::state::{
-    CommandReportSurface, ProcessedRevidsState, RuntimeStatus,
+    CommandReportSurface, ProcessedRevidsState, RuntimeStatus, SharedBackoffSnapshot,
     compatibility_notice_for_unreadable_surface, load_json, load_text, save_json_atomic,
     save_text_atomic,
 };
@@ -117,9 +117,57 @@ fn older_runtime_status_fixture_loads_with_safe_defaults() {
     assert_eq!(loaded.realtime.stale_threshold_seconds, 10);
     assert!(loaded.realtime.latest_recovery_warnings.is_empty());
     assert!(loaded.realtime.backoff_until.is_none());
+    assert!(loaded.realtime.shared_backoff.is_none());
     assert!(loaded.realtime.current_task.is_none());
     assert!(loaded.realtime.current_lag_millis.is_none());
     assert!(loaded.realtime.latest_actionable_issue.is_none());
+}
+
+#[test]
+fn shared_backoff_runtime_status_contract_names_affected_callers_without_blocking_live_hiding() {
+    let temp = tempdir().unwrap();
+    let paths = runtime_paths_for_tempdir(&temp);
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    let backoff_until = chrono::Utc::now() + chrono::TimeDelta::seconds(45);
+    let status = RuntimeStatus {
+        realtime: suppressor::state::RealtimeRuntimeStatus {
+            state: "catching-up".to_string(),
+            backoff_until: Some(backoff_until),
+            shared_backoff: Some(SharedBackoffSnapshot {
+                source: "recovery".to_string(),
+                reason: "rate-limit-backoff".to_string(),
+                backoff_until: Some(backoff_until),
+                affected_paths: vec![
+                    "catch-up".to_string(),
+                    "reconciliation".to_string(),
+                    "source-refresh".to_string(),
+                    "one-shot-command".to_string(),
+                ],
+                live_hiding_blocked: false,
+                recorded_at: Some(chrono::Utc::now()),
+            }),
+            ..suppressor::state::RealtimeRuntimeStatus::default()
+        },
+        ..RuntimeStatus::default()
+    };
+
+    save_json_atomic(&paths.runtime_status_file, &status).unwrap();
+    let loaded: RuntimeStatus = load_json(&paths.runtime_status_file).unwrap().unwrap();
+    let shared = loaded.realtime.shared_backoff.as_ref().unwrap();
+
+    assert_eq!(loaded.realtime.backoff_until, Some(backoff_until));
+    assert_eq!(shared.source, "recovery");
+    assert_eq!(shared.reason, "rate-limit-backoff");
+    assert_eq!(
+        shared.affected_paths,
+        vec![
+            "catch-up".to_string(),
+            "reconciliation".to_string(),
+            "source-refresh".to_string(),
+            "one-shot-command".to_string(),
+        ]
+    );
+    assert!(!shared.live_hiding_blocked);
 }
 
 #[test]

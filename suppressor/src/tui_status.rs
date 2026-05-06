@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use crate::cache::SuppressionListCache;
 use crate::config::RuntimePaths;
@@ -143,6 +143,14 @@ pub(crate) fn collect_status(
             ) {
                 record_surface_notice(&mut snapshot, notice);
             }
+            if let Some(notice) = snapshot
+                .compatibility_notice
+                .as_ref()
+                .filter(|notice| notice.blocking)
+                .cloned()
+            {
+                apply_blocking_notice_to_runtime_status(&mut runtime_status, notice);
+            }
             snapshot.runtime_status = Some(runtime_status);
         }
         Ok(None) => {}
@@ -259,12 +267,41 @@ fn validate_server_start_launch_path(
     Some(notice)
 }
 
+fn apply_blocking_notice_to_runtime_status(
+    status: &mut RuntimeStatus,
+    notice: CompatibilityNotice,
+) {
+    let now = Utc::now();
+    if matches!(status.realtime.state.as_str(), "" | "unknown" | "healthy") {
+        status.realtime.state = "unhealthy".to_string();
+        status.realtime.last_state_changed_at = Some(now);
+    }
+    if status
+        .realtime
+        .latest_actionable_issue
+        .as_ref()
+        .is_none_or(|issue| issue.source == notice.scope)
+    {
+        status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+            source: notice.scope.clone(),
+            severity: notice.severity.clone(),
+            summary: notice.summary.clone(),
+            next_action: notice.operator_action.clone(),
+            detected_at: notice.detected_at.or(Some(now)),
+        });
+    }
+    if status.compatibility_notice.is_none() {
+        status.compatibility_notice = Some(notice);
+    }
+}
+
 fn populate_runtime_derivatives(
     status: &mut RuntimeStatus,
     checkpoint_progress: Option<&NightlySweepProgress>,
     watched_titles: usize,
 ) {
     let now = Utc::now();
+    let active_backoff_until = normalize_backoff_derivatives(status, now);
     if let Some(observed_at) = status.realtime.last_event_observed_at {
         let lag_millis = (now - observed_at).num_milliseconds().max(0);
         status.realtime.current_lag_seconds = Some(lag_millis / 1000);
@@ -306,7 +343,7 @@ fn populate_runtime_derivatives(
                     .last_started_at
                     .or(status.realtime.daemon_started_at),
             )
-        } else if status.realtime.backoff_until.is_some() {
+        } else if active_backoff_until.is_some() {
             (
                 "backoff".to_string(),
                 "waiting for backoff to expire".to_string(),
@@ -337,9 +374,51 @@ fn populate_runtime_derivatives(
             window_start: status.realtime.last_daytime_verification_window_start,
             window_end: status.realtime.last_daytime_verification_window_end,
             started_at,
-            expected_resume_at: status.realtime.backoff_until,
+            expected_resume_at: active_backoff_until,
         });
     }
+}
+
+fn normalize_backoff_derivatives(
+    status: &mut RuntimeStatus,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let legacy_until = status.realtime.backoff_until.filter(|until| *until > now);
+    let shared_until = status
+        .realtime
+        .shared_backoff
+        .as_ref()
+        .and_then(|snapshot| snapshot.backoff_until.filter(|until| *until > now));
+    let active_until = match (legacy_until, shared_until) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(until), None) | (None, Some(until)) => Some(until),
+        (None, None) => None,
+    };
+    status.realtime.backoff_until = active_until;
+    if active_until.is_none() {
+        status.realtime.shared_backoff = None;
+        return None;
+    }
+    if matches!(status.realtime.state.as_str(), "" | "unknown" | "healthy") {
+        status.realtime.state = "catching-up".to_string();
+        status.realtime.last_state_changed_at = Some(now);
+    }
+    if status
+        .realtime
+        .latest_actionable_issue
+        .as_ref()
+        .is_none_or(|issue| matches!(issue.source.as_str(), "" | "backoff" | "recovery"))
+    {
+        status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+            source: "backoff".to_string(),
+            severity: "warning".to_string(),
+            summary: "shared API backoff is active".to_string(),
+            next_action: "wait for backoff to expire while live hiding remains visible separately"
+                .to_string(),
+            detected_at: Some(now),
+        });
+    }
+    active_until
 }
 
 fn populate_recheck_freshness_derivatives(
@@ -755,6 +834,49 @@ mod tests {
     }
 
     #[test]
+    fn collect_status_maps_stale_pid_to_unhealthy_runtime_status() {
+        let temp = tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let paths = RuntimePaths::resolve(&config_path, &config);
+
+        save_text_atomic(&paths.pid_file, "999999").unwrap();
+        save_json_atomic(
+            &paths.runtime_status_file,
+            &RuntimeStatus {
+                daemon_state: "running".to_string(),
+                realtime: RealtimeRuntimeStatus {
+                    state: "healthy".to_string(),
+                    ..RealtimeRuntimeStatus::default()
+                },
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+
+        let snapshot = collect_status(&paths, None);
+        let runtime_status = snapshot.runtime_status.as_ref().unwrap();
+
+        assert_eq!(runtime_status.realtime.state, "unhealthy");
+        assert_eq!(
+            runtime_status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("pid-file")
+        );
+        assert_eq!(
+            runtime_status
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("pid-file")
+        );
+    }
+
+    #[test]
     fn collect_status_maps_unreadable_runtime_status_to_migration_notice() {
         let temp = tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
@@ -1036,6 +1158,15 @@ mod tests {
 
         populate_runtime_derivatives(&mut status, None, 0);
 
+        assert_eq!(status.realtime.state, "catching-up");
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("backoff")
+        );
         assert_eq!(
             status
                 .realtime
@@ -1068,6 +1199,32 @@ mod tests {
                 .and_then(|task| task.started_at),
             Some(completed_at)
         );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_filters_expired_shared_backoff() {
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                state: "healthy".to_string(),
+                backoff_until: Some(Utc::now() - chrono::TimeDelta::seconds(5)),
+                shared_backoff: Some(crate::state::SharedBackoffSnapshot {
+                    source: "recovery".to_string(),
+                    reason: "rate-limit-backoff".to_string(),
+                    backoff_until: Some(Utc::now() - chrono::TimeDelta::seconds(5)),
+                    affected_paths: vec!["catch-up".to_string()],
+                    live_hiding_blocked: false,
+                    recorded_at: Some(Utc::now() - chrono::TimeDelta::seconds(60)),
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status, None, 0);
+
+        assert_eq!(status.realtime.state, "healthy");
+        assert!(status.realtime.backoff_until.is_none());
+        assert!(status.realtime.shared_backoff.is_none());
     }
 
     #[test]

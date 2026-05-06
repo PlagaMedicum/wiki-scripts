@@ -6,6 +6,7 @@ docmeta:
   source:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
+  - speckit-plan config-stability update on 2026-05-06
 ---
 
 # Research: Real-Time Suppression Recovery
@@ -30,7 +31,8 @@ older documented trusted anchor only when this value is missing or unreadable.
 
 ## Decision: Reset the remaining work to a suppressor MVP stabilization path
 
-**Rationale**: Constitution v1.7.0 declares an active human-safety freeze for this feature. The
+**Rationale**: Constitution v1.8.0 declares an active human-safety freeze for this feature and makes
+config surfaces human-reviewed operator contracts. The
 highest-risk gap from analysis is not missing feature ambition; it is that critical daemon and
 launch-path verification is too late while broad status, TUI, and reporting work has expanded. The
 remaining work must therefore prioritize the smallest server-runnable daemon MVP: live hiding,
@@ -45,6 +47,26 @@ throttle/backoff behavior, and actual deployment verification.
   daemon that still failed to hide quickly; only actual launch-path and behavior evidence is enough.
 - Split into new services for isolation now. Rejected because the freeze requires minimal changes
   and the current constitution prefers one local daemon unless a split clearly improves safety.
+
+## Decision: Treat config as a human-reviewed stable contract
+
+**Rationale**: The target-host `server-start` attempt failed on 2026-05-06 because the deployed
+`config.toml` did not contain the newer `[realtime]` section. That failure is not permission to
+edit server config in the background or keep changing config shape. Config files, config schema,
+defaults, environment variable names, config loading behavior, and deployment-required sections are
+operator contracts. Any config-affecting change must name the concrete runtime, safety,
+compatibility, or operator-control motivation; cite explicit human review; preserve backward
+compatibility where practical; provide a compatibility fixture or migration-needed diagnostic; and
+record rollback/fallback plus target-server launch evidence before production trust.
+
+**Alternatives considered**:
+
+- Patch the server `config.toml` quickly and continue T039. Rejected because it hides the
+  config-compatibility failure and bypasses human review.
+- Keep changing tracked config sections whenever code needs another setting. Rejected because it
+  destabilizes deployment and turns config into implementation churn.
+- Freeze config forever. Rejected because safety-critical operation may require motivated config
+  evolution, but that evolution must be reviewed, compatible or explicitly migrated, and verified.
 
 ## Decision: Add a Makefile server build target for the aarch64 musl artifact
 

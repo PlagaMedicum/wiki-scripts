@@ -120,6 +120,7 @@ pub struct RealtimeRuntimeStatus {
     pub last_freshness_probe_source: Option<String>,
     pub catchup_active: bool,
     pub backoff_until: Option<DateTime<Utc>>,
+    pub shared_backoff: Option<SharedBackoffSnapshot>,
     pub latest_error_code: Option<String>,
     pub latest_error: Option<ApiFailureSnapshot>,
     pub latest_actionable_issue: Option<ActionableIssueSnapshot>,
@@ -172,6 +173,7 @@ impl Default for RealtimeRuntimeStatus {
             last_freshness_probe_source: None,
             catchup_active: false,
             backoff_until: None,
+            shared_backoff: None,
             latest_error_code: None,
             latest_error: None,
             latest_actionable_issue: None,
@@ -201,6 +203,17 @@ pub struct CurrentTaskSnapshot {
     pub window_end: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub expected_resume_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SharedBackoffSnapshot {
+    pub source: String,
+    pub reason: String,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub affected_paths: Vec<String>,
+    pub live_hiding_blocked: bool,
+    pub recorded_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

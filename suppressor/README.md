@@ -18,7 +18,8 @@ data.
 - one daemon
 - one local TUI / supervisor client
 - one current production baseline aimed at be.wiki
-- one local machine deployment model
+- one local TUI/supervisor workflow
+- one rsync-ready detached binary launch path for the server
 
 Future multiwiki support is possible, but it is not the current runtime model.
 
@@ -42,6 +43,17 @@ BEWIKI_BOT_PASSWORD=REDACTED
 
 `BEWIKI_BOT_USERNAME` uses the full BotPasswords login in the form `username@label`.
 
+For the current rsync server path, build the aarch64 musl binary and start it on the server from
+the deployed directory:
+
+```bash
+make build-server
+./suppressor --config ./config.toml server-start
+```
+
+`server-start` starts the daemon detached from the SSH terminal, writes a PID/runtime-status/log
+receipt, and is trusted only after the PID and `runtime_status.json` keep updating after reconnect.
+
 ## Common Commands
 
 - `make env-check`
@@ -54,6 +66,7 @@ BEWIKI_BOT_PASSWORD=REDACTED
 - `make coverage-report ARGS="--start 2026-04-24T00:00:00Z --report-only"`
 - `make nightly-sweep-now`
 - `make build`
+- `make build-server`
 - `make release`
 - `make check`
 
@@ -92,8 +105,11 @@ state separately from daemon process state and reconciliation state so "running"
 - `unhealthy`: the realtime path could not prove protection
 - `blocked`: rights, session, or wiki-side failures prevent hiding
 
-Manual cache reload and nightly/current-day reconciliation remain diagnostic or fallback actions.
-They are not the normal path for newly published sensitive edits.
+Recovery starts from `last_successful_hide_at` when that anchor exists; otherwise it uses the
+bounded recent emergency window. Rolling `Last 24 hours` verification and nightly full watched-set
+recheck are separate evidence paths. Manual cache reload and one-shot reports remain diagnostic or
+fallback actions; they are not the normal path for newly published sensitive edits and do not
+replace daemon-owned realtime truth.
 
 ## Further Reading
 

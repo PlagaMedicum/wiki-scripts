@@ -10,12 +10,14 @@ docmeta:
 
 <!--
 Sync Impact Report
-Version change: 1.6.0 -> 1.7.0
+Version change: 1.7.0 -> 1.8.0
 Modified principles:
-- Added VIII. Active Human-Safety Freeze For Suppressor MVP
-- Workflow And Quality Gates (added active safety-freeze routing and exit requirements)
+- V. Compatibility, Non-Destructive Change, And Explicit Approval -> V. Stable Config,
+  Compatibility, Non-Destructive Change, And Explicit Approval
+- Workflow And Quality Gates (added mandatory config-change motivation, human review, and
+  deployment evidence requirements)
 Added sections:
-- VIII. Active Human-Safety Freeze For Suppressor MVP
+- None
 Removed sections:
 - None
 Templates requiring updates:
@@ -78,7 +80,7 @@ artifacts unless an explicit overwrite action is requested. Docs and operator su
 distinguish current behavior from future direction, and they MUST NOT silently imply that an old
 verification path or setup is still authoritative when it is not.
 
-### V. Compatibility, Non-Destructive Change, And Explicit Approval
+### V. Stable Config, Compatibility, Non-Destructive Change, And Explicit Approval
 
 Repository work MUST default to additive, non-destructive, backward-compatible changes when it
 touches user work surfaces, configs, state files, schemas, CLIs, operator reports, launch paths,
@@ -90,6 +92,18 @@ MUST name the impacted surface, compatibility strategy, migration steps, fallbac
 path, and the operator-visible prompt or diagnostic that prevents false healthy, false compatible,
 or false complete readings. Reliability-sensitive automation MUST prefer preview, dry-run,
 compatibility fixtures, and guarded migration paths over blind mutation.
+
+Config surfaces are stability-critical operator contracts, not casual implementation details. Any
+change to tracked config files, config schema, default values, environment variable names, config
+loading semantics, or deployment-required config sections MUST be motivated by a specific runtime,
+safety, compatibility, or operator-control need and MUST receive explicit human review before it is
+used for production trust. Agents MUST NOT churn config shape, rename config keys, add required
+sections, change defaults, or tell operators to edit server config as an unreviewed workaround.
+Config evolution MUST be additive and backward-compatible whenever practical. If a config change
+cannot stay backward-compatible, the feature MUST include a compatibility fixture for the previous
+config, an operator-visible migration-needed diagnostic, exact migration steps, rollback/fallback
+steps to the last trusted config, and evidence that the server launch path fails safely instead of
+claiming healthy status.
 
 ### VI. Spec Kit First For Non-Trivial Work
 
@@ -171,6 +185,11 @@ critical daemon, recovery, reconciliation, or safety verification.
   authoritative launch paths, or other established workflows, the spec and plan MUST state the
   compatibility strategy, migration steps, fallback or rollback path, required human approval
   point, and any operator-visible prompt or diagnostic before implementation begins.
+- Config changes are human-reviewed product decisions. Any change to tracked config files, config
+  schema, defaults, environment variable names, config loading semantics, or deployment-required
+  config sections MUST state its motivation, compatibility effect, review evidence, migration
+  requirements, rollback/fallback path, and deployment verification before production readiness is
+  claimed.
 - Generated text is proposal text until human-reviewed. Stable decisions MUST be fixed in code,
   tests, governance docs, or explicit comments that preserve lessons learned.
 - When durable lessons are lifted from a feature or review, maintainers SHOULD preserve a light
@@ -224,4 +243,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.7.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-05
+**Version**: 1.8.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-06

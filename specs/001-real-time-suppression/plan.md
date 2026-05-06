@@ -6,6 +6,7 @@ docmeta:
   source:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
+  - speckit-plan config-stability update on 2026-05-06
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -25,13 +26,17 @@ behind a later healthy stream reopen. The implementation should preserve the cur
 daemon plus TUI deployment, keep status and command surfaces backward-compatible where practical,
 and emit explicit migration or fallback guidance when compatibility cannot be preserved.
 
-Constitution v1.7.0 puts this feature under an active human-safety freeze. The current plan is
+Constitution v1.8.0 puts this feature under an active human-safety freeze and makes config surfaces
+human-reviewed operator contracts. The current plan is
 therefore a stabilization reset: defer unrelated work, broad refactors, cosmetic TUI polish, new
 services, and nonessential optimization until the minimal server-runnable daemon MVP is proven. The
 critical path is automatic live hiding, automatic recovery/reconciliation, nightly fallback, shared
 throttle/backoff safety, truthful non-healthy status, actual-launch-path verification, a repeatable
 aarch64 Linux musl release build ready for `rsync` to the server, and a one-command detached
-server-start path from the deployed binary.
+server-start path from the deployed binary. Config churn is not part of this MVP path: any config
+file, schema, default, environment-variable, loading-semantic, or deployment-required-section change
+must be motivated, explicitly human-reviewed, compatibility-tested, and rollback-safe before it can
+support production trust.
 
 ## Technical Context
 
@@ -47,13 +52,21 @@ the suppression-list cache
 command isolation, scheduler/reconciliation visibility, and a dry-run or controlled live
 launch-path smoke check. Full `rtk cargo test --manifest-path suppressor/Cargo.toml`, controlled
 benchmark checks against `Удзельнік:Plaga med Bot/suppressor/tests`, and the repo docs gate remain
-release evidence but must not displace the live daemon stabilization path.
+release evidence but must not displace the live daemon stabilization path. Test and server-build
+evidence is fresh only for the source tree that produced it: any later daemon-critical edit to
+`suppressor/src/`, `suppressor/tests/`, `suppressor/Cargo.toml`, `suppressor/Cargo.lock`,
+`suppressor/Makefile`, or build/deployment code invalidates the prior T037/T038 evidence. T037 and
+T038 must be rerun after Phase 2, US1, and US2 have changed daemon-critical paths before their
+checkmarks can count as final MVP gate evidence.
 **Target Platform**: Linux local host running one daemon plus the local supervisor TUI for
 be.wikipedia.org; deployment artifact target is
 `target/aarch64-unknown-linux-musl/release/suppressor` built with
-`cargo zigbuild --release --target aarch64-unknown-linux-musl` for rsync to the server; the server
-host must support an additive `server-start` command that starts the daemon detached from the SSH
-terminal without relying on systemd, tmux, screen, or shell `nohup`
+`cargo zigbuild --release --target aarch64-unknown-linux-musl` for rsync to the server. The target
+server must be able to execute that static aarch64 Linux binary, run one local shell command,
+preserve a child detached by the binary after SSH logout, reach be.wikipedia.org, and write the
+configured state directory, PID file, runtime-status file, cache files, and detached log path. The
+server host must support an additive `server-start` command that starts the daemon detached from the
+SSH terminal without relying on systemd, tmux, screen, shell backgrounding, or shell `nohup`.
 **Project Type**: Single Rust CLI/daemon/TUI tool inside `suppressor/`
 **Performance Goals**: At least 95% of eligible live edits hidden within 1 second and 99% within
 5 seconds under normal availability; stale or ineffective protection surfaced within 10 seconds;
@@ -69,7 +82,15 @@ behind scheduled reconciliation; unresolved samples capped to a small operator l
 summaries capped and coalesced by root cause; normal status/report state kept compact enough for
 local JSON reads; normal logs rate-limited so repeated API failures do not create log storms; no
 busy loops; idle daemon plus TUI must be measured on the deployment host; any budget relaxation must
-be documented with evidence and must not delay live hiding or hide non-healthy status.
+be documented with evidence and must not delay live hiding or hide non-healthy status. The MVP
+resource sample must record CPU percentage, RSS memory, live and recovery/reconciliation queue
+depths versus caps, API concurrency, `runtime_status.json`, `command_report.json`, and
+`processed_revids.json` size, detached log growth rate, and coalesced-warning counts for at least a
+10-minute idle window and one active live/recovery/backoff window. Release is blocked unless queue
+pressure becomes degraded before saturation, API concurrency stays at or below the default cap of 2,
+status/report files remain below 1 MiB each, repeated-root-cause log growth stays below 10 MiB/hour
+or has a documented mitigation, and active samples return to a stable idle baseline without
+monotonic growth.
 **Compatibility/Migration**: Preserve the current config layout and machine-readable status/report
 surfaces additively where possible. Existing `current_day_recheck` settings should continue to load
 as the scheduler input for daytime rolling-24h verification until a compatible rename or alias is
@@ -85,6 +106,19 @@ an explicit approval point, migration steps, and fallback or rollback path to th
 workflow before it is treated as production-ready. Add the server build path additively to
 `suppressor/Makefile`; the existing `build` and `release` targets remain unchanged, and the new
 target prints the rsync-ready artifact path.
+**Config Change Review**: The tracked `suppressor/config.toml`, config schema, defaults,
+environment variable names, config loading behavior, and deployment-required config sections are
+stable operator contracts. This plan does not authorize unreviewed config churn, ad-hoc server
+config edits, required-key additions, default changes, or renamed sections as implementation
+shortcuts. A config-affecting change is allowed only after the active feature records the concrete
+runtime/safety/operator-control motivation, explicit human review evidence, backward-compatible
+behavior or migration-needed diagnostic, compatibility fixture for the previous config, exact
+migration steps if needed, rollback/fallback to the last trusted config, and target-server launch
+verification. The 2026-05-06 target-host failure with `missing field realtime` is therefore a
+blocked config-compatibility gate: do not patch the server config in the background; either prove
+the tracked config baseline is the reviewed deployment contract and migrate it explicitly, or
+implement a reviewed backward-compatible loader or migration-needed diagnostic that fails safely
+without claiming healthy daemon status.
 **Constraints**: Keep scope limited to be.wiki public RevDel for `user|comment`; do not log
 sensitive article text, hidden content, tokens, cookies, or credentials; do not rely on manual
 reload or nightly reconciliation as the primary live-protection path; do not add extra OS services
@@ -122,10 +156,12 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
 - Deterministic Documentation, Safe Writes, And Honest Status: PASS. Feature artifacts are updated
   in place. The plan explicitly forbids silent status-surface drift and requires authoritative
   daemon truth plus compatibility diagnostics.
-- Compatibility, Non-Destructive Change, And Explicit Approval: PASS with required implementation
-  follow-through. The design is compatibility-first, additive where practical, and names migration,
-  rollback or fallback, and the human approval checkpoint for incompatible operator surfaces or
-  launch-path assumptions.
+- Stable Config, Compatibility, Non-Destructive Change, And Explicit Approval: PASS with required
+  implementation follow-through. The design is compatibility-first, additive where practical, and
+  names migration, rollback or fallback, and the human approval checkpoint for incompatible
+  operator surfaces, launch-path assumptions, or config-affecting changes. No config change may be
+  treated as production-valid without recorded motivation, explicit human review, compatibility or
+  migration evidence, target-server verification, and rollback/fallback notes.
 - Spec Kit First For Non-Trivial Work: PASS. This plan follows the updated `spec.md`; `tasks.md`
   must be regenerated from this plan before implementation continues.
 - Resource Economy, Robustness, And Durable Lessons: PASS. The plan includes bounded state,
@@ -147,7 +183,7 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
   [suppressor/docs/operations.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/operations.md)
   for the new primary status vocabulary, one-command `server-start` background launch path,
   last-successful-hide recovery anchor, rolling last-24h verification, randomized nightly full
-  recheck, and compatibility or migration approval workflow.
+  recheck, config-review evidence, and compatibility or migration approval workflow.
 - Update
   [suppressor/docs/runtime-boundaries.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/runtime-boundaries.md)
   for the daemon-owned runtime surface, command-report isolation, status compatibility loading, and
@@ -159,16 +195,18 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
 - Update
   [suppressor/docs/testing-strategy.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/testing-strategy.md)
   with scheduler, compatibility, last-24h preset, revision-link, and low-spec verification cases.
-- No change is currently expected for `.specify/doc-registry.json`,
-  `specs/000-repo-governance/spec.md`, or the constitution itself during this planning update; the
-  active freeze is already recorded in constitution v1.7.0.
+- No change is currently expected for `.specify/doc-registry.json`; constitution v1.8.0 and
+  `specs/000-repo-governance/` already record the human-reviewed config-stability rule that this
+  plan applies to the active suppressor MVP.
 - If the compatibility or migration-warning pattern produces reusable repo-wide guidance beyond
   `suppressor`, capture that generalized lesson in
   [specs/000-repo-governance/research.md](/home/plagamed/Documents/wiki/scripts/specs/000-repo-governance/research.md)
   during close-out instead of leaving it feature-local only.
 - Final close-out must still run `python3 tools/doc_workflow.py all`.
-- No `questions.md` is required at planning time. The clarified behavior is specific enough to
-  proceed.
+- No `questions.md` is required for this planning update because the human owner has already
+  supplied the config-stability rule and it is encoded in constitution v1.8.0. Any future
+  config-affecting implementation proposal that lacks explicit human review must be blocked and
+  moved to a feature-local question or review item before code or server config changes.
 
 ## Project Structure
 
@@ -304,6 +342,9 @@ No constitution violations identified.
   rolling last 24 hours during the day, full watched-set recheck at night.
 - Run the shortest meaningful test gate first, then the actual server build and launch-path smoke
   check. Full benchmarks and broad docs close-out remain after the daemon MVP is stable.
+- Treat any T037/T038 evidence recorded before later Phase 2, US1, or US2 daemon-critical edits as
+  a useful local snapshot only. Final T037/T038 checkmarks require rerunning the serial suppressor
+  test gate and `make -C suppressor build-server` after those edits are complete.
 
 ### Phase 0 - Compatibility Baseline And Actual Runtime Grounding
 
@@ -313,6 +354,14 @@ No constitution violations identified.
   verification route.
 - Record the currently shipped config, runtime-status, command-report, and PID-file shapes as the
   compatibility baseline for additive changes and migration fixtures.
+- Record the config baseline as a human-reviewed contract before any further config-affecting code
+  or docs work: tracked config file, schema sections, defaults, environment variable names, loading
+  aliases, deployment-required sections, and any target-host divergence. The target-host
+  `missing field realtime` failure is evidence of divergence and blocks T039 until a reviewed
+  compatibility or migration path is chosen.
+- Refuse ad-hoc server config edits as a workaround. A server config migration is allowed only when
+  the evidence names the motivation, reviewer, exact changed fields, backup/rollback path, and
+  post-change `server-start` verification.
 - Confirm how runtime truth is cross-checked against the live process and launched binary so a
   stale PID file or stale `runtime_status.json` cannot masquerade as current protection evidence.
 - Confirm which existing state fields already persist `last_successful_hide_at`,
@@ -391,6 +440,11 @@ No constitution violations identified.
   runtime paths, starts the daemon detached from the SSH terminal, prints PID/status/log evidence,
   survives terminal logout, and fails safely for missing config/secrets, stale PID, duplicate live
   daemon, unwritable state/log paths, or runtime-status timeout.
+- Before T040 server launch evidence is accepted, verify the config review gate: `server-start` and
+  `print-effective-config` must either load the reviewed deployment config without secrets or fail
+  with an operator-visible config/migration-needed diagnostic. No launch evidence counts if the
+  config was edited in the background, contains unreviewed required sections, or lacks documented
+  rollback/fallback to the last trusted config.
 - Before release trust is claimed for any incompatible surface change, produce explicit evidence of:
   the compatibility verdict, required human approval checkpoint, required operator migration steps,
   and the fallback or rollback path to the last trusted workflow.

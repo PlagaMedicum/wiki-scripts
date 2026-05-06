@@ -54,6 +54,10 @@ documentation.
 Changes that can delete work, invalidate previous setups, break schemas or operator surfaces, or
 otherwise disrupt established workflows must be called out explicitly, planned through Spec Kit,
 and approved by the human owner before the disruptive step runs.
+Config changes are treated as product decisions: changing tracked config files, config schema,
+defaults, environment variable names, loading semantics, or deployment-required sections requires a
+specific motivation, explicit human review, compatibility or migration evidence, deployment-path
+verification, and rollback/fallback notes before the change can support production trust.
 
 ## Where To Look Next
 

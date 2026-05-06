@@ -16,7 +16,8 @@ docmeta:
 3. Run `make env-check`.
 4. Run `make check-auth`.
 5. Run `make dry-run`.
-6. Move to `make run` or the systemd unit only after the dry run is clean.
+6. Move to `make run`, `make tui`, `systemd`, or the rsynced binary `server-start` path only after
+   the dry run is clean and the actual launch path has its own evidence.
 
 ## Authoritative Launch-Path Baseline
 
@@ -25,6 +26,8 @@ running.
 
 - The normal local operator workflow is `make tui`, which starts and supervises a TUI-managed child
   daemon.
+- The rsync server workflow is `./suppressor --config ./config.toml server-start` from the deployed
+  directory. It is authoritative only for the detached child it starts and verifies.
 - `systemd` remains supported as an optional launch path, but it is not the default verification
   route unless this host is actually using it.
 - `runtime_status.json` is daemon-owned realtime truth for the running daemon.
@@ -101,9 +104,45 @@ Current runtime state lives under `state/`:
 - `suppression_list_cache.json`
 - `nightly_sweep_progress.json`
 - `runtime_status.json`
+- `command_report.json`
 - `daemon.pid`
+- `daemon.log` for the detached `server-start` path unless a different log path is supplied
 
 These are local machine files, not source-of-truth docs.
+
+## Server Build And Detached Launch
+
+Build the server artifact from `suppressor/`:
+
+```bash
+make build-server
+```
+
+This wraps:
+
+```bash
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+```
+
+The rsync source is:
+
+```text
+target/aarch64-unknown-linux-musl/release/suppressor
+```
+
+After copying the binary, `config.toml`, and the operator-managed `.env` or equivalent secret input
+to the server, start the daemon with one binary command:
+
+```bash
+./suppressor --config ./config.toml server-start
+```
+
+The receipt must include mode, PID, config path, PID file, `runtime_status.json` path, detached log
+path, and `launch_path=server-start`. Trust this launch only after reconnecting to the server and
+confirming the same PID is still alive, stdout/stderr are going to the printed log path, and
+daemon-owned `runtime_status.json` continues updating. Missing config, missing secrets, unwritable
+state/log paths, duplicate daemon, startup timeout, stale PID, stale runtime status, or unhealthy
+startup evidence blocks deployment trust.
 
 ## 2026-04-28 Baseline Evidence
 
@@ -140,15 +179,15 @@ Older runtime-status artifacts currently load safely when new fields are missing
 `realtime.state="unknown"`, `stale_threshold_seconds=10`, empty recovery warnings, and no backoff
 instead of failing to deserialize.
 
-The TUI currently runs one-shot operator actions as their own commands:
+The TUI runs one-shot operator actions as their own commands:
 
 - `Emergency catch-up` runs `emergency-catchup`
-- `Coverage report` runs `coverage-report --dry-run`
+- `Coverage: Last 24 hours` runs `coverage-last-24h --report-only`
 - control-center messages are labeled with the `[control]` prefix
 
-That output separation is real in the TUI, but it is not yet full daemon-status isolation. The current
-`emergency-catchup` and `coverage-report` paths still bootstrap the shared `AppRuntime`, so they still
-share `runtime_status.json` with the daemon until the command-report isolation work is finished.
+One-shot command results are written to bounded `command_report.json` and rendered as command output.
+They do not overwrite daemon-owned `runtime_status.json` and must not be treated as proof that the
+daemon is healthy or running.
 
 The live-output pane now avoids the wrapped-row follow bug by not wrapping log lines at all. Follow mode
 tracks raw logical lines, so the newest visible entry stays aligned with the newest stored entry. The
@@ -158,14 +197,16 @@ panes still use wrapped paragraph rendering.
 ## Operational Notes
 
 - use `make tui` for local supervision
-- use `make coverage-last-24h` or the TUI `Coverage: Last 24 hours` action for the rolling daily
-  verification preset
+- use the binary command `coverage-last-24h --report-only` or the TUI `Coverage: Last 24 hours`
+  action for the rolling daily verification preset
 - keep logs free of secrets and suppressed payloads
 - use `make reload-cache` only for watched-list cache diagnostics
 - use `make emergency-catchup ARGS="--dry-run"` for a bounded recent recovery check
 - use `make coverage-report ARGS="--start <RFC3339> --report-only"` for accident-window accounting
 - use `make nightly-sweep-now` as a slower safety-net reconciliation action
 - treat auth or rights loss as a stop-condition, not a soft warning
+- treat active shared backoff, stale full-recheck evidence, failed scheduled verification, or stale
+  launch-path evidence as non-healthy until later successful evidence clears it
 - treat generic repeated `Failed to decode JSON response` or per-page catch-up warnings as an
   incident symptom; the daemon should now show one classified warning summary with count, class/API
   code, HTTP status when known, retryability, and a few safe sample titles
@@ -177,6 +218,10 @@ panes still use wrapped paragraph rendering.
 - prioritize newer edits first during recovery after disconnect or restart
 - treat a stale realtime stream as unhealthy after the configured 10-second threshold
 - catch up the default 30-minute window within the configured recovery target where wiki/API health allows it
+- recover from `last_successful_hide_at` when present instead of silently truncating to a newer
+  arbitrary recent window
+- record one rolling `Last 24 hours` verification and one nightly full watched-set recheck during
+  each uninterrupted 24-hour daemon period
 - stop the service on missing rights, broken auth, persistent API failure, or malformed
   suppression-list input
 
@@ -206,7 +251,9 @@ protection rows.
 4. If the report is correct and auth is healthy, run `make emergency-catchup` to queue unresolved
    eligible edits for hiding.
 5. For a known accident window, run `make coverage-report ARGS="--start <RFC3339> --end <RFC3339> --report-only"`.
-6. Treat unresolved items as open exposure until each one has a reason, owner, and next action.
+6. For the routine rolling window, use `./suppressor --config ./config.toml coverage-last-24h --report-only`
+   or the TUI `Coverage: Last 24 hours` action.
+7. Treat unresolved items as open exposure until each one has a reason, owner, and next action.
 
 Reports include page title, revision ID, age, reason, and next action. They must not include hidden
 text, raw comments, credentials, tokens, or session material.

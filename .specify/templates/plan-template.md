@@ -30,6 +30,7 @@ docmeta:
 **Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps, or explicitly unknown]  
 **Resource Goals**: [CPU, memory, disk, network, queue, polling, and log-volume budgets or explicitly unknown]
 **Compatibility/Migration**: [existing setup, config/state/schema/CLI/operator-surface/launch-path impact, migration path, rollback/fallback, or explicitly none]
+**Config Change Review**: [if config files, schema, defaults, environment variable names, loading semantics, or deployment-required sections change, state motivation, human review evidence, backward-compatibility strategy, migration path, rollback/fallback, and server verification; otherwise explicitly none]
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable, or explicitly unknown]  
 **Architecture Constraints**: [internal service boundaries, process boundaries, dependency limits, or explicitly unknown]
 **Minimalism Constraints**: [what must stay simple, local, bounded, or low-overhead, or explicitly unknown]
@@ -63,6 +64,10 @@ Include document impact in this check:
   authoritative temporary surface
 - whether the change deletes, invalidates, or silently rewrites previous setups, schemas, state,
   configs, operator surfaces, or authoritative launch paths
+- whether the change touches tracked config files, config schema, defaults, environment variable
+  names, config loading semantics, or deployment-required config sections; if yes, confirm the
+  motivation, explicit human review evidence, compatibility strategy, migration path,
+  rollback/fallback, and deployment verification
 - whether explicit human approval is required before destructive mutation, broad rewrite, major
   refactor, incompatible schema/surface change, or another setup-invalidating change
 - whether compatibility strategy, migration steps, fallback/rollback, and operator-visible

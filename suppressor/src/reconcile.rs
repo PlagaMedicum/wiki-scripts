@@ -1,17 +1,21 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::Result;
-use chrono::{DateTime, Utc};
+use anyhow::{Result, bail};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures_util::StreamExt;
 use metrics::histogram;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::cache::{CachePersistence, enrich_redirects, fetch_redirect_target};
-use crate::runtime::{ReconcilePassContext, ReconciliationRuntime, RevDelMode};
+use crate::mw_api::classify_api_failure;
+use crate::runtime::{ReconcilePassContext, ReconciliationRuntime, RevDelMode, set_shared_backoff};
 use crate::scheduler::rolling_window_start;
-use crate::state::{NightlySweepProgress, PageCheckpoint, save_json_atomic};
+use crate::state::{
+    ActionableIssueSnapshot, ApiFailureSnapshot, NightlySweepProgress, PageCheckpoint,
+    ResourceEconomySnapshot, WarningSummary, save_json_atomic,
+};
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ReconcileMode {
@@ -141,10 +145,15 @@ pub async fn reconciliation_loop(ctx: Arc<ReconcilePassContext>) -> Result<()> {
     })
     .await;
 
+    let failures = Arc::new(Mutex::new(ReconciliationFailureAggregates::new(
+        ctx.warning_sample_limit,
+    )));
+
     futures_util::stream::iter(listed_titles)
         .for_each_concurrent(ctx.page_concurrency, |title| {
             let ctx = Arc::clone(&ctx);
             let shared_progress = Arc::clone(&shared_progress);
+            let failures = Arc::clone(&failures);
             async move {
                 ctx.update_runtime_status({
                     let title = title.clone();
@@ -154,7 +163,22 @@ pub async fn reconciliation_loop(ctx: Arc<ReconcilePassContext>) -> Result<()> {
                 })
                 .await;
                 if let Err(error) = reconcile_title(&ctx, &shared_progress, &title).await {
-                    warn!("reconciliation for {title} failed: {error:#}");
+                    let failure =
+                        classify_api_failure(&error, "reconciliation", Some(&title), None);
+                    let observation = failures.lock().await.record(
+                        failure.clone(),
+                        ctx.rate_limit_backoff_default_seconds,
+                        Utc::now(),
+                    );
+                    warn!(
+                        title = %title,
+                        class = %failure.class,
+                        api_code = ?failure.api_code,
+                        http_status = ?failure.http_status,
+                        retry_after_seconds = ?failure.retry_after_seconds,
+                        "reconciliation page check failed"
+                    );
+                    record_reconciliation_failure_status(&ctx, failure, observation).await;
                 }
                 ctx.update_runtime_status(|status| {
                     status.reconciliation.completed_titles += 1;
@@ -174,7 +198,7 @@ pub async fn reconciliation_loop(ctx: Arc<ReconcilePassContext>) -> Result<()> {
         mode = ?ctx.mode,
         checkpoint_pages = progress.pages.len(),
         redirects = discovered_redirects.len(),
-        "reconciliation pass completed"
+        "reconciliation pass page checks finished"
     );
     enrich_redirects(
         &ctx.cache,
@@ -183,7 +207,194 @@ pub async fn reconciliation_loop(ctx: Arc<ReconcilePassContext>) -> Result<()> {
         ctx.persistence,
     )
     .await?;
+    let warning_summaries = failures.lock().await.clone().into_summaries();
+    if !warning_summaries.is_empty() {
+        let failed_pages = warning_summaries
+            .iter()
+            .map(|summary| summary.count)
+            .sum::<usize>();
+        record_reconciliation_warning_summaries(&ctx, warning_summaries.clone()).await;
+        let top = warning_summaries
+            .first()
+            .map(|summary| {
+                summary
+                    .api_code
+                    .as_deref()
+                    .unwrap_or(summary.class.as_str())
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        bail!(
+            "{} failed for {} page checks; top root cause: {}",
+            ctx.mode.operator_label(),
+            failed_pages,
+            top
+        );
+    }
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct ReconciliationFailureAggregates {
+    sample_limit: usize,
+    by_key: BTreeMap<String, WarningSummary>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ReconciliationFailureObservation {
+    backoff_until: Option<DateTime<Utc>>,
+}
+
+impl ReconciliationFailureAggregates {
+    fn new(sample_limit: usize) -> Self {
+        Self {
+            sample_limit,
+            by_key: BTreeMap::new(),
+        }
+    }
+
+    fn record(
+        &mut self,
+        snapshot: ApiFailureSnapshot,
+        default_backoff_seconds: u64,
+        now: DateTime<Utc>,
+    ) -> ReconciliationFailureObservation {
+        let key = format!(
+            "{}|{}|{}|{}",
+            snapshot.class,
+            snapshot.api_code.as_deref().unwrap_or(""),
+            snapshot
+                .http_status
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            snapshot.operation
+        );
+        let retry_after_seconds =
+            reconciliation_retry_after_seconds(&snapshot, default_backoff_seconds);
+        let entry = self.by_key.entry(key).or_insert_with(|| WarningSummary {
+            class: snapshot.class.clone(),
+            api_code: snapshot.api_code.clone(),
+            http_status: snapshot.http_status,
+            content_type: snapshot.content_type.clone(),
+            retryable: snapshot.retryable,
+            retry_after_seconds,
+            operation: snapshot.operation.clone(),
+            count: 0,
+            sample_titles: Vec::new(),
+            message: snapshot.message.clone(),
+            stopped_early: false,
+        });
+        entry.count += 1;
+        entry.retry_after_seconds = match (entry.retry_after_seconds, retry_after_seconds) {
+            (Some(current), Some(latest)) => Some(current.max(latest)),
+            (None, Some(latest)) => Some(latest),
+            (current, None) => current,
+        };
+        if let Some(title) = snapshot.sample_title
+            && entry.sample_titles.len() < self.sample_limit
+            && !entry.sample_titles.contains(&title)
+        {
+            entry.sample_titles.push(title);
+        }
+        ReconciliationFailureObservation {
+            backoff_until: retry_after_seconds
+                .map(|seconds| now + TimeDelta::seconds(seconds.min(i64::MAX as u64) as i64)),
+        }
+    }
+
+    fn into_summaries(self) -> Vec<WarningSummary> {
+        let mut summaries = self.by_key.into_values().collect::<Vec<_>>();
+        summaries.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.class.cmp(&right.class))
+                .then_with(|| left.operation.cmp(&right.operation))
+        });
+        summaries
+    }
+}
+
+fn reconciliation_retry_after_seconds(
+    snapshot: &ApiFailureSnapshot,
+    default_backoff_seconds: u64,
+) -> Option<u64> {
+    if snapshot.http_status == Some(429) || snapshot.api_code.as_deref() == Some("ratelimited") {
+        Some(
+            snapshot
+                .retry_after_seconds
+                .unwrap_or(default_backoff_seconds),
+        )
+    } else {
+        snapshot.retry_after_seconds
+    }
+}
+
+async fn record_reconciliation_failure_status(
+    ctx: &Arc<ReconcilePassContext>,
+    failure: ApiFailureSnapshot,
+    observation: ReconciliationFailureObservation,
+) {
+    let source = reconciliation_issue_source(ctx.mode);
+    let summary = format!(
+        "{} page check failed: {}",
+        ctx.mode.operator_label(),
+        failure.message
+    );
+    let next_action = failure
+        .retry_after_seconds
+        .map(|seconds| format!("wait {seconds}s for backoff, then rerun scheduled verification"))
+        .unwrap_or_else(|| {
+            "inspect API/network state and rerun scheduled verification".to_string()
+        });
+    ctx.update_runtime_status(move |status| {
+        let now = Utc::now();
+        status.realtime.latest_error_code = failure
+            .api_code
+            .clone()
+            .or_else(|| Some(failure.class.clone()));
+        status.realtime.latest_error = Some(failure);
+        if let Some(until) = observation.backoff_until {
+            set_shared_backoff(status, source, "reconciliation-rate-limit", until, now);
+        }
+        status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+            source: source.to_string(),
+            severity: "error".to_string(),
+            summary,
+            next_action,
+            detected_at: Some(now),
+        });
+    })
+    .await;
+}
+
+async fn record_reconciliation_warning_summaries(
+    ctx: &Arc<ReconcilePassContext>,
+    warning_summaries: Vec<WarningSummary>,
+) {
+    let warning_count = warning_summaries
+        .iter()
+        .map(|warning| warning.count)
+        .sum::<usize>();
+    ctx.update_runtime_status(move |status| {
+        let now = Utc::now();
+        status.realtime.latest_recovery_warnings = warning_summaries;
+        let mut resource = status
+            .resource_economy
+            .clone()
+            .unwrap_or_else(ResourceEconomySnapshot::default);
+        resource.coalesced_warning_count_recent = warning_count;
+        resource.latest_measurement_at = Some(now);
+        status.resource_economy = Some(resource);
+    })
+    .await;
+}
+
+fn reconciliation_issue_source(mode: ReconcileMode) -> &'static str {
+    match mode {
+        ReconcileMode::CurrentDay => "last-24h-verification",
+        ReconcileMode::Full => "full-watched-set-recheck",
+    }
 }
 
 async fn reconcile_title(
@@ -336,9 +547,14 @@ mod tests {
 
     use chrono::TimeZone;
     use tempfile::tempdir;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::runtime::{RuntimeStatusSurfaceMode, build_test_runtime_harness};
+    use crate::config::EnvConfig;
+    use crate::runtime::{
+        RuntimeStatusSurfaceMode, build_test_runtime_harness, build_test_runtime_harness_with_env,
+    };
 
     #[test]
     fn batch_limit_uses_high_limit_rights() {
@@ -419,6 +635,131 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reconciliation_failures_coalesce_root_causes_and_preserve_backoff() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 29, 9, 0, 0).unwrap();
+        let mut failures = ReconciliationFailureAggregates::new(2);
+
+        for title in ["A", "B", "C"] {
+            let observation = failures.record(
+                ApiFailureSnapshot {
+                    class: "api-json-error".to_string(),
+                    api_code: Some("ratelimited".to_string()),
+                    http_status: Some(429),
+                    retryable: true,
+                    retry_after_seconds: Some(45),
+                    operation: "reconciliation".to_string(),
+                    sample_title: Some(title.to_string()),
+                    message: "rate limited".to_string(),
+                    occurred_at: Some(now),
+                    ..ApiFailureSnapshot::default()
+                },
+                30,
+                now,
+            );
+            assert_eq!(
+                observation.backoff_until,
+                Some(now + chrono::TimeDelta::seconds(45))
+            );
+        }
+
+        let summaries = failures.into_summaries();
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].count, 3);
+        assert_eq!(summaries[0].retry_after_seconds, Some(45));
+        assert_eq!(summaries[0].sample_titles, vec!["A", "B"]);
+    }
+
+    #[tokio::test]
+    async fn current_day_page_failures_mark_verification_failed_with_coalesced_warning() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("redirects", "1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(r#"{"query":{"pages":[{"pageid":1}]}}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("prop", "revisions"))
+            .and(query_param("rvdir", "newer"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "45")
+                    .set_body_raw(
+                        r#"{"error":{"code":"ratelimited","info":"rate limited"}}"#,
+                        "application/json",
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            EnvConfig {
+                api_url: format!("{}/w/api.php", server.uri()),
+                stream_url: "https://example.invalid/stream".to_string(),
+                bot_username: "bot".to_string(),
+                bot_password: "pw".to_string(),
+                user_agent: "bewiki-test/1.0".to_string(),
+                env_file: temp.path().join(".env"),
+            },
+        );
+
+        let result = harness
+            .runtime
+            .run_reconciliation_pass(ReconcileMode::CurrentDay)
+            .await;
+
+        assert!(result.is_err());
+        let status = harness.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert!(
+            status
+                .realtime
+                .last_daytime_verification_result
+                .as_deref()
+                .is_some_and(|result| result.starts_with("failed:"))
+        );
+        assert_eq!(status.realtime.latest_recovery_warnings.len(), 1);
+        let warning = &status.realtime.latest_recovery_warnings[0];
+        assert_eq!(warning.count, 2);
+        assert_eq!(warning.api_code.as_deref(), Some("ratelimited"));
+        assert_eq!(warning.retry_after_seconds, Some(45));
+        assert_eq!(warning.sample_titles.len(), 2);
+        assert!(warning.sample_titles.contains(&"Foo".to_string()));
+        assert!(warning.sample_titles.contains(&"Bar".to_string()));
+        assert_eq!(
+            status
+                .realtime
+                .shared_backoff
+                .as_ref()
+                .map(|backoff| backoff.source.as_str()),
+            Some("last-24h-verification")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("last-24h-verification")
+        );
+        assert_eq!(
+            status
+                .resource_economy
+                .as_ref()
+                .map(|resource| resource.coalesced_warning_count_recent),
+            Some(2)
+        );
+    }
+
     #[tokio::test]
     async fn queued_full_recheck_supersedes_active_last_24h_rerun() {
         let temp = tempdir().unwrap();
@@ -481,6 +822,49 @@ mod tests {
         assert_eq!(
             status.last_notice.as_deref(),
             Some("queued nightly-full reconciliation rerun")
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_reconciliation_does_not_overwrite_active_live_hide_task() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let coordinator = Arc::new(ReconcileCoordinator::default());
+        {
+            let mut state = coordinator.state.lock().await;
+            state.active = true;
+        }
+        {
+            let mut status = harness.runtime_status.lock().await;
+            status.realtime.current_task = Some(crate::state::CurrentTaskSnapshot {
+                task_kind: "live-hide".to_string(),
+                label: "hiding watched edit Sensitive".to_string(),
+                progress_done: Some(0),
+                progress_total: Some(1),
+                started_at: Some(chrono::Utc::now()),
+                ..crate::state::CurrentTaskSnapshot::default()
+            });
+        }
+
+        coordinator
+            .request_run(
+                Arc::clone(&harness.runtime.reconcile),
+                ReconcileMode::CurrentDay,
+            )
+            .await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert_eq!(
+            status.reconciliation.queued_mode.as_deref(),
+            Some("last-24h")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.task_kind.as_str()),
+            Some("live-hide")
         );
     }
 }

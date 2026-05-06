@@ -73,6 +73,11 @@ tradeoffs.
   the explicit docs gate.
 - Changes should default to additive, non-destructive, backward-compatible behavior across configs,
   state files, schemas, operator surfaces, and launch paths.
+- Config changes are product decisions, not background implementation cleanup. Any change to
+  tracked config files, config schema, defaults, environment variable names, loading semantics, or
+  deployment-required sections requires a specific motivation, explicit human review, compatibility
+  or migration evidence, deployment-path verification, and rollback/fallback notes before the
+  changed setup can be trusted in production.
 - Destructive edits, broad rewrites, major refactors that invalidate current setups, incompatible
   schema/config/state/report changes, and any change that can disrupt previous setups require
   explicit human approval before execution.

@@ -95,6 +95,54 @@ unbounded warning output. These bounds are not a license to delay hiding; if a s
 more titles than the planning threshold, the daemon still starts title-scoped catch-up and logs that
 the source edit is large.
 
+## 2026-05-06 Config-Stability Gate
+
+Human review rule: config changes are operator-contract changes. Do not edit tracked config,
+target-host config, config schema, defaults, environment variable names, loading semantics, or
+deployment-required sections unless the change has a concrete motivation, explicit human review,
+compatibility or migration evidence, rollback/fallback, and target-host verification.
+
+Target-host evidence from `ubuntu@webtop:~/wiki-supressor/suppressor`:
+
+```text
+./suppressor server-start
+Error: Failed to parse config file config.toml
+
+Caused by:
+    TOML parse error at line 1, column 1
+      |
+    1 | [wiki]
+      | ^
+    missing field `realtime`
+```
+
+Config-stability verdict: BLOCK production trust. The deployed server config diverges from the
+reviewed tracked baseline because the current baseline has a `[realtime]` section, while the target
+host config used by that command does not. This evidence is a config-load failure before daemon
+trust, not a launch success.
+
+No config edit was approved or performed by this T039 pass. Do not add `[realtime]` or any other
+section to the server config as a quick background fix. The next valid path must be one of:
+
+- a human-reviewed migration of the target-host config to the reviewed tracked baseline, with a
+  backup/rollback path and post-migration `server-start` evidence
+- a human-reviewed backward-compatible loader or migration-needed diagnostic, with tests and a new
+  server build before deployment trust
+
+The active approval packet is in
+`specs/001-real-time-suppression/questions.md` and
+`specs/001-real-time-suppression/review-queue.md`. Q001 must be answered before any T040 launch
+evidence is accepted.
+
+2026-05-07 update: Q001 is answered. Path 1 is approved: target-host config migration to the
+reviewed tracked baseline. The human operator reports that the server config was updated and the
+daemon was started. The next required evidence is T040: non-secret `server-start` receipt,
+PID/runtime/log paths, daemon-owned status freshness, and terminal logout survival.
+
+Rollback or fallback until then: keep target-host deployment blocked, use the last trusted
+binary/config/state workflow if one exists, or use manual emergency catch-up while a reviewed fix is
+prepared. No T040 launch evidence counts until this config gate has a reviewed pass path.
+
 ## State Files
 
 Current runtime state lives under `state/`:

@@ -7,6 +7,7 @@ docmeta:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
+  - speckit-plan human-review queue update on 2026-05-06
 ---
 
 # Research: Real-Time Suppression Recovery
@@ -67,6 +68,30 @@ record rollback/fallback plus target-server launch evidence before production tr
   destabilizes deployment and turns config into implementation churn.
 - Freeze config forever. Rejected because safety-critical operation may require motivated config
   evolution, but that evolution must be reviewed, compatible or explicitly migrated, and verified.
+
+## Decision: Put active approval blockers in feature-local `questions.md` and `review-queue.md`
+
+**Rationale**: The config-stability rule is approved in the constitution, but the target-host
+`missing field realtime` failure still needs a concrete human decision before T040 can continue.
+Keeping that decision only in chat, quickstart prose, or operations notes makes the operator hunt
+for what to approve and lets automation report no pending answers. The active feature should carry a
+small `questions.md` prompt plus a `review-queue.md` index so `python3 tools/doc_workflow.py status`
+shows the pending human action during the safety freeze.
+
+The current docs workflow surfaces feature-local `answer_needed`, `comment_requested`, and
+`update_needed` rows, but ignores feature-local `approval_needed` rows. Until that parser is fixed,
+approval decisions that require a direct human answer are encoded as `answer_needed` so they remain
+visible.
+
+**Alternatives considered**:
+
+- Keep approval in quickstart and operations docs only. Rejected because it is not a convenient
+  queue and was already missed during implementation flow.
+- Use only `.specify/doc-registry.json`. Rejected because the active config choice is
+  feature-local runtime approval, not a durable managed-doc review label.
+- Add `approval_needed` rows immediately. Rejected for the current MVP pass because the parser
+  ignores those rows today; use `answer_needed` now and track the parser repair as a maintainer
+  action.
 
 ## Decision: Add a Makefile server build target for the aarch64 musl artifact
 

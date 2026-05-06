@@ -7,6 +7,7 @@ docmeta:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
+  - speckit-plan human-review queue update on 2026-05-06
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -505,6 +506,34 @@ Validation rules:
 - A missing or incompatible config blocks `server-start` trust unless the diagnostic is explicitly
   reviewed and migration-needed rather than false healthy.
 
+## HumanReviewQueueItem
+
+Represents a feature-local human answer, requested comment, or maintainer update needed before the
+MVP can move to the next trust gate.
+
+Fields:
+
+- `id`: Stable queue identifier such as `Q001` or `RQ001`.
+- `status`: `pending-answer`, `answered`, `comment_requested`, `update_needed`, or `resolved`.
+- `subject`: Short title of the decision or action.
+- `owner`: `human`, `maintainer`, or another explicit owner.
+- `needed_before`: Task or release gate blocked by the item.
+- `decision_options`: Allowed answer set when the item needs a human choice.
+- `selected_decision`: Chosen answer after review.
+- `evidence_paths`: Feature-local docs that record the answer and follow-up evidence.
+- `sensitive_data_policy`: Reminder that credentials, `.env` values, tokens, cookies, and
+  sensitive page content must not be recorded.
+
+Validation rules:
+
+- Any config-affecting implementation proposal that needs a human choice must have a queue item
+  before code or server config changes proceed.
+- A queue item that blocks T040 must be resolved or explicitly kept blocked before launch evidence
+  can count.
+- Feature-local queue status must be visible through `python3 tools/doc_workflow.py status`; if the
+  status tool cannot surface `approval_needed` rows, encode the direct approval as
+  `pending-answer` until the parser is repaired.
+
 ## MvpReleaseEvidence
 
 Represents the minimum evidence required before the active safety freeze can be considered ready to
@@ -516,6 +545,8 @@ Fields:
 - `server_artifact`: `DeploymentArtifact`.
 - `config_review`: Optional `ConfigReviewEvidence`; required when config differs from the reviewed
   tracked baseline or any config-affecting change is part of the release.
+- `human_review_queue`: Required `HumanReviewQueueItem` references for any unresolved config,
+  compatibility, launch-path, or docs-gate approval blockers.
 - `detached_launch`: Optional `DetachedDaemonLaunch` for rsync-to-server verification.
 - `launch_path_verified`: Whether the actual server launch path was used.
 - `live_hiding_verified`: Whether live or controlled dry-run hiding was observed through the daemon.

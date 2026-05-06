@@ -7,6 +7,7 @@ docmeta:
   - speckit-tasks regeneration on 2026-05-05
   - speckit-tasks server-start update on 2026-05-05
   - speckit-tasks config-stability update on 2026-05-06
+  - speckit-tasks Q001 launch-evidence update on 2026-05-07
 ---
 
 # Tasks: Real-Time Suppression Recovery
@@ -14,7 +15,7 @@ docmeta:
 **Input**: Design documents from `specs/001-real-time-suppression/`
 
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`,
-`quickstart.md`
+`quickstart.md`, `questions.md`, `review-queue.md`
 
 **Tests**: Required. This is a human-safety-critical daemon feature. The tasks below track remaining
 MVP stabilization work only; earlier checked-off implementation work is provisional until verified
@@ -49,6 +50,9 @@ automatic live hiding, recovery/reconciliation/nightly fallback, truthful degrad
   target-host config, config schema, defaults, environment variable names, loading semantics, or
   deployment-required sections unless the task records the motivation, explicit human review,
   compatibility or migration behavior, rollback/fallback, and target-host verification evidence.
+- Q001 is answered: the human owner approved path 1, target-host config migration to the reviewed
+  tracked baseline. T040 is now blocked only on non-secret post-migration launch evidence, not on
+  another config policy decision.
 
 ## Phase 1: Setup
 
@@ -174,8 +178,8 @@ health.
 
 - [X] T037 After Phase 2, US1, and US2 daemon-critical changes are complete, rerun `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` and fix MVP regressions in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/tui_status.rs`, `suppressor/tests/config_and_state.rs`, and `suppressor/tests/api_integration.rs`
 - [X] T038 After the T037-valid source tree and any build-input edits are complete, rerun `make -C suppressor build-server` and record either the built artifact path or missing local prerequisite in `specs/001-real-time-suppression/quickstart.md`
-- [ ] T039 Resolve the config-stability gate for the target-host `missing field realtime` failure by recording the reviewed config baseline or documented divergence, non-secret `print-effective-config` result or config/migration-needed diagnostic, explicit human review evidence, compatibility or migration decision, rollback/fallback path, and no-background-config-edit confirmation in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
-- [ ] T040 Verify the actual launch path with the built binary, `server-start` where rsync deployment is used, PID/runtime truth, detached log path, terminal logout survival, and daemon-owned status evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [X] T039 Resolve the config-stability gate for the target-host `missing field realtime` failure by recording the reviewed config baseline or documented divergence, non-secret `print-effective-config` result or config/migration-needed diagnostic, explicit human review evidence, compatibility or migration decision, rollback/fallback path, and no-background-config-edit confirmation in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T040 Verify the actual launch path after the Q001-approved path 1 target-host config migration with the built binary, `server-start` where rsync deployment is used, the non-secret `server-start` receipt, PID/runtime/log paths, daemon-owned status freshness, terminal logout survival, and no-secret migration evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
 - [ ] T041 Run a controlled live or dry-run watched-edit smoke check and record live hiding or dry-run outcome evidence in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
 - [ ] T042 Measure at least 10 minutes of idle daemon-alone and daemon-plus-TUI CPU/RSS, one active live/recovery/backoff sample, live and recovery/reconciliation queue depths versus caps, API concurrency, state/report file sizes, detached log growth rate, and coalesced-warning counts on the deployment host; record pass/fail against SC-011 bounds in `suppressor/docs/operations.md`
 - [X] T043 Update operator and runtime docs with the MVP launch path, `make build-server`, `server-start`, recovery anchor, rolling last-24h verification, nightly full recheck, config-stability review, and degraded-status meanings in `suppressor/README.md`, `suppressor/docs/operations.md`, and `suppressor/docs/runtime-boundaries.md`
@@ -254,7 +258,7 @@ Task: "T031 [P] [US3] Add or repair TUI action and log separation tests for relo
 3. Complete US2 recovery/reconciliation/nightly truth.
 4. Run the shortest suppressor test gate.
 5. Build the server artifact with `make -C suppressor build-server`.
-6. Resolve the config-stability gate without background config edits.
+6. Treat the config-stability gate as Q001-approved path 1 and record post-migration T040 evidence.
 7. Verify the actual launch path with `server-start` where rsync deployment is used, then run one
    controlled live or dry-run watched edit and the deployment-host resource sample.
 8. Keep US3 command/report hardening and final docs evidence closed only if they remain consistent
@@ -273,4 +277,4 @@ through T046 are required before broader operator-command trust or feature close
   values.
 - Do not let reconciliation, catch-up, scheduled verification, or detached launch checks starve live
   hiding.
-- Do not make target-host or tracked config changes as a shortcut around T039.
+- Do not make further target-host or tracked config changes as a shortcut around T040 evidence.

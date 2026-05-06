@@ -6,6 +6,8 @@ docmeta:
   source:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
+  - speckit-plan human-review queue update on 2026-05-06
+  - user approval on 2026-05-07
 ---
 
 # Quickstart: Real-Time Suppression Recovery
@@ -265,8 +267,15 @@ suppressor freeze because it is outside `001-real-time-suppression`.
 
 ## Current MVP Go/No-Go Recorded On 2026-05-06
 
-Decision: BLOCK target-host deployment trust until T039, T040, T041, and T042 evidence is
-collected on the deployment host.
+Decision: BLOCK target-host deployment trust until T040, T041, and T042 evidence is recorded.
+T039 records the config-stability block and Q001 now approves path 1: target-host config migration
+to the reviewed tracked baseline.
+
+Current human-review packet:
+
+- Q001 in [questions.md](questions.md) is answered: approve path 1.
+- Use [review-queue.md](review-queue.md) as the index of pending human and maintainer actions.
+- The urgent next action is RQ002/T040 evidence collection.
 
 - ACCEPT local test evidence: `rtk cargo test --manifest-path suppressor/Cargo.toml --
   --test-threads=1` passed with `204 passed`.
@@ -275,8 +284,11 @@ collected on the deployment host.
 - ACCEPT local command/report evidence: emergency catch-up defaults, `Last 24 hours`,
   command-report compatibility, bounded unresolved samples, safe revision URLs, and daemon-vs-
   command status separation passed targeted tests.
-- BLOCK config-stability trust: the target-host `missing field realtime` failure requires reviewed
-  config baseline or migration-needed evidence before launch trust.
+- ACCEPT reviewed config path decision: Q001 approves path 1, and the human operator reports the
+  server config was updated and the daemon was started.
+- BLOCK config-stability launch evidence: non-secret `server-start` receipt, PID/runtime/log paths,
+  daemon-owned status freshness, and terminal logout survival still need to be recorded before T040
+  can be checked.
 - BLOCK detached server-start deployment trust: target-host PID/runtime/log evidence and SSH
   logout-survival evidence are still missing.
 - BLOCK live-hide deployment trust: no target-host live or controlled dry-run watched-edit smoke
@@ -329,11 +341,10 @@ rtk python3 tools/doc_workflow.py all
 
 ## Server Build Check
 
-From the suppressor project root:
+From the repository root:
 
 ```bash
-cd suppressor
-make build-server
+rtk make -C suppressor build-server
 ```
 
 The target wraps the previously used deployment build:
@@ -367,11 +378,66 @@ Before accepting T040 launch evidence, record:
 4. For any config-affecting change, the concrete motivation, explicit human review evidence,
    compatibility fixture or migration diagnostic, exact migration steps, rollback/fallback to the
    last trusted config, and post-change `server-start` verification.
+5. The resolved Q001 answer from [questions.md](questions.md) and the matching
+   [review-queue.md](review-queue.md) status update.
+6. For approved path 1, the non-secret post-migration launch evidence: `server-start` receipt,
+   PID/runtime/log paths, daemon-owned status freshness, and terminal logout survival.
 
 The 2026-05-06 target-host failure `missing field realtime` blocks deployment trust until this gate
 is resolved. Do not add `[realtime]` or any other section to the server config as an unreviewed
 shortcut; either migrate through the reviewed evidence path or run a binary that fails safely with a
 reviewed migration-needed diagnostic.
+
+## T039 Config-Stability Evidence Recorded On 2026-05-06
+
+Human review evidence: the human owner explicitly required that all config changes be motivated and
+reviewed by a human before they are trusted. This is now a release-blocking rule from constitution
+v1.8.0.
+
+Target-host command and diagnostic:
+
+```text
+ubuntu@webtop:~/wiki-supressor/suppressor$ ./suppressor server-start
+Error: Failed to parse config file config.toml
+
+Caused by:
+    TOML parse error at line 1, column 1
+      |
+    1 | [wiki]
+      | ^
+    missing field `realtime`
+```
+
+Recorded verdict:
+
+- Config path: `config.toml` in the target-host deployment directory.
+- Reviewed baseline: the tracked suppressor `config.toml` includes the current `[realtime]`
+  timeout section.
+- Documented divergence: the target-host config used by the command does not satisfy the current
+  config schema because `[realtime]` is absent.
+- Compatibility or migration decision: Q001 approved path 1 on 2026-05-07. The human operator
+  reports that the server config was updated to the reviewed tracked baseline and the daemon was
+  started. Deployment trust still waits for T040 launch evidence.
+- No-background-edit confirmation: no tracked or target-host config edit is approved or performed
+  as part of this evidence pass.
+- Rollback/fallback: keep target-host deployment blocked; use the last trusted binary/config/state
+  workflow if available or manual emergency catch-up while a reviewed fix is prepared.
+
+Allowed next paths:
+
+- Human-reviewed target-host config migration to the reviewed tracked baseline, including backup,
+  exact changed fields, rollback/fallback, and post-migration `server-start` evidence.
+- Human-reviewed backward-compatible loader or migration-needed diagnostic, including tests,
+  rebuilt server binary, and target-host evidence before T040 launch trust.
+
+Approved path and next evidence:
+
+1. Q001 is answered: approve path 1.
+2. Record the `server-start` receipt.
+3. Record PID file, runtime-status path, and detached log path.
+4. Confirm the runtime status is daemon-owned and fresh.
+5. Confirm the daemon survives terminal logout.
+6. Do not include credentials, `.env` values, cookies, tokens, or sensitive page content.
 
 ## Detached Server Start Check
 
@@ -396,8 +462,8 @@ launch_path=server-start
 
 Verification:
 
-1. Confirm the config stability and human review gate above has passed or produced a documented
-   block decision.
+1. Confirm Q001 in [questions.md](questions.md) is answered as approved path 1 and
+   [review-queue.md](review-queue.md) has only T040 evidence pending.
 2. Confirm the command creates required runtime directories but does not create, print, or persist
    credentials.
 3. Confirm the printed PID is alive and matches the expected suppressor binary.

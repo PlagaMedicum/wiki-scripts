@@ -46,6 +46,9 @@ Rules:
 - A config-affecting code or docs change must have a documented motivation, explicit human review,
   compatibility or migration behavior, rollback/fallback, and server verification before
   production trust.
+- Feature-scoped config approval blockers must be visible in `questions.md` and
+  `review-queue.md`; operator commands and docs must not rely on chat-only approval for a
+  production-trust decision.
 - `server-start` must fail safely for missing or incompatible config. The failure should be
   operator-visible and migration-needed or blocked; it must not present a healthy or detached
   daemon receipt.

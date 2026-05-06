@@ -7,6 +7,8 @@ docmeta:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
+  - speckit-plan human-review queue update on 2026-05-06
+  - user approval on 2026-05-07
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -36,7 +38,9 @@ aarch64 Linux musl release build ready for `rsync` to the server, and a one-comm
 server-start path from the deployed binary. Config churn is not part of this MVP path: any config
 file, schema, default, environment-variable, loading-semantic, or deployment-required-section change
 must be motivated, explicitly human-reviewed, compatibility-tested, and rollback-safe before it can
-support production trust.
+support production trust. Human review needed for the active target-host config gate must be visible
+in feature-local `questions.md` and `review-queue.md`; chat-only approval or scattered release
+evidence is not sufficient to unblock T040.
 
 ## Technical Context
 
@@ -140,6 +144,12 @@ they directly improve correctness, compatibility, observability, or bounded reso
 this incident
 **Scale/Scope**: Approximately 1.4k watched titles, one live recentchange stream, one local
 operator, one daemon process, bursty recentchange input, and no new public network service
+**Review/Approval Workflow**: Active feature-scoped human answers and review actions live in
+`specs/001-real-time-suppression/questions.md` and
+`specs/001-real-time-suppression/review-queue.md`. Q001 was answered on 2026-05-07: approve path 1,
+target-host config migration to the reviewed tracked baseline. The next required work is T040
+evidence only: record non-secret `server-start` receipt, PID/runtime/log paths, daemon-owned status
+freshness, and terminal logout survival.
 
 ## Constitution Check
 
@@ -155,7 +165,8 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
   verification for be.wiki only; it does not broaden into general moderation or remote operations.
 - Deterministic Documentation, Safe Writes, And Honest Status: PASS. Feature artifacts are updated
   in place. The plan explicitly forbids silent status-surface drift and requires authoritative
-  daemon truth plus compatibility diagnostics.
+  daemon truth plus compatibility diagnostics. Active human approval now has a feature-local queue
+  instead of being hidden only in chat history or scattered release evidence.
 - Stable Config, Compatibility, Non-Destructive Change, And Explicit Approval: PASS with required
   implementation follow-through. The design is compatibility-first, additive where practical, and
   names migration, rollback or fallback, and the human approval checkpoint for incompatible
@@ -172,41 +183,41 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
 
 **Document impact**:
 
-- Update [suppressor/Makefile](/home/plagamed/Documents/wiki/scripts/suppressor/Makefile) with an
+- Update [suppressor/Makefile](../../suppressor/Makefile) with an
   additive `build-server` target that runs
   `cargo zigbuild --release --target aarch64-unknown-linux-musl` and prints the rsync-ready binary
   path.
-- Update [suppressor/README.md](/home/plagamed/Documents/wiki/scripts/suppressor/README.md) for
+- Update [suppressor/README.md](../../suppressor/README.md) for
   live protection semantics, dry-run meaning, emergency catch-up meaning, and the operator entry
   points that are actually authoritative.
 - Update
-  [suppressor/docs/operations.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/operations.md)
+  [suppressor/docs/operations.md](../../suppressor/docs/operations.md)
   for the new primary status vocabulary, one-command `server-start` background launch path,
   last-successful-hide recovery anchor, rolling last-24h verification, randomized nightly full
   recheck, config-review evidence, and compatibility or migration approval workflow.
 - Update
-  [suppressor/docs/runtime-boundaries.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/runtime-boundaries.md)
+  [suppressor/docs/runtime-boundaries.md](../../suppressor/docs/runtime-boundaries.md)
   for the daemon-owned runtime surface, command-report isolation, status compatibility loading, and
   any additive scheduler or state fields.
 - Update
-  [suppressor/docs/implementation.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/implementation.md)
+  [suppressor/docs/implementation.md](../../suppressor/docs/implementation.md)
   with the internal service boundaries, recovery-anchor rules, scheduler semantics, and TUI
   information architecture decisions.
 - Update
-  [suppressor/docs/testing-strategy.md](/home/plagamed/Documents/wiki/scripts/suppressor/docs/testing-strategy.md)
+  [suppressor/docs/testing-strategy.md](../../suppressor/docs/testing-strategy.md)
   with scheduler, compatibility, last-24h preset, revision-link, and low-spec verification cases.
-- No change is currently expected for `.specify/doc-registry.json`; constitution v1.8.0 and
-  `specs/000-repo-governance/` already record the human-reviewed config-stability rule that this
-  plan applies to the active suppressor MVP.
+- Add `questions.md` and `review-queue.md` in this feature so the human owner has one convenient
+  place to see and answer the approval question that blocks T040.
+- No change is currently expected for `.specify/doc-registry.json` for feature-local queue files;
+  constitution v1.8.0 and `specs/000-repo-governance/` already record the human-reviewed
+  config-stability rule that this plan applies to the active suppressor MVP.
 - If the compatibility or migration-warning pattern produces reusable repo-wide guidance beyond
   `suppressor`, capture that generalized lesson in
-  [specs/000-repo-governance/research.md](/home/plagamed/Documents/wiki/scripts/specs/000-repo-governance/research.md)
+  [specs/000-repo-governance/research.md](../000-repo-governance/research.md)
   during close-out instead of leaving it feature-local only.
 - Final close-out must still run `python3 tools/doc_workflow.py all`.
-- No `questions.md` is required for this planning update because the human owner has already
-  supplied the config-stability rule and it is encoded in constitution v1.8.0. Any future
-  config-affecting implementation proposal that lacks explicit human review must be blocked and
-  moved to a feature-local question or review item before code or server config changes.
+- `questions.md` and `review-queue.md` record Q001 as answered: path 1 target-host config migration
+  is approved. Do not revisit config policy before T040 unless the server evidence fails.
 
 ## Project Structure
 
@@ -218,10 +229,18 @@ specs/001-real-time-suppression/
 ├── research.md
 ├── data-model.md
 ├── quickstart.md
+├── questions.md
+├── review-queue.md
 ├── checklists/
+│   ├── config-stability.md
+│   ├── deployment-evidence.md
+│   ├── mvp-evidence.md
+│   ├── mvp-stability.md
 │   ├── operator-safety.md
 │   ├── realtime.md
 │   ├── recovery.md
+│   ├── runtime-truth.md
+│   ├── server-start.md
 │   ├── release-readiness.md
 │   ├── requirements.md
 │   └── resource-economy.md
@@ -357,11 +376,15 @@ No constitution violations identified.
 - Record the config baseline as a human-reviewed contract before any further config-affecting code
   or docs work: tracked config file, schema sections, defaults, environment variable names, loading
   aliases, deployment-required sections, and any target-host divergence. The target-host
-  `missing field realtime` failure is evidence of divergence and blocks T039 until a reviewed
-  compatibility or migration path is chosen.
+  `missing field realtime` failure is evidence of divergence. T039 records that block; Q001 now
+  approves path 1, so the next step is collecting T040 launch-path evidence from the already started
+  server daemon.
 - Refuse ad-hoc server config edits as a workaround. A server config migration is allowed only when
   the evidence names the motivation, reviewer, exact changed fields, backup/rollback path, and
   post-change `server-start` verification.
+- Treat `review-queue.md` as the operator-facing approval index for this gate. If docs tooling does
+  not surface feature-local `approval_needed` rows yet, encode the required approval as
+  `answer_needed` so `python3 tools/doc_workflow.py status` still shows the pending human action.
 - Confirm how runtime truth is cross-checked against the live process and launched binary so a
   stale PID file or stale `runtime_status.json` cannot masquerade as current protection evidence.
 - Confirm which existing state fields already persist `last_successful_hide_at`,
@@ -445,6 +468,9 @@ No constitution violations identified.
   with an operator-visible config/migration-needed diagnostic. No launch evidence counts if the
   config was edited in the background, contains unreviewed required sections, or lacks documented
   rollback/fallback to the last trusted config.
+- Before checking T040, record the approved path 1 evidence: backup or operator statement that the
+  server config was updated, non-secret `server-start` receipt, PID/runtime/log paths, daemon-owned
+  status freshness, and terminal logout survival. Keep this evidence concise.
 - Before release trust is claimed for any incompatible surface change, produce explicit evidence of:
   the compatibility verdict, required human approval checkpoint, required operator migration steps,
   and the fallback or rollback path to the last trusted workflow.

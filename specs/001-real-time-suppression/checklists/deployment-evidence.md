@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Requirements-quality checklist for deployment-host evidence, remaining MVP gates, and final go/no-go wording.
-  source: speckit-checklist on 2026-05-06
+  source:
+  - speckit-checklist on 2026-05-06
+  - speckit-checklist Q001 launch-evidence update on 2026-05-07
 ---
 
 # Deployment Evidence Checklist: Real-Time Suppression Recovery
@@ -72,3 +74,37 @@ docmeta:
 - Focus areas: target-host launch evidence, smoke evidence, resource evidence, documentation close-out, and final MVP go/no-go wording.
 - Depth: standard reviewer checklist for the remaining active safety-freeze gates.
 - Actor/timing: reviewer and operator before claiming deployment or production readiness.
+
+## Q001 Approved Launch Evidence Completeness
+
+- [ ] CHK035 Are Q001-approved path 1 migration requirements complete enough to name the reviewed baseline, the human operator's target-host config update, allowed non-secret evidence, and rollback or fallback path? [Completeness, Questions §Q001, Quickstart §T039 Config-Stability Evidence, Tasks §T040]
+- [ ] CHK036 Are T040 evidence requirements complete for `server-start` receipt, PID file, runtime-status path, detached log path, launch-path label, status freshness, terminal logout survival, and no-secret migration evidence? [Completeness, Spec §SC-021, Quickstart §Detached Server Start Check, Review Queue §RQ002]
+- [ ] CHK037 Are requirements defined for evidence collected from an already-started daemon after Q001 approval, including whether the existing process can satisfy T040 or whether a fresh `server-start` receipt is required? [Ambiguity, Questions §Q001, Tasks §T040]
+
+## Q001 Approved Launch Evidence Clarity
+
+- [ ] CHK038 Is "daemon-owned status freshness" quantified with acceptable status-file age, update interval, launch-path label, and PID correlation criteria? [Clarity, Spec §SC-021, Runtime Status Contract §Required Top-Level Shape, Quickstart §Detached Server Start Check]
+- [ ] CHK039 Is "terminal logout survival" defined as reconnect evidence for the same PID plus continuing daemon-owned status updates, rather than an informal claim that the SSH terminal was closed safely? [Clarity, Spec §SC-021, Quickstart §Detached Server Start Check]
+- [ ] CHK040 Is "no-secret migration evidence" defined with allowed and forbidden fields so docs cannot accidentally capture `.env` values, cookies, tokens, credentials, hidden text, or sensitive page content? [Security, Spec §FR-012, Plan §Constraints, Quickstart §Config Stability And Human Review Gate]
+
+## Q001 Approved Launch Evidence Consistency
+
+- [ ] CHK041 Are Q001 approval states consistent across `questions.md`, `review-queue.md`, plan, quickstart, operations docs, and tasks so no active doc still treats the config path choice as pending? [Consistency, Questions §Q001, Review Queue §RQ001-RQ002, Plan §Review/Approval Workflow, Tasks §T040]
+- [ ] CHK042 Are T039 and T040 boundaries consistent: T039 records the reviewed config decision, T040 records target-host launch evidence, and neither authorizes further config churn? [Consistency, Constitution §V, Quickstart §T039 Config-Stability Evidence, Tasks §T039-T040]
+- [ ] CHK043 Are `server-start` launch evidence requirements consistent with the daemon-owned runtime truth rule and one-shot command separation rule? [Consistency, Spec §FR-021, Spec §FR-026, Runtime Status Contract §Surface, Contract §Start server daemon in background]
+
+## Q001 Approved Acceptance Criteria Quality
+
+- [ ] CHK044 Can T040 be objectively accepted or blocked from written criteria without relying on the vague statement that "the daemon was started"? [Measurability, Spec §SC-021, Tasks §T040, Review Queue §RQ002]
+- [ ] CHK045 Are the exact maintained docs that must receive T040 evidence named, and is the required evidence small enough to record without copying raw logs or secrets? [Traceability, Tasks §T040, Quickstart §Detached Server Start Check, Operations §Server Build And Detached Launch]
+- [ ] CHK046 Are partial-evidence outcomes specified for cases where the PID is alive but status is stale, status is fresh but `launch_path` is not `server-start`, the log path is missing, or logout survival is unproven? [Coverage, Spec §FR-029, Spec §SC-021, Quickstart §Actual Launch-Path Check]
+
+## Q001 Approved Scenario Coverage
+
+- [ ] CHK047 Are exception-flow requirements defined when post-Q001 launch evidence is blocked by target-host access interruption, missing command receipt, duplicate daemon detection, stale PID, or stale runtime status? [Exception Flow, Spec §Edge Cases, Contract §Failure behavior, Review Queue §RQ002]
+- [ ] CHK048 Are requirements defined for preserving protection while evidence is incomplete, so the daemon may continue running but MVP deployment trust remains blocked until T040 is recorded? [Coverage, Constitution §VIII, Quickstart §Current MVP Go/No-Go, Tasks §T040]
+- [ ] CHK049 Are dependencies between T040, T041, and T042 clear enough that live-smoke or resource evidence cannot mark the launch-path task complete by implication? [Dependency, Tasks §T040-T042, Quickstart §Active MVP Critical Path]
+
+## Q001 Approved Dependencies & Assumptions
+
+- [ ] CHK050 Are assumptions documented for the human operator providing target-host evidence manually, given the repo-local agent may not have server access and evidence must exclude credentials and sensitive content? [Assumption, Review Queue §RQ002, Quickstart §Config Stability And Human Review Gate]

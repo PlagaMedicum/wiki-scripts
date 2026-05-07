@@ -48,7 +48,7 @@ The daemon:
 - reconciliation and backfill support
 - local cache and local state persistence
 - strict right checks before live operation
-- process same-account edits too
+- process operator-account edits too
 
 Realtime status records stream freshness, last observed target-wiki event, last watched-page match,
 last queued action, last completed action, latest outcome, recovery trigger, and catch-up summary.

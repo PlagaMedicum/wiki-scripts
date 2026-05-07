@@ -58,6 +58,9 @@ Config changes are treated as product decisions: changing tracked config files, 
 defaults, environment variable names, loading semantics, or deployment-required sections requires a
 specific motivation, explicit human review, compatibility or migration evidence, deployment-path
 verification, and rollback/fallback notes before the change can support production trust.
+Because this is a public repo, sensitive-edit incident evidence must stay redacted. Do not commit
+real editor names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts that
+identify how a real person edited a sensitive page; use synthetic fixtures and aggregate outcomes.
 
 ## Where To Look Next
 

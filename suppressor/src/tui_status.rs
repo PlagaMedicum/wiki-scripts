@@ -1054,7 +1054,7 @@ mod tests {
                 latest_outcome: Some(SuppressionOutcomeSnapshot {
                     title: "Sensitive".to_string(),
                     revid: 77,
-                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/77".to_string()),
+                    revision_url: Some("https://example.invalid/wiki/Special:Diff/77".to_string()),
                     outcome: "queued".to_string(),
                     mode: "live".to_string(),
                     source_label: "live hiding".to_string(),
@@ -1102,7 +1102,7 @@ mod tests {
         assert_eq!(status.realtime.last_matching_revid, Some(77));
         assert_eq!(
             status.realtime.last_matching_revid_url.as_deref(),
-            Some("https://be.wikipedia.org/wiki/Special:Diff/77")
+            Some("https://example.invalid/wiki/Special:Diff/77")
         );
     }
 
@@ -1115,7 +1115,7 @@ mod tests {
                 latest_outcome: Some(SuppressionOutcomeSnapshot {
                     title: "Sensitive".to_string(),
                     revid: 88,
-                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/88".to_string()),
+                    revision_url: Some("https://example.invalid/wiki/Special:Diff/88".to_string()),
                     outcome: "hidden".to_string(),
                     mode: "live".to_string(),
                     source_label: "live hiding".to_string(),
@@ -1139,7 +1139,7 @@ mod tests {
         assert_eq!(status.realtime.last_successful_hide_revid, Some(88));
         assert_eq!(
             status.realtime.last_successful_hide_url.as_deref(),
-            Some("https://be.wikipedia.org/wiki/Special:Diff/88")
+            Some("https://example.invalid/wiki/Special:Diff/88")
         );
     }
 

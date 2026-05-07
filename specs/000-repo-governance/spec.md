@@ -27,6 +27,8 @@ tradeoffs.
 - The repo is not trying to become a generic wiki automation framework today.
 - Most of the repo has been built with heavy LLM assistance, so durable lessons need to be fixed in
   code, tests, governance docs, or explicit comments after review.
+- This is a public repository. Sensitive-edit incident evidence must be redacted or synthetic in
+  tracked files, including docs, tests, contracts, examples, and code comments.
 - Low-spec local operation is a default constraint for operational tools. Resource economy must
   support robustness, performance, and documentation quality, not replace them.
 - An active human-safety freeze is in effect for `specs/001-real-time-suppression/`. Until the
@@ -100,6 +102,10 @@ tradeoffs.
   operational checks, and lessons learned.
 - Compatibility and migration checks should be treated as correctness work when machine-readable
   surfaces, stored state, or operator workflows can break across versions.
+- Incident lessons about sensitive edits must be captured without real editor names, IPs, page
+  titles, revision IDs, diff URLs, comments, screenshots, or log excerpts that identify how a real
+  person edited a sensitive page. Use synthetic fixtures, redacted placeholders, aggregate counts,
+  and non-identifying outcome classes.
 
 ### Biblio
 
@@ -134,8 +140,8 @@ tradeoffs.
   - recovery target within a few minutes after disconnect or restart, with priority on newer edits
   - stop conditions for missing rights, broken auth, persistent API failure, or malformed
     suppression-list input
-- The service should log stop reasons with enough detail for troubleshooting without leaking secrets
-  or sensitive payloads.
+- The service should log stop reasons with enough detail for troubleshooting without leaking
+  secrets, sensitive payloads, hidden text, or real sensitive-edit incident identifiers.
 - The service should use internal service boundaries for stream ingestion, source-page refresh,
   reconciliation, suppression execution, status, and persistence while staying a local low-overhead
   daemon unless a process split is justified.
@@ -170,8 +176,8 @@ tradeoffs.
 - Git history is the default archive. Finished feature specs should not be kept only for archival
   completeness once their durable lessons have been captured elsewhere.
 - If a feature revealed important pitfalls or costly mistakes, preserve that experience in code
-  comments, tests, governance docs, or other maintained docs instead of leaving it buried only in
-  an old feature spec.
+  comments, tests, governance docs, or other maintained docs using synthetic or redacted evidence
+  instead of leaving it buried only in an old feature spec.
 - If a feature changes resource, recovery, or operator-status behavior, update the project-local
   docs and quickstart checks so later maintainers can repeat the evidence.
 - Concise docs are preferred, but undocumented operational decisions are not acceptable for

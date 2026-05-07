@@ -576,7 +576,7 @@ mod tests {
                 latest_outcome: Some(SuppressionOutcomeSnapshot {
                     title: "Title".to_string(),
                     revid: 42,
-                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/42".to_string()),
+                    revision_url: Some("https://example.invalid/wiki/Special:Diff/42".to_string()),
                     outcome: "hidden".to_string(),
                     mode: "live".to_string(),
                     source_label: "live hiding".to_string(),
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(latest_outcome.outcome, "hidden");
         assert_eq!(
             latest_outcome.revision_url.as_deref(),
-            Some("https://be.wikipedia.org/wiki/Special:Diff/42")
+            Some("https://example.invalid/wiki/Special:Diff/42")
         );
         assert_eq!(latest_outcome.source_label, "live hiding");
     }

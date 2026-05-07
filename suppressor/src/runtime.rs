@@ -2318,7 +2318,7 @@ mod tests {
             processed,
             queue_depth.clone(),
             work_tx,
-            runtime_status,
+            Arc::clone(&runtime_status),
             temp.path().join("status.json"),
             RuntimeStatusSurfaceMode::DaemonOwned,
         );
@@ -2337,6 +2337,11 @@ mod tests {
 
         assert!(work_rx.try_recv().is_err());
         assert_eq!(queue_depth.load(Ordering::SeqCst), 0);
+        let status = runtime_status.lock().await.clone();
+        let outcome = status.realtime.latest_outcome.as_ref().unwrap();
+        assert_eq!(outcome.outcome, "already-hidden");
+        assert_eq!(outcome.reason_code.as_deref(), Some("already-processed"));
+        assert_eq!(outcome.mode, RevDelMode::Live.label());
     }
 
     #[tokio::test]
@@ -2388,8 +2393,8 @@ mod tests {
             .actions
             .dispatch_action(RevDelDispatch {
                 title: "Foo".to_string(),
-                revids: vec![88],
-                event_id: Some("evt-88".to_string()),
+                revids: vec![0],
+                event_id: Some("evt-0".to_string()),
                 user: Some("User".to_string()),
                 comment: Some("Comment".to_string()),
                 mode: RevDelMode::Live,
@@ -2405,8 +2410,8 @@ mod tests {
         let latest_outcome = status.realtime.latest_outcome.as_ref().unwrap();
 
         assert_eq!(action.title, "Foo");
-        assert_eq!(action.revids, vec![88]);
-        assert_eq!(action.event_id.as_deref(), Some("evt-88"));
+        assert_eq!(action.revids, vec![0]);
+        assert_eq!(action.event_id.as_deref(), Some("evt-0"));
         assert_eq!(action.observed_at, Some(observed_at));
         assert_eq!(status.realtime.queue_depth, 1);
         assert_eq!(
@@ -2418,7 +2423,7 @@ mod tests {
         assert_eq!(latest_outcome.source_label, RevDelMode::Live.source_label());
         assert_eq!(
             latest_outcome.revision_url.as_deref(),
-            Some("https://be.wikipedia.org/wiki/Special:Diff/88")
+            Some("https://be.wikipedia.org/wiki/Special:Diff/0")
         );
         assert_eq!(latest_outcome.observed_at, Some(observed_at));
         assert_eq!(

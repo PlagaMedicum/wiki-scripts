@@ -43,6 +43,9 @@ specify check
    For safety-, reliability-, or performance-sensitive work, state resource goals, bounded
    concurrency/state/logging, recovery/status behavior, low-spec verification, and how incident
    lessons will be preserved.
+   If the work involves sensitive edits or suppression incidents, state how tracked docs, tests,
+   contracts, examples, and code comments will avoid real editor names, page titles, revision IDs,
+   diff URLs, comments, screenshots, and log excerpts.
 5. Implement the change.
 6. Check the current docs queue when you need to see pending approval, manual review, answer, or
    update work:
@@ -101,6 +104,9 @@ python3 tools/doc_workflow.py all
   variable changes, and new required server config sections need a documented reason, explicit
   human review, compatibility or migration evidence, and rollback/fallback notes before production
   trust.
+- Do not commit real sensitive-edit incident identifiers. Use synthetic titles, synthetic actors,
+  synthetic revision IDs, redacted placeholders, aggregate counts, and outcome classes in public
+  docs, tests, contracts, examples, and comments.
 
 ## Repo-Local Refresh
 

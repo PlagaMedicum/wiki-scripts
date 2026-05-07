@@ -865,7 +865,7 @@ mod tests {
                         last_successful_hide_revid: Some(77),
                         last_successful_hide_at: Some(Utc::now()),
                         last_successful_hide_url: Some(
-                            "https://be.wikipedia.org/wiki/Special:Diff/77".to_string(),
+                            "https://example.invalid/wiki/Special:Diff/77".to_string(),
                         ),
                         latest_notice: Some("observed target-wiki event".to_string()),
                         last_daytime_verification_at: Some(Utc::now()),

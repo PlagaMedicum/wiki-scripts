@@ -31,6 +31,7 @@ docmeta:
 **Resource Goals**: [CPU, memory, disk, network, queue, polling, and log-volume budgets or explicitly unknown]
 **Compatibility/Migration**: [existing setup, config/state/schema/CLI/operator-surface/launch-path impact, migration path, rollback/fallback, or explicitly none]
 **Config Change Review**: [if config files, schema, defaults, environment variable names, loading semantics, or deployment-required sections change, state motivation, human review evidence, backward-compatibility strategy, migration path, rollback/fallback, and server verification; otherwise explicitly none]
+**Sensitive Evidence Handling**: [if the feature involves sensitive edits, suppression, moderation, incidents, logs, or public evidence, state the synthetic-fixture/redaction strategy and confirm real editor/page/revision/diff/comment identifiers stay out of tracked files; otherwise explicitly none]
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable, or explicitly unknown]  
 **Architecture Constraints**: [internal service boundaries, process boundaries, dependency limits, or explicitly unknown]
 **Minimalism Constraints**: [what must stay simple, local, bounded, or low-overhead, or explicitly unknown]
@@ -80,6 +81,9 @@ Include document impact in this check:
   first, with any extra process or dependency justified by isolation or operator-control benefits
 - whether low-spec verification, benchmarks, or manual checks are required before completion
 - whether incident lessons need tests, docs, or narrowly useful code comments before closure
+- whether incident lessons or test fixtures involve sensitive edits; if yes, confirm tracked docs,
+  tests, contracts, examples, and comments use synthetic or redacted identifiers rather than real
+  editor names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts
 - whether `make docs` / `python3 tools/doc_workflow.py all` must be run
 - whether the feature needs `questions.md` or `review-queue.md` updates to capture pending human
   input explicitly

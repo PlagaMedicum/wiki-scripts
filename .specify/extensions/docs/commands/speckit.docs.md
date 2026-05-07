@@ -32,6 +32,10 @@ This command runs the same final gate as `make docs`:
   verification, recovery/status evidence, and incident lessons have been captured before treating
   the docs gate as complete. Concision is fine; missing performance evidence or operational lessons
   is not.
+- For sensitive-edit, suppression, moderation, or incident work, confirm tracked docs, tests,
+  contracts, examples, fixtures, and comments use synthetic or redacted evidence, not real editor
+  names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts identifying a
+  real sensitive edit.
 - If tracked config files, config schema, defaults, environment variable names, loading semantics,
   or deployment-required sections changed, confirm the docs capture the motivation, explicit human
   review evidence, compatibility or migration behavior, deployment-path verification, and

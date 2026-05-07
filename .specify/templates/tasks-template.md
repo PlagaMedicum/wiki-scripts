@@ -81,6 +81,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T013 Add human-reviewed config-change evidence and compatibility fixtures for any changed
   config file, schema, default, environment variable, loading semantic, or deployment-required
   section
+- [ ] T014 Add synthetic fixtures and redaction checks for any sensitive-edit, suppression,
+  moderation, or incident evidence in tracked docs, tests, contracts, examples, and code comments
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -178,6 +180,9 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Resource-economy verification for CPU, memory, disk, network, queues, polling, and logs
 - [ ] TXXX Low-spec manual benchmark or automated check when resource pressure can affect behavior
 - [ ] TXXX Preserve incident or review lessons in tests, project-local docs, or narrowly useful code comments
+- [ ] TXXX Verify tracked docs, tests, contracts, examples, fixtures, and comments contain no real
+  sensitive-edit incident editor names, page titles, revision IDs, diff URLs, comments, screenshots,
+  or log excerpts
 - [ ] TXXX Verify documentation preserves the performance evidence, operational checks, and lessons needed by maintainers
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
@@ -288,3 +293,5 @@ With multiple developers:
   new dependencies that do not pay for their resource and failure-mode cost
 - Avoid: treating resource economy as permission to lower performance targets or omit durable
   documentation
+- Avoid: committing real sensitive-edit incident identifiers in public docs, tests, contracts,
+  examples, fixtures, comments, screenshots, logs, or copied command output

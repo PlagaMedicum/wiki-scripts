@@ -7,6 +7,7 @@ docmeta:
   - speckit-plan on 2026-04-29
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
+  - speckit-plan server-running launch-path mismatch update on 2026-05-07
 ---
 
 # Contract: Operator Commands
@@ -307,6 +308,9 @@ Required behavior:
   expected suppressor runtime.
 - Treat stale PID or stale runtime-status evidence as non-healthy startup evidence unless the
   command can prove no live daemon is being replaced.
+- Treat a live process with mismatched PID-file, launch-path, runtime-status, or detached-log
+  evidence as untrusted already-running evidence. It may be left running to preserve protection, but
+  it must not produce a successful `server-start` receipt or unblock deployment trust.
 - Spawn the same binary as a detached child running `run` or `dry-run`, with stdin detached from the
   terminal, stdout/stderr redirected to the selected log path, and the child placed in a new session
   so SSH logout does not kill it.
@@ -318,7 +322,8 @@ Required behavior:
 Failure behavior:
 
 - Missing config, missing auth values, unwritable state/log paths, duplicate live daemon, spawn
-  failure, startup timeout, and unhealthy runtime status all exit non-zero with a safe next action.
+  failure, startup timeout, PID mismatch, launch-path mismatch, stale or unrelated runtime status,
+  and unhealthy runtime status all exit non-zero with a safe next action.
 - The command must not leave a false healthy status, orphaned child, or unlabeled launch path when
   startup verification fails.
 - The command must not require `systemd`, `tmux`, `screen`, shell backgrounding, or `nohup`.
@@ -329,6 +334,10 @@ Compatibility:
   behavior remain valid.
 - `server-start` becomes authoritative only for runs it actually started and verified; it must not
   imply systemd authority or hide that the active launch path is detached-binary.
+- An already-running daemon becomes acceptable T040 evidence only when non-secret receipt,
+  PID-file, runtime-status, and detached-log facts tie it to the deployed binary and the same
+  `server-start` run. Otherwise the operator must capture the mismatch, avoid stopping a possibly
+  protective process solely for evidence, and choose safe fresh `server-start` or rollback.
 
 ## TUI Action Presentation
 

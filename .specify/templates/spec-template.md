@@ -83,6 +83,8 @@ docmeta:
 - How does system handle [error scenario]?
 - What happens when the feature encounters older config/state/schema/artifact shapes from a
   previous setup?
+- If the feature handles sensitive edits, suppression, moderation, or incident evidence, how does
+  it avoid committing real editor/page/revision/diff/comment identifiers to tracked files?
 - If config files, config schema, defaults, environment variable names, loading semantics, or
   deployment-required sections change, what specific human-reviewed motivation justifies that
   config change?
@@ -129,6 +131,9 @@ docmeta:
 - If an active safety freeze applies, include requirements that keep work on the declared feature and
   define the minimum stable daemon/server behavior, actual-launch-path verification, and non-healthy
   failure reporting needed before the freeze can be released.
+- For sensitive-edit, suppression, moderation, or incident work, require tracked docs, tests,
+  contracts, examples, fixtures, and code comments to use synthetic or redacted evidence instead of
+  real editor names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -154,6 +159,8 @@ docmeta:
 - **SC-008**: [Config-stability outcome, if config changes: "Every config change has a documented
   motivation, human review evidence, compatibility fixture or migration diagnostic, and rollback
   path before production trust"]
+- **SC-009**: [Sensitive-evidence outcome, if applicable: "No tracked docs, tests, contracts,
+  examples, fixtures, or code comments contain real sensitive-edit incident identifiers"]
 
 ## Assumptions
 

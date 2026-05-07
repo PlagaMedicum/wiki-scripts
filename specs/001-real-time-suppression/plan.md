@@ -9,7 +9,8 @@ docmeta:
   - speckit-plan config-stability update on 2026-05-06
   - speckit-plan human-review queue update on 2026-05-06
   - user approval on 2026-05-07
-  - user screenshot live-hide incident on 2026-05-07
+  - operator-provided live-hide incident evidence with sensitive identifiers redacted
+  - speckit-plan server-running launch-path mismatch update on 2026-05-07
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -29,8 +30,9 @@ behind a later healthy stream reopen. The implementation should preserve the cur
 daemon plus TUI deployment, keep status and command surfaces backward-compatible where practical,
 and emit explicit migration or fallback guidance when compatibility cannot be preserved.
 
-Constitution v1.8.0 puts this feature under an active human-safety freeze and makes config surfaces
-human-reviewed operator contracts. The current plan is
+Constitution v1.9.0 puts this feature under an active human-safety freeze, makes config surfaces
+human-reviewed operator contracts, and forbids tracked real sensitive-edit incident identifiers. The
+current plan is
 therefore a stabilization reset: defer unrelated work, broad refactors, cosmetic TUI polish, new
 services, and nonessential optimization until the minimal server-runnable daemon MVP is proven. The
 critical path is automatic live hiding, automatic recovery/reconciliation, nightly fallback, shared
@@ -43,15 +45,27 @@ support production trust. Human review needed for the active target-host config 
 in feature-local `questions.md` and `review-queue.md`; chat-only approval or scattered release
 evidence is not sufficient to unblock T040.
 
-The 2026-05-07 RecentChanges screenshot is fresh failed T041 evidence: a watched political page,
-`Пратэсты ў Беларусі (2020—2021)`, still showed an available `заблакаваць` action after a live edit
-by `Plaga med`. This resets the immediate critical path. Do not spend the next implementation pass
-on broad evidence, resource sampling, docs tooling, TUI polish, or new config policy. First preserve
-protection with manual hide or emergency catch-up if an exposed revision is known, then diagnose and
-fix the live path at the smallest boundary: event observed, watched-title match, processed-revision
-skip, queue handoff, RevDel/auth result, or stale/wrong daemon binary. T040 launch evidence remains
-useful only as the minimal server status needed to debug the live path; it must not delay the T041
-live-hide hotfix when public watched edits are visibly unhidden.
+The operator-provided screenshot is fresh failed T041 evidence: a watched sensitive page still
+showed an available public hide action after a live edit by an operator-controlled account. Concrete
+page, account, revision, diff URL, comment, screenshot, and log identifiers must stay out of tracked
+repository docs, tests, contracts, examples, fixtures, and code comments. This resets the immediate
+critical path. Do not spend the next implementation pass on broad evidence, resource
+sampling, docs tooling, TUI polish, or new config policy. First preserve protection with manual hide
+or emergency catch-up if an exposed revision is known, then diagnose and fix the live path at the
+smallest boundary: event observed, watched-title match, processed-revision skip, queue handoff,
+RevDel/auth result, or stale/wrong daemon binary. T040 launch evidence remains useful only as the
+minimal server status needed to debug the live path; it must not delay the T041 live-hide hotfix
+when public watched edits are visibly unhidden.
+
+After the server was made to run again, the latest operator screenshot is useful but negative T040
+evidence: a live process exists, yet the primary status remains non-healthy because launch-path,
+PID-file, runtime-status, detached-log, and live-process evidence do not agree. That state may still
+be preserving some protection, so do not stop it only to make evidence cleaner. It does not unblock
+deployment trust. The next plan step is to either tie the current process to a valid `server-start`
+receipt and fresh daemon-owned `runtime_status.json`, perform a safe fresh `server-start` after
+protecting any exposed edit and avoiding duplicate-daemon risk, or fall back to the last trusted
+launch workflow. T052 live or dry-run smoke and T042 resource sampling remain blocked until this
+launch-path mismatch is resolved or explicitly accepted as a human go/no-go exception.
 
 ## Technical Context
 
@@ -66,16 +80,16 @@ the suppression-list cache
 --test-threads=1`, targeted tests for shared throttle/backoff, runtime-status truth, daemon-vs-
 command isolation, scheduler/reconciliation visibility, and a dry-run or controlled live
 launch-path smoke check. Full `rtk cargo test --manifest-path suppressor/Cargo.toml`, controlled
-benchmark checks against `Удзельнік:Plaga med Bot/suppressor/tests`, and the repo docs gate remain
+benchmark checks against the configured bot test page, and the repo docs gate remain
 release evidence but must not displace the live daemon stabilization path. Test and server-build
 evidence is fresh only for the source tree that produced it: any later daemon-critical edit to
 `suppressor/src/`, `suppressor/tests/`, `suppressor/Cargo.toml`, `suppressor/Cargo.lock`,
 `suppressor/Makefile`, or build/deployment code invalidates the prior T037/T038 evidence. T037 and
 T038 must be rerun after Phase 2, US1, and US2 have changed daemon-critical paths before their
 checkmarks can count as final MVP gate evidence. The next implementation test slice must include a
-regression for a watched political page edited by the same operator account, proving that same-account
-eligible edits are not filtered, not silently marked processed, and either queue a live RevDel action
-or record an explicit failed live-hide outcome.
+regression for a synthetic watched sensitive page edited by a synthetic operator-account actor,
+proving that operator-account eligible edits are not filtered, not silently marked processed, and
+either queue a live RevDel action or record an explicit failed live-hide outcome.
 **Target Platform**: Linux local host running one daemon plus the local supervisor TUI for
 be.wikipedia.org; deployment artifact target is
 `target/aarch64-unknown-linux-musl/release/suppressor` built with
@@ -146,6 +160,12 @@ targets; report lag truthfully with sub-second detail when the value is under on
 server start must not log secrets, must not fabricate config or auth material, must not leave a
 child attached to the operator's terminal, and must not report success until PID and runtime-status
 evidence are trustworthy
+**Sensitive Evidence Handling**: Use synthetic watched titles, synthetic actor names, synthetic
+revision IDs, synthetic URLs, redacted placeholders, aggregate counts, and outcome classes in
+tracked docs, tests, contracts, examples, fixtures, and code comments. Real page titles, actor
+names, revision IDs, diff URLs, comments, screenshots, and log excerpts from sensitive-edit
+incidents are allowed only in operator-local diagnostics needed to protect exposed edits and must
+not be committed.
 **Architecture Constraints**: Preserve one deployable daemon/TUI package, but keep internals
 microservice-like: stream ingestion, cache refresh, catch-up, verification scheduling, MediaWiki
 transport, worker execution, runtime state, command reports, and TUI rendering communicate through
@@ -162,10 +182,11 @@ operator, one daemon process, bursty recentchange input, and no new public netwo
 `specs/001-real-time-suppression/questions.md` and
 `specs/001-real-time-suppression/review-queue.md`. Q001 was answered on 2026-05-07: approve path 1,
 target-host config migration to the reviewed tracked baseline. That approval remains valid and does
-not need to be reopened for a code-only live-hide fix. The next implementation pass should collect
-only the minimal non-secret T040 server status needed to identify the running binary and daemon
-truth, then prioritize the failed T041 live-hide path. Full logout-survival and resource evidence can
-follow after live hiding works again.
+not need to be reopened for a code-only live-hide fix. The server-running screenshot shows T040 is
+still blocked by launch-path evidence mismatch, not by config policy. The next implementation pass
+should resolve that mismatch with minimal non-secret server facts, then prove T052 through a
+controlled watched-edit live or dry-run smoke. Full resource evidence can follow after the trusted
+launch path and live hiding are proven.
 
 ## Constitution Check
 
@@ -196,8 +217,11 @@ follow after live hiding works again.
 - Active Human-Safety Freeze For Suppressor MVP: PASS. The active pointer is
   `specs/001-real-time-suppression/`, the work remains inside `suppressor/` and direct feature
   artifacts, and the plan defers unrelated cleanup until the server-runnable daemon MVP is proven.
-  The May 7 visible-edit incident strengthens the freeze: implementation must move to the smallest
+  The active live-hide incident strengthens the freeze: implementation must move to the smallest
   live-hide hotfix path before nonessential evidence or polish.
+- Public-Repo Privacy For Sensitive Edit Evidence: PASS. The plan treats the screenshot as
+  redacted operator evidence and forbids real page, actor, revision, diff, comment, screenshot, or
+  log identifiers in tracked docs, tests, contracts, examples, fixtures, and code comments.
 
 **Document impact**:
 
@@ -229,6 +253,9 @@ follow after live hiding works again.
 - No change is currently expected for `.specify/doc-registry.json` for feature-local queue files;
   constitution v1.8.0 and `specs/000-repo-governance/` already record the human-reviewed
   config-stability rule that this plan applies to the active suppressor MVP.
+- Constitution v1.9.0 adds a public-repo privacy rule for sensitive-edit evidence. This feature's
+  tracked docs, tests, contracts, examples, fixtures, and code comments must keep using synthetic or
+  redacted incident identifiers.
 - If the compatibility or migration-warning pattern produces reusable repo-wide guidance beyond
   `suppressor`, capture that generalized lesson in
   [specs/000-repo-governance/research.md](../000-repo-governance/research.md)
@@ -360,9 +387,10 @@ No constitution violations identified.
 
 ### Phase -1 - MVP Stabilization Reset
 
-- Treat the 2026-05-07 screenshot as an active live-hide incident. If an exposed revision ID is
+- Treat the operator-provided screenshot as an active live-hide incident. If an exposed revision ID is
   available, the operator should hide it manually or run emergency catch-up before waiting for a code
-  fix. Evidence collection must not leave public watched edits exposed longer.
+  fix. Evidence collection must not leave public watched edits exposed longer and must not copy real
+  incident identifiers into tracked repository files.
 - Treat the current checked-off task list as provisional until the daemon is verified through the
   actual launch path. A checked task is not release evidence by itself.
 - Stop broad TUI/layout polish and unrelated docs/workflow work. Only keep UI changes that make
@@ -400,8 +428,10 @@ No constitution violations identified.
   or docs work: tracked config file, schema sections, defaults, environment variable names, loading
   aliases, deployment-required sections, and any target-host divergence. The target-host
   `missing field realtime` failure is evidence of divergence. T039 records that block; Q001 now
-  approves path 1, so the next step is collecting T040 launch-path evidence from the already started
-  server daemon.
+  approves path 1. The next observed server-running state is still not trusted: the TUI reports a
+  live process but also a launch-path/PID/runtime evidence mismatch. Treat that as blocked T040
+  evidence until the current process is tied to the deployed binary, a valid `server-start` receipt,
+  and fresh daemon-owned status, or until a safe fresh `server-start` or rollback is performed.
 - Refuse ad-hoc server config edits as a workaround. A server config migration is allowed only when
   the evidence names the motivation, reviewer, exact changed fields, backup/rollback path, and
   post-change `server-start` verification.
@@ -410,11 +440,16 @@ No constitution violations identified.
   `answer_needed` so `python3 tools/doc_workflow.py status` still shows the pending human action.
 - Confirm how runtime truth is cross-checked against the live process and launched binary so a
   stale PID file or stale `runtime_status.json` cannot masquerade as current protection evidence.
-- For the May 7 live-hide incident, capture only non-secret server facts needed to classify the
+- When a live process exists but launch path, PID file, runtime status, and detached log evidence do
+  not agree, status MUST remain non-healthy or migration-required. Such a process may be left
+  running while it protects edits, but it cannot satisfy T040, T052, resource sampling, or release
+  trust by implication.
+- For the active live-hide incident, capture only non-secret server facts needed to classify the
   boundary: running PID/binary, current `runtime_status.json` freshness, last observed event,
   last matching title/revision, latest outcome, latest actionable issue, queue depth, processed-ring
   presence for the visible revision if known, and whether the page title is in the server cache.
-  Local repo state from April 30 is stale and must not be used as proof about the May 7 server daemon.
+  Local repo state from earlier runs is stale and must not be used as proof about the current server
+  daemon.
 - Confirm which existing state fields already persist `last_successful_hide_at`,
   `latest_recovery_summary`, compatibility notices, and command-report isolation so the design adds
   fields rather than replacing the surface wholesale.
@@ -478,11 +513,11 @@ No constitution violations identified.
   randomized nightly full recheck selection, compatibility loading of older state shapes, command
   isolation, plain-language TUI status rows, revision-link rendering, lag precision, and failed
   scheduled-verification truth.
-- Add the emergency live-hide regression before other broad tests: a synthetic recentchange for
-  `Пратэсты ў Беларусі (2020—2021)` by `Plaga med` or the configured bot/operator username must
-  dispatch as `LiveWatchedRevision`, update `last_matching_*`, queue a live RevDel action when the
-  revision is not already processed, and record an explicit failed live-hide outcome if RevDel/auth
-  fails. Same-account edits must not be silently skipped.
+- Add the emergency live-hide regression before other broad tests: a synthetic recentchange for a
+  synthetic watched sensitive title by a synthetic operator-account actor must dispatch as
+  `LiveWatchedRevision`, update `last_matching_*`, queue a live RevDel action when the revision is
+  not already processed, and record an explicit failed live-hide outcome if RevDel/auth fails.
+  Operator-account edits must not be silently skipped.
 - Add controlled tests for repeated throttle behavior, recovery convergence, source-triggered catch
   up under backoff, the `Last 24 hours` preset, and checkpoint-freshness summaries with stale-page
   coverage age.
@@ -503,7 +538,9 @@ No constitution violations identified.
   rollback/fallback to the last trusted config.
 - Before checking T040, record the approved path 1 evidence: backup or operator statement that the
   server config was updated, non-secret `server-start` receipt, PID/runtime/log paths, daemon-owned
-  status freshness, and terminal logout survival. Keep this evidence concise.
+  status freshness, and terminal logout survival. Keep this evidence concise. If the current
+  server-running status reports a launch-path or PID mismatch, record it as a T040 blocker and
+  resolve it before T052; do not convert it into launch success by inference.
 - Before release trust is claimed for any incompatible surface change, produce explicit evidence of:
   the compatibility verdict, required human approval checkpoint, required operator migration steps,
   and the fallback or rollback path to the last trusted workflow.

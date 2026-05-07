@@ -8,7 +8,8 @@ docmeta:
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan human-review queue update on 2026-05-06
   - user approval on 2026-05-07
-  - live-hide incident update on 2026-05-07
+  - live-hide incident update with sensitive identifiers redacted
+  - server-running launch-path mismatch update on 2026-05-07
 ---
 
 # Quickstart: Real-Time Suppression Recovery
@@ -47,13 +48,14 @@ cosmetic UI work. Verify this path first:
    status when blocked.
 6. Rate-limit/backoff does not starve live hiding and does not show false healthy status.
 
-## Active Live-Hide Incident Recorded On 2026-05-07
+## Active Live-Hide Incident With Sensitive Identifiers Redacted
 
-The operator provided a RecentChanges screenshot from 2026-05-07 showing
-`Пратэсты ў Беларусі (2020—2021)` edited by `Plaga med` while the public `заблакаваць` action was
-still available. This is a failed T041 live-hide smoke result. The page is present in the repo-local
-suppression-list cache, so the next implementation pass must assume a live-path failure until target
-server evidence proves otherwise.
+The operator provided a screenshot showing a watched sensitive page edit by an operator-controlled
+account while the public hide action was still available. The concrete page, account, and revision
+identifiers are intentionally omitted from tracked repository docs, tests, contracts, examples,
+fixtures, and code comments. This is a failed T041
+live-hide smoke result. The page is known to be in the relevant watched set, so the next
+implementation pass must assume a live-path failure until target-server evidence proves otherwise.
 
 Immediate handling:
 
@@ -68,12 +70,34 @@ Immediate handling:
 4. Fix the first failing boundary in the live path before broad docs, resource sampling, or TUI
    polish: event observation, watched-title match, processed-revision skip, queue handoff, RevDel/auth
    result, or stale/wrong deployed binary.
-5. Add a regression with a synthetic recentchange for `Пратэсты ў Беларусі (2020—2021)` by
-   `Plaga med` or the configured bot/operator username. Same-account eligible edits must dispatch as
-   live watched revisions and must not be silently skipped.
+5. Add a regression with a fully synthetic watched title and synthetic operator-account actor.
+   Operator-account eligible edits must dispatch as live watched revisions and must not be silently
+   skipped.
 
 Until this incident is fixed and retested on the deployed path, the MVP is blocked even if T040
 launch evidence or T042 resource evidence is later collected.
+
+## Server Running But Launch Evidence Still Blocked
+
+After the server was made to run again, the operator-visible status showed a live process, but it
+also showed non-healthy protection because the launch path, PID file, daemon-owned runtime status,
+and detached-log evidence did not agree. This is not a new config decision. It is blocked T040
+evidence.
+
+Treat this state as follows:
+
+1. Do not stop a possibly protective daemon only to make the evidence cleaner.
+2. Do not mark T040 complete from process liveness alone.
+3. Capture only non-secret facts: whether the live process is the deployed suppressor binary, whether
+   `runtime_status.json` is fresh, whether its launch-path PID matches the live process and PID file,
+   whether the detached log path belongs to the same run, and whether the original `server-start`
+   receipt exists.
+4. If the evidence matches, record T040 and proceed to T052 controlled live or dry-run smoke.
+5. If the evidence does not match, keep deployment trust blocked and either run a safe fresh
+   `server-start` after duplicate-daemon risk is handled, or fall back to the last trusted workflow.
+
+T052 and T042 remain blocked until the launch-path mismatch is resolved or an explicit human
+go/no-go exception records the risk.
 
 ## Local Evidence Recorded On 2026-05-05
 
@@ -294,11 +318,12 @@ Doc metadata already in sync.
 The blocker is the known inactive `002` metadata issue. It was not fixed during the active
 suppressor freeze because it is outside `001-real-time-suppression`.
 
-## Current MVP Go/No-Go Recorded On 2026-05-06
+## Current MVP Go/No-Go Updated On 2026-05-07
 
-Decision: BLOCK target-host deployment trust until the May 7 T041 live-hide incident is fixed and
-T040, T041, and T042 evidence is recorded. T039 records the config-stability block and Q001 now
-approves path 1: target-host config migration to the reviewed tracked baseline.
+Decision: BLOCK target-host deployment trust until the active T041 live-hide incident is fixed and
+T040, T041, T052, and T042 evidence is recorded. T039 records the config-stability block and Q001
+now approves path 1: target-host config migration to the reviewed tracked baseline. The latest
+server-running status keeps T040 blocked because launch-path/PID/runtime evidence does not agree.
 
 Current human-review packet:
 
@@ -307,7 +332,8 @@ Current human-review packet:
 - The urgent next action is RQ002/T040 evidence collection.
 
 - ACCEPT local test evidence: `rtk cargo test --manifest-path suppressor/Cargo.toml --
-  --test-threads=1` passed with `204 passed`.
+  --test-threads=1` passed with `206 passed` for the current local source tree after synthetic
+  fixture cleanup.
 - ACCEPT local server-build evidence: `rtk make -C suppressor build-server` produced the
   aarch64 Linux musl binary at `target/aarch64-unknown-linux-musl/release/suppressor`.
 - ACCEPT local command/report evidence: emergency catch-up defaults, `Last 24 hours`,
@@ -318,11 +344,13 @@ Current human-review packet:
 - BLOCK config-stability launch evidence: non-secret `server-start` receipt, PID/runtime/log paths,
   daemon-owned status freshness, and terminal logout survival still need to be recorded before T040
   can be checked.
+- BLOCK current server-running launch evidence: process liveness exists, but the latest status shows
+  launch-path/PID/runtime evidence mismatch, so it is not trusted `server-start` evidence yet.
 - BLOCK detached server-start deployment trust: target-host PID/runtime/log evidence and SSH
   logout-survival evidence are still missing.
 - BLOCK live-hide deployment trust: no target-host live or controlled dry-run watched-edit smoke
-  result is recorded yet, and the 2026-05-07 screenshot is a failed smoke result for a watched
-  political page.
+  result is recorded yet, and the operator-provided screenshot is a failed smoke result for a
+  watched sensitive page.
 - BLOCK recovery/reconciliation/nightly deployment trust: local scheduler and status tests pass,
   but target-host recovery, rolling last-24h verification, and nightly full-recheck evidence remain
   pending.
@@ -427,6 +455,10 @@ daemon-owned status. If that receipt cannot be shown, if `launch_path` is not `s
 the PID/status/log evidence cannot be tied to the same process, keep T040 blocked until a fresh
 `server-start` run can be performed safely or a duplicate-live-daemon diagnostic is recorded.
 
+The current server-running screenshot falls into the blocked category when it shows a live process
+but mismatched launch-path PID, PID file, runtime status, or detached log evidence. Record the
+mismatch as negative T040 evidence; do not treat it as launch success.
+
 Acceptable T040 evidence is limited to:
 
 - command line with config path, without environment values
@@ -442,7 +474,9 @@ Acceptable T040 evidence is limited to:
   config, plus the safe field names changed by the path 1 migration
 
 Forbidden evidence includes `.env` values, passwords, cookies, tokens, session material, raw hidden
-text, sensitive article content, full unredacted logs, and any command output that embeds secrets.
+text, sensitive article content, real sensitive-edit incident page titles, actor names, revision
+IDs, diff URLs, comments, screenshots, full unredacted logs, and any command output that embeds
+secrets or identifies a real sensitive edit.
 
 Daemon-owned status freshness for T040 means all of the following:
 
@@ -466,6 +500,8 @@ Partial evidence outcomes:
 - Target-host access interruption, duplicate live daemon, stale PID, missing receipt, or stale
   runtime status keeps RQ002 open; do not mark T040 complete by implication from T041 live-smoke or
   T042 resource evidence.
+- Live process plus launch-path/PID/runtime mismatch keeps T040 open even when the TUI can read a
+  fresh status file. Resolve the mismatch before T052.
 
 If the daemon is currently protecting edits but T040 evidence is incomplete, do not stop it only to
 make documentation cleaner. Preserve protection, record the missing evidence, and keep deployment
@@ -723,7 +759,7 @@ Before trusting a new version in the operator environment:
 1. Use the approved test page:
 
 ```text
-Удзельнік:Plaga med Bot/suppressor/tests
+configured bot test page
 ```
 
 2. Confirm benchmark edits are bot-marked and test-only.
@@ -744,6 +780,39 @@ Minimum resource evidence for T042:
   reaches its cap without degraded status, `runtime_status.json` or `command_report.json` exceeds
   1 MiB, repeated-root-cause log growth exceeds 10 MiB/hour without mitigation, or any field keeps
   growing monotonically after the active sample returns idle.
+
+## Live-Hide Hotfix Local Evidence
+
+Recorded for T047 through T051 with sensitive identifiers redacted and only synthetic fixtures in
+tracked tests, docs, contracts, examples, fixtures, and code comments:
+
+- Code fix: live recentchange handling no longer exits early when a watched revision is already in
+  the processed ring. It now hands the candidate to the shared action dispatcher so `queued`,
+  `already-processed`, and duplicate outcomes all update runtime status consistently.
+- Synthetic regression coverage: a watched synthetic title edited by a synthetic operator-account
+  actor dispatches as a live watched revision and queues a live hide action instead of being
+  filtered as own-account, bot, or non-watched noise.
+- Processed-revision coverage: a watched processed revision is not requeued, but it records an
+  `already-processed` outcome with the live mode instead of disappearing silently from operator
+  status.
+- Targeted test results:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml stream::tests -- --test-threads=1`
+  passed with 23 tests.
+- Targeted queue/dispatcher result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml dispatch_action -- --test-threads=1`
+  passed with 3 tests.
+- Targeted worker result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml worker::tests -- --test-threads=1`
+  passed with 2 tests.
+- Full serial suppressor result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` passed with 206 tests.
+- Server artifact result: sandboxed `rtk make -C suppressor build-server` was blocked by Zig cache
+  write permissions, then the approved escalated rerun completed successfully and printed
+  `target/aarch64-unknown-linux-musl/release/suppressor`.
+
+Remaining deployment evidence: T040, T041, T052, and T042 still require target-host non-secret
+facts, target-host relaunch or restart, a controlled live or dry-run watched-page smoke result, and
+deployment-host resource sampling. Do not treat the local hotfix evidence as target-host proof.
 
 ## Deployment Go/No-Go And Rollback Gate
 

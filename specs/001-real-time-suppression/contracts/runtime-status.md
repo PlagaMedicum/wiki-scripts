@@ -3,7 +3,9 @@ docmeta:
   status: draft
   review: feature-local
   purpose: Runtime status contract for real-time suppression recovery.
-  source: speckit-plan on 2026-04-29
+  source:
+  - speckit-plan on 2026-04-29
+  - speckit-plan server-running launch-path mismatch update on 2026-05-07
 ---
 
 # Contract: Runtime Status
@@ -55,15 +57,15 @@ diagnostics.
     "last_event_observed_at": "2026-04-29T09:10:02Z",
     "last_event_id": "[resume cursor omitted from primary TUI]",
     "last_matching_edit_at": "2026-04-29T09:10:01Z",
-    "last_matching_title": "Касцёл Святога Сымона і Святой Алены",
-    "last_matching_revid": 5133571,
-    "last_matching_revid_url": "https://be.wikipedia.org/wiki/Special:Diff/5133571",
+    "last_matching_title": "Synthetic Watched Page",
+    "last_matching_revid": 9000001,
+    "last_matching_revid_url": "https://example.invalid/wiki/Special:Diff/9000001",
     "last_action_queued_at": "2026-04-29T09:10:01Z",
     "last_action_completed_at": "2026-04-29T09:10:02Z",
     "last_successful_hide_at": "2026-04-29T09:10:02Z",
-    "last_successful_hide_title": "Касцёл Святога Сымона і Святой Алены",
-    "last_successful_hide_revid": 5133571,
-    "last_successful_hide_url": "https://be.wikipedia.org/wiki/Special:Diff/5133571",
+    "last_successful_hide_title": "Synthetic Watched Page",
+    "last_successful_hide_revid": 9000001,
+    "last_successful_hide_url": "https://example.invalid/wiki/Special:Diff/9000001",
     "current_lag_seconds": 0,
     "current_lag_millis": 284,
     "current_lag_source": "stream",
@@ -91,8 +93,8 @@ diagnostics.
     "latest_error": null,
     "latest_actionable_issue": null,
     "latest_outcome": {
-      "title": "Касцёл Святога Сымона і Святой Алены",
-      "revid": 5133571,
+      "title": "Synthetic Watched Page",
+      "revid": 9000001,
       "outcome": "hidden",
       "reason_code": null,
       "mode": "live",
@@ -120,7 +122,7 @@ diagnostics.
     "last_daytime_verification_window_start": "2026-04-28T07:44:03Z",
     "last_daytime_verification_window_end": "2026-04-29T07:44:03Z",
     "last_nightly_full_recheck_at": "2026-04-29T02:17:18Z",
-    "latest_notice": "hidden revid 5133571"
+    "latest_notice": "hidden synthetic revid 9000001"
   },
   "reconciliation": {
     "active": false,
@@ -132,7 +134,7 @@ diagnostics.
       "total_pages": 1465,
       "pages_older_than_target": 0,
       "oldest_full_check_at": "2026-04-29T02:17:18Z",
-      "oldest_full_check_title": "Касцёл Святога Сымона і Святой Алены",
+      "oldest_full_check_title": "Synthetic Watched Page",
       "oldest_full_check_age_seconds": 2475,
       "last_daytime_verification_result": "completed",
       "last_nightly_full_recheck_result": "completed",
@@ -192,8 +194,9 @@ The primary view should not spend its first rows on:
 - `state=stale` means the daemon is running but freshness exceeded threshold and recovery is needed
   or still being evaluated.
 - `state=degraded` or `state=unhealthy` means the stream may still be fresh, but live protection is
-  not trustworthy because the latest actionable live outcome failed, remained unresolved, or is
-  waiting on a recovery path.
+  not trustworthy because the latest actionable live outcome failed, remained unresolved, is waiting
+  on a recovery path, or because launch-path, PID-file, runtime-status, or detached-log evidence
+  does not agree.
 - `state=blocked` means rights, session, or wiki-side conditions prevent continued hiding.
 
 ## Required Field Semantics
@@ -212,6 +215,9 @@ The primary view should not spend its first rows on:
   `tui-managed`, `systemd`, `server-start`, or another explicit supervisor label.
 - `launch_path.pid`, `pid_file`, `runtime_status_file`, and `log_path` must remain non-sensitive and
   must let the operator verify a detached `server-start` daemon after closing the SSH terminal.
+- If a live process exists but `launch_path.pid`, the PID file, daemon-owned runtime status, or log
+  path cannot be tied to the same process and deployed binary, the derived status must include a
+  blocking compatibility notice or non-healthy state rather than allowing a healthy interpretation.
 - `current_task` records the background task the operator should care about now, even if lower-level
   reconciliation counters still exist elsewhere.
 - `latest_actionable_issue` is preferred over raw error codes for primary rendering. Raw
@@ -304,7 +310,7 @@ it may include:
   "total_pages": 1427,
   "pages_older_than_target": 1427,
   "oldest_full_check_at": "2018-01-12T20:19:50Z",
-  "oldest_full_check_title": "Хартыя’97",
+  "oldest_full_check_title": "Synthetic Stale Watched Page",
   "oldest_full_check_age_seconds": 261756000,
   "last_daytime_verification_result": "failed: non-json-response",
   "last_nightly_full_recheck_result": "not-yet-recorded",
@@ -362,3 +368,7 @@ Rules:
   path instead of silently assuming a unit exists.
 - A detached `server-start` launch must identify itself as `server-start` or equivalent
   detached-binary wording so it is not confused with a TUI-managed child or a systemd unit.
+- A detached `server-start` launch is trusted only when process liveness, PID file, runtime status,
+  and launch-path evidence agree. A live process with mismatched evidence remains
+  migration-required or unhealthy until the operator verifies the same run or restarts/falls back
+  safely.

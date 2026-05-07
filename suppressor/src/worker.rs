@@ -219,8 +219,8 @@ mod tests {
             .actions
             .dispatch_action(RevDelDispatch {
                 title: "Foo".to_string(),
-                revids: vec![77],
-                event_id: Some("evt-77".to_string()),
+                revids: vec![0],
+                event_id: Some("evt-0".to_string()),
                 user: Some("User".to_string()),
                 comment: Some("Comment".to_string()),
                 mode: RevDelMode::Live,
@@ -245,10 +245,10 @@ mod tests {
             status.realtime.last_successful_hide_title.as_deref(),
             Some("Foo")
         );
-        assert_eq!(status.realtime.last_successful_hide_revid, Some(77));
+        assert_eq!(status.realtime.last_successful_hide_revid, Some(0));
         assert_eq!(
             status.realtime.last_successful_hide_url.as_deref(),
-            Some("https://be.wikipedia.org/wiki/Special:Diff/77")
+            Some("https://be.wikipedia.org/wiki/Special:Diff/0")
         );
         assert!(status.realtime.last_successful_hide_at.is_some());
         assert_eq!(latest_outcome.outcome, "hidden");
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(latest_outcome.source_label, RevDelMode::Live.source_label());
         assert_eq!(
             latest_outcome.revision_url.as_deref(),
-            Some("https://be.wikipedia.org/wiki/Special:Diff/77")
+            Some("https://be.wikipedia.org/wiki/Special:Diff/0")
         );
         assert_eq!(latest_outcome.observed_at, Some(observed_at));
         assert!(latest_outcome.completed_at.is_some());

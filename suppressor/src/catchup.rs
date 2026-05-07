@@ -556,7 +556,7 @@ mod tests {
             unresolved_items: vec![UnresolvedExposureItem {
                 title: "Sensitive Page".to_string(),
                 revid: 42,
-                revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/42".to_string()),
+                revision_url: Some("https://example.invalid/wiki/Special:Diff/42".to_string()),
                 age_seconds: Some(15),
                 reason: "report-only-not-hidden".to_string(),
                 next_action: "run emergency catch-up without report-only".to_string(),
@@ -578,7 +578,7 @@ mod tests {
             unresolved_items: vec![UnresolvedExposureItem {
                 title: "Sensitive Page".to_string(),
                 revid: 42,
-                revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/42".to_string()),
+                revision_url: Some("https://example.invalid/wiki/Special:Diff/42".to_string()),
                 age_seconds: Some(15),
                 reason: "revisiondelete failed token=abc123 cookie=session raw comment".to_string(),
                 next_action: "inspect response body: <html>denied</html> and password=secret"

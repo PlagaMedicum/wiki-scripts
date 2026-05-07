@@ -25,6 +25,10 @@ For safety-, reliability-, or performance-sensitive work, the docs gate is also 
 resource goals, low-spec verification, recovery/status evidence, and durable incident lessons must
 be present in the affected maintained or project-local docs. Documentation can be concise, but it
 must not drop the performance evidence or operational lessons needed to repeat the decision.
+For sensitive-edit, suppression, moderation, or incident work, those lessons must be preserved with
+synthetic or redacted evidence only. The docs gate must not pass tracked files that copy real editor
+names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts identifying a
+real sensitive edit.
 
 Config changes are part of that evidence. If tracked config files, config schema, defaults,
 environment variable names, loading semantics, or deployment-required sections changed, the docs

@@ -8,27 +8,28 @@ docmeta:
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
   - speckit-plan human-review queue update on 2026-05-06
-  - speckit-plan live-hide incident update on 2026-05-07
+  - speckit-plan live-hide incident update with sensitive identifiers redacted
+  - speckit-plan server-running launch-path mismatch update on 2026-05-07
 ---
 
 # Research: Real-Time Suppression Recovery
 
 
-## Decision: Treat the May 7 visible watched edit as the immediate live-hide incident
+## Decision: Treat the active visible watched edit as the immediate live-hide incident
 
-**Rationale**: The 2026-05-07 RecentChanges screenshot shows a watched political page,
-`Пратэсты ў Беларусі (2020—2021)`, with a still-available public hide action after a live edit by
-`Plaga med`. The repo-local cache includes that title, and the feature already requires
-same-account edits to be processed. Therefore the next implementation pass should not add broader
-planning or polish. It should isolate the smallest live-path boundary that failed: the server daemon
-did not see the event, matched the wrong wiki/title, used a stale watched cache, treated the revision
-as already processed, failed to queue work, failed RevDel/auth after queueing, or the visible server
-is running a stale or wrong binary.
+**Rationale**: The operator-provided screenshot shows a watched sensitive page with a
+still-available public hide action after a live edit by an operator-controlled account. Concrete
+page, account, and revision identifiers are intentionally omitted from repository docs and tests.
+The feature already requires operator-account edits to be processed. Therefore the next
+implementation pass should not add broader planning or polish. It should isolate the smallest
+live-path boundary that failed: the server daemon did not see the event, matched the wrong
+wiki/title, used a stale watched cache, treated the revision as already processed, failed to queue
+work, failed RevDel/auth after queueing, or the visible server is running a stale or wrong binary.
 
 The operator should preserve protection first: if an exposed revision ID is known, hide it manually
 or run emergency catch-up before waiting for a code fix. After that, use non-secret server evidence
-to classify the failure and add a regression test around a watched political page edited by the
-same operator account.
+to classify the failure and add a regression test around a synthetic watched sensitive page edited by
+a synthetic operator-account actor.
 
 **Alternatives considered**:
 
@@ -38,6 +39,31 @@ same operator account.
   live hiding; Q001 already approved the config migration path.
 - Broaden into a large rewrite of stream/cache/worker architecture. Rejected because the incident
   needs a small hotfix at the actual failing boundary.
+
+## Decision: Treat server-running launch-path mismatch as blocked T040 evidence
+
+**Rationale**: After the server was made to run again, the operator-visible status showed a live
+process but still reported non-healthy protection because launch-path, PID-file, runtime-status,
+and detached-log evidence did not agree. This is useful evidence that the TUI is applying the
+correct safety rule, but it is not a successful launch proof. A running process may be left alone if
+it is currently protecting edits, yet production trust requires the process to be tied to the
+deployed binary, a valid `server-start` receipt or last-trusted fallback, and fresh daemon-owned
+`runtime_status.json`.
+
+The accepted plan is therefore: keep T040 open, avoid new config churn, preserve any active
+protection, then either collect the original non-secret `server-start` receipt and matching
+PID/status/log facts, perform a safe fresh `server-start` when duplicate-daemon risk is handled, or
+explicitly roll back to the last trusted launch workflow. T052 smoke and T042 resource evidence
+must wait until this mismatch is resolved or a human go/no-go exception records the risk.
+
+**Alternatives considered**:
+
+- Mark T040 complete because the process is alive. Rejected because a stale PID file or stale
+  `runtime_status.json` can outlive the daemon and falsely imply protection.
+- Stop the process immediately to force a clean receipt. Rejected because a possibly protective
+  daemon should not be stopped solely for tidier evidence while sensitive edits may arrive.
+- Reopen config policy. Rejected because Q001 already approved path 1; the current blocker is
+  launch-path evidence alignment, not another config decision.
 
 ## Decision: Automatic recovery anchors on `last_successful_hide_at`
 
@@ -58,8 +84,8 @@ older documented trusted anchor only when this value is missing or unreadable.
 
 ## Decision: Reset the remaining work to a suppressor MVP stabilization path
 
-**Rationale**: Constitution v1.8.0 declares an active human-safety freeze for this feature and makes
-config surfaces human-reviewed operator contracts. The
+**Rationale**: Constitution v1.9.0 declares an active human-safety freeze for this feature, makes
+config surfaces human-reviewed operator contracts, and adds public-repo privacy rules. The
 highest-risk gap from analysis is not missing feature ambition; it is that critical daemon and
 launch-path verification is too late while broad status, TUI, and reporting work has expanded. The
 remaining work must therefore prioritize the smallest server-runnable daemon MVP: live hiding,

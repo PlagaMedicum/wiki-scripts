@@ -81,6 +81,8 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - An edit is already hidden manually or by another operator before the suppressor acts.
 - The operator console is open but not refreshed while background hiding continues.
 - Logs, notices, and reports must avoid storing sensitive article content or hidden text.
+- Tracked repository docs, tests, contracts, examples, and code comments must not contain real page,
+  actor, revision, diff URL, comment, screenshot, or log details for sensitive-edit incidents.
 - A recent-change event or API result is missing expected metadata such as title, revision ID, actor, timestamp, or comment flags.
 - A catch-up window includes pages that moved, disappeared, or left the watched set during the window.
 - Retry exhaustion leaves unresolved items after catch-up and requires operator escalation or documented release blocking.
@@ -123,7 +125,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **FR-009**: The system MUST provide an accident-window coverage report that separates hidden, already-hidden, skipped, failed, and unresolved edits, and it MUST also provide a clearly labeled operator-visible `Last 24 hours` verification preset so the operator can run or review a rolling 24-hour check without supplying custom timestamps.
 - **FR-010**: The system MUST retry transient hiding failures while avoiding duplicate or conflicting actions for edits that are already hidden.
 - **FR-011**: The system MUST preserve safety boundaries by hiding only edits that match the watched-page set and the suppressor policy.
-- **FR-012**: The system MUST produce audit information sufficient for operational review without exposing sensitive content, hidden text, credentials, tokens, or session secrets.
+- **FR-012**: The system MUST produce audit information sufficient for operational review without exposing sensitive content, hidden text, credentials, tokens, session secrets, or real sensitive-edit incident identifiers in tracked repository artifacts.
 - **FR-013**: The system MUST make "daemon running but real-time hiding ineffective" visible as an unhealthy or degraded-protection state rather than a normal running state, even when fresh target-wiki events are still arriving.
 - **FR-014**: The system MUST support verification with controlled events so regressions in immediate hiding, stall detection, catch-up, and reporting can be tested before production use.
 - **FR-015**: The system MUST treat changes to `Удзельнік:Wizardist/SuppressionList` and configured source-adjacent request pages, including `Вікіпедыя:Запыты да схавальнікаў`, as immediate recovery triggers that refresh source state and run bounded catch-up for newly added or recently affected watched pages, or visibly defer that follow-up with a retry point when shared recovery limits prevent immediate execution.
@@ -167,7 +169,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **API Failure Snapshot**: A compact non-sensitive classification of a MediaWiki/API/transport failure. Key attributes include failure class, API code, HTTP status, retryability, failure context, safe sample title/revision, and timestamp.
 - **Source Refresh Event**: An observed source-list or request-page change plus its refresh and immediate catch-up result. Key attributes include trigger title, trigger revision, old/new source revision, added/removed titles, catch-up scope, outcome, deferred-by-backoff status, retry point, and safe error details.
 - **Operator Command Report**: A bounded summary emitted by a one-shot operator action. Key attributes include action type, outcome counts, unresolved totals, safe next action, command provenance, and its separation from daemon-owned real-time status.
-- **Benchmark Run**: A controlled verification run on `Удзельнік:Plaga med Bot/suppressor/tests`. Key attributes include run ID, bot-marked edit count, timing samples, percentile summaries, and unresolved benchmark revisions.
+- **Benchmark Run**: A controlled verification run on a configured bot test page. Key attributes include run ID, bot-marked edit count, timing samples, percentile summaries, and unresolved benchmark revisions.
 - **Deployment Artifact**: The server binary produced for rsync deployment. Key attributes include
   target triple, build command, artifact path, source revision or dirty-state note, and verification
   result without credentials or secrets.
@@ -190,7 +192,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **SC-007**: When `Удзельнік:Wizardist/SuppressionList` adds a watched title during daemon operation, the daemon refreshes the source state and starts bounded catch-up for newly added titles without waiting for manual reload or scheduled reconciliation.
 - **SC-008**: Catch-up and coverage tests prove that MediaWiki timestamp parameters contain no fractional precision and that a mocked `badtimestamp` response is surfaced as a classified non-retryable API failure instead of thousands of per-page warnings.
 - **SC-009**: Runtime warning output for a repeated catch-up/API root cause is coalesced into an aggregate summary with counts and safe samples, and the TUI remains readable on a compact terminal.
-- **SC-010**: A benchmark run using `Удзельнік:Plaga med Bot/suppressor/tests` creates only bot-marked test edits, accounts for every benchmark revision, and records publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
+- **SC-010**: A benchmark run using a configured bot test page creates only bot-marked test edits, accounts for every benchmark revision, and records publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
 - **SC-011**: Low-spec verification records idle and active resource use for daemon alone and daemon plus TUI, including CPU percentage, RSS memory, live queue depth and cap, catch-up or reconciliation queue depth and cap, API concurrency, runtime-status size, command-report size, processed-revision state size, detached log growth rate, and coalesced-warning counts. MVP release evidence MUST include at least a 10-minute idle sample plus one active live/recovery/backoff sample on the deployment host, and it MUST block release unless API concurrency remains at or below the default cap of 2, queues stay below their configured caps or surface degraded status before saturation, status/report files remain below 1 MiB each, repeated-root-cause log growth stays below 10 MiB/hour or has a documented mitigation, and no measured field shows unbounded growth after the active sample returns idle.
 - **SC-012**: Durable suppressor docs and targeted code comments/tests capture the incident lessons, performance evidence, and operational checks needed to prevent recurrence, including timestamp formatting, source-triggered catch-up, API error classification, warning coalescing, and benchmark safety.
 - **SC-013**: Once catch-up or backoff ends and no other blocking or recovery condition remains, the operator console leaves the transient recovery state within 10 seconds and shows the resulting healthy, unhealthy, reconnecting, or blocked state.
@@ -245,10 +247,13 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Update operator-facing docs and release evidence to explain revision-link rendering, coverage-window naming, and how the operator should interpret recovery start points derived from the last successful hide.
 - Update operator-facing docs and release evidence to explain the required approval point, compatibility verdict, and fallback or rollback path whenever a release changes the trusted operator workflow or status artifacts.
 - Update implementation docs with internal service boundaries, resource-economy defaults, state/log bounds, and incident lessons that should shape future suppressor changes.
-- Update operations docs with low-spec expectations, benchmark use of `Удзельнік:Plaga med Bot/suppressor/tests`, bot-edit requirements, and release evidence interpretation.
+- Update operations docs with low-spec expectations, configured bot test page benchmark use, bot-edit requirements, and release evidence interpretation.
 - Update operator and operations docs to explain daemon-owned status truth, one-shot command separation, launch-path-aware verification, and degraded protection versus mere stream freshness.
 - Update operator-facing docs to define the primary status view in operator language, including uptime, current task, recovery window, last successful hide, latest actionable error, and which secondary diagnostics are intentionally de-emphasized.
 - Update operator-facing docs to state the post-publication architecture limit explicitly and avoid any claim that the current feature can guarantee zero first-view prevention.
+- Update feature-local docs, contracts, tests, and examples to use synthetic or redacted evidence for
+  sensitive-edit incidents, never real page titles, actor names, revision IDs, diff URLs, comments,
+  screenshots, or log excerpts.
 - Update operator-facing docs or quickstart with the `make build-server` wrapper for
   `target/aarch64-unknown-linux-musl/release/suppressor` and the requirement not to store server
   credentials in release evidence.

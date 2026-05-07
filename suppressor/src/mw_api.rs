@@ -920,7 +920,7 @@ mod tests {
                       {
                         "title": "Fixture Page",
                         "timestamp": "2026-04-29T09:10:02Z",
-                        "revid": 5133571
+                        "revid": 9000001
                       }
                     ]
                   }
@@ -935,7 +935,7 @@ mod tests {
         let probe = client.fetch_latest_recent_change().await.unwrap().unwrap();
 
         assert_eq!(probe.title.as_deref(), Some("Fixture Page"));
-        assert_eq!(probe.revid, Some(5133571));
+        assert_eq!(probe.revid, Some(9000001));
         assert_eq!(probe.timestamp.to_rfc3339(), "2026-04-29T09:10:02+00:00");
     }
 

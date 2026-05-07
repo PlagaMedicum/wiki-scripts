@@ -630,9 +630,6 @@ async fn handle_live_candidate(
     candidate: LiveRevisionCandidate,
     observed_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<()> {
-    if runtime.contains_processed_revid(candidate.revid).await {
-        return Ok(());
-    }
     runtime
         .dispatch_action(RevDelDispatch {
             title: candidate.title,
@@ -800,7 +797,7 @@ mod tests {
                   {{
                     "title": "Fixture Page",
                     "timestamp": "{}",
-                    "revid": 5133571
+                    "revid": 9000001
                   }}
                 ]
               }}
@@ -1033,6 +1030,38 @@ mod tests {
     }
 
     #[test]
+    fn operator_account_watched_revision_routes_to_live_dispatch() {
+        let title = "Synthetic Sensitive Page";
+        let event = SyntheticRecentChange::default()
+            .with_title(title)
+            .with_user("SyntheticOperator")
+            .with_revision_ids(Some(20), Some(88))
+            .parse();
+        let request_pages = vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()];
+        let watched = HashSet::from([title.to_string()]);
+        let dispatch = dispatch_recentchange_event(
+            &event,
+            Some("stream-88"),
+            &RecentChangeDispatchContext {
+                source_title_normalized: "Удзельнік:Wizardist/SuppressionList",
+                request_pages: &request_pages,
+                watched_set: &watched,
+            },
+        );
+
+        match dispatch {
+            RecentChangeDispatch::LiveWatchedRevision(candidate) => {
+                assert_eq!(candidate.title, title);
+                assert_eq!(candidate.normalized_title, title);
+                assert_eq!(candidate.revid, 88);
+                assert_eq!(candidate.user.as_deref(), Some("SyntheticOperator"));
+                assert_eq!(candidate.event_id.as_deref(), Some("stream-88"));
+            }
+            _ => panic!("expected operator-account watched revision live dispatch"),
+        }
+    }
+
+    #[test]
     fn unwatched_revision_routes_to_ignored_live_dispatch() {
         let event = SyntheticRecentChange::default()
             .with_title("Baz")
@@ -1095,6 +1124,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operator_account_watched_revision_event_is_queued_for_live_hiding() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let title = "Synthetic Sensitive Page";
+        harness
+            .runtime
+            .cache
+            .write()
+            .await
+            .replace_snapshot(test_snapshot(3, &[title], &[title], "synthetic"));
+        let event = SyntheticRecentChange::default()
+            .with_title(title)
+            .with_user("SyntheticOperator")
+            .with_revision_ids(Some(87), Some(88))
+            .parse();
+
+        let event_id = handle_recentchange_event(&harness.runtime, event, Some("stream-88"))
+            .await
+            .unwrap();
+
+        let action = harness.work_rx.try_recv().unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(event_id.as_deref(), Some("stream-88"));
+        assert_eq!(action.title, title);
+        assert_eq!(action.revids, vec![88]);
+        assert_eq!(action.user.as_deref(), Some("SyntheticOperator"));
+        assert_eq!(action.mode.label(), RevDelMode::Live.label());
+        assert_eq!(status.realtime.last_matching_title.as_deref(), Some(title));
+        assert_eq!(status.realtime.last_matching_revid, Some(88));
+        assert_eq!(
+            status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .map(|outcome| outcome.outcome.as_str()),
+            Some("queued")
+        );
+    }
+
+    #[tokio::test]
     async fn processed_watched_revision_is_not_requeued() {
         let temp = tempdir().unwrap();
         let mut harness =
@@ -1114,6 +1185,10 @@ mod tests {
         assert!(harness.work_rx.try_recv().is_err());
         assert_eq!(status.realtime.last_matching_title.as_deref(), Some("Foo"));
         assert!(status.realtime.last_action_queued_at.is_none());
+        let outcome = status.realtime.latest_outcome.as_ref().unwrap();
+        assert_eq!(outcome.outcome, "already-hidden");
+        assert_eq!(outcome.reason_code.as_deref(), Some("already-processed"));
+        assert_eq!(outcome.mode, RevDelMode::Live.label());
     }
 
     #[tokio::test]

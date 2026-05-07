@@ -10,14 +10,13 @@ docmeta:
 
 <!--
 Sync Impact Report
-Version change: 1.7.0 -> 1.8.0
+Version change: 1.8.0 -> 1.9.0
 Modified principles:
-- V. Compatibility, Non-Destructive Change, And Explicit Approval -> V. Stable Config,
-  Compatibility, Non-Destructive Change, And Explicit Approval
-- Workflow And Quality Gates (added mandatory config-change motivation, human review, and
-  deployment evidence requirements)
+- Added IX. Public-Repo Privacy For Sensitive Edit Evidence
+- IV. Deterministic Documentation, Safe Writes, And Honest Status (expanded tracked evidence privacy)
+- Workflow And Quality Gates (added mandatory synthetic-fixture and redaction requirements)
 Added sections:
-- None
+- IX. Public-Repo Privacy For Sensitive Edit Evidence
 Removed sections:
 - None
 Templates requiring updates:
@@ -27,9 +26,22 @@ Templates requiring updates:
 - ✅ README.md
 - ✅ specs/000-repo-governance/spec.md
 - ✅ specs/000-repo-governance/quickstart.md
-- ✅ .specify/feature.json
 - ✅ .specify/extensions/docs/README.md
 - ✅ .specify/extensions/docs/commands/speckit.docs.md
+- ✅ specs/001-real-time-suppression/spec.md
+- ✅ specs/001-real-time-suppression/plan.md
+- ✅ specs/001-real-time-suppression/tasks.md
+- ✅ specs/001-real-time-suppression/quickstart.md
+- ✅ specs/001-real-time-suppression/contracts/runtime-status.md
+- ✅ suppressor/src/catchup.rs
+- ✅ suppressor/src/commands.rs
+- ✅ suppressor/src/runtime.rs
+- ✅ suppressor/src/state.rs
+- ✅ suppressor/src/stream.rs
+- ✅ suppressor/src/tui_status.rs
+- ✅ suppressor/src/tui_view.rs
+- ✅ suppressor/src/worker.rs
+- ✅ suppressor/src/mw_api.rs
 - ⚠ `.specify/templates/commands/*.md` is not present in this repo; repo-local command guidance was checked in `.specify/extensions/docs/commands/` instead
 Follow-up TODOs:
 - Docs gate is blocked by unrelated inactive feature metadata:
@@ -78,7 +90,9 @@ authoritative temporary surface. Broad docs-maintenance rewrites MUST offer an i
 narrowed execution path before mutation, and feature-generation steps MUST NOT overwrite filled
 artifacts unless an explicit overwrite action is requested. Docs and operator surfaces MUST
 distinguish current behavior from future direction, and they MUST NOT silently imply that an old
-verification path or setup is still authoritative when it is not.
+verification path or setup is still authoritative when it is not. Tracked docs, examples,
+contracts, tests, code comments, and release evidence MUST NOT preserve real sensitive-edit
+incident identifiers when synthetic or redacted evidence can prove the same lesson.
 
 ### V. Stable Config, Compatibility, Non-Destructive Change, And Explicit Approval
 
@@ -143,6 +157,22 @@ non-essential optimization MUST wait until that MVP is stable. Token and time ec
 agents MUST use narrow context, small patches, and the shortest meaningful tests, but MUST NOT skip
 critical daemon, recovery, reconciliation, or safety verification.
 
+### IX. Public-Repo Privacy For Sensitive Edit Evidence
+
+This repository is public. Work that involves hiding, suppressing, reverting, moderating, or
+otherwise protecting sensitive wiki edits MUST NOT commit real personal or incident-identifying
+details about those edits to tracked repository artifacts. Prohibited tracked evidence includes real
+editor account names, IPs, page titles, revision IDs, diff URLs, comments, timestamps, screenshots,
+log excerpts, or text snippets when those details identify how a real person edited a sensitive page
+or article. Tests, contracts, fixtures, docs, code comments, and examples MUST use synthetic titles,
+synthetic actor names, synthetic revision IDs, synthetic URLs, aggregate counts, outcome classes, or
+redacted placeholders instead. Operator-only diagnostics may use the minimum real identifiers needed
+to protect an exposed edit during live operation, but those identifiers MUST stay out of Git history
+and public issue/task/doc/code surfaces unless the human owner explicitly approves a specific
+public-safe exception before it is written. If an agent discovers real sensitive-edit identifiers in
+tracked files, it MUST stop expanding that evidence, replace it with synthetic or redacted material,
+and treat the cleanup as safety work before release trust.
+
 ## Language And Deployment Policy
 
 - Python is the default language for smaller and faster-turnaround wiki automation.
@@ -192,6 +222,10 @@ critical daemon, recovery, reconciliation, or safety verification.
   claimed.
 - Generated text is proposal text until human-reviewed. Stable decisions MUST be fixed in code,
   tests, governance docs, or explicit comments that preserve lessons learned.
+- Incident lessons involving sensitive edits MUST be preserved only with synthetic fixtures,
+  redacted placeholders, aggregate counts, and non-identifying outcome classes. Real editor names,
+  page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts that identify a real
+  sensitive edit MUST NOT be committed.
 - When durable lessons are lifted from a feature or review, maintainers SHOULD preserve a light
   trace to the originating feature or decision when that materially helps later audit or git
   history lookup.
@@ -208,7 +242,8 @@ critical daemon, recovery, reconciliation, or safety verification.
   does not rely on chat history to remember why the fix exists.
 - Documentation work MAY be terse, but it MUST preserve enough context, evidence, and lessons for a
   future maintainer or operator to repeat the decision without depending on chat history.
-- Tooling, logging, and metrics MUST avoid secrets and sensitive payloads.
+- Tooling, logging, metrics, tests, docs, examples, and release evidence MUST avoid secrets,
+  sensitive payloads, hidden text, and real sensitive-edit incident identifiers.
 - Operator surfaces, CLIs, and Makefiles SHOULD stay small, well-described, and layered. Prefer a
   few clear entrypoints over long flat command lists that only make sense after rereading docs.
 - If a human-safety freeze is active, `.specify/feature.json` MUST point at the active safety feature
@@ -243,4 +278,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.8.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-06
+**Version**: 1.9.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-07

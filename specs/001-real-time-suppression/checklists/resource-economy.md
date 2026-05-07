@@ -35,7 +35,7 @@ docmeta:
 ## Requirement Consistency
 
 - [x] CHK015 Are resource-economy requirements consistent between the constitution v1.5.0 amendment, feature spec, implementation plan, and generated tasks? [Consistency, Spec §Assumptions, Plan §Constitution Check, Tasks §Phase 6]
-- [x] CHK016 Are benchmark requirements consistent between the spec, operator-command contract, quickstart, and task list about using only `Удзельнік:Plaga med Bot/suppressor/tests` and marking edits as bot edits? [Consistency, Spec §SC-010, Contract §Test Page Benchmark, Quickstart §Bot Test Page Benchmark, Tasks §T076-T090]
+- [x] CHK016 Are benchmark requirements consistent between the spec, operator-command contract, quickstart, and task list about using only the configured bot test page and marking edits as bot edits? [Consistency, Spec §SC-010, Contract §Test Page Benchmark, Quickstart §Bot Test Page Benchmark, Tasks §T076-T090]
 - [x] CHK017 Are API timestamp requirements consistent between the runtime finding, functional requirement, success criterion, research decision, and foundational tasks? [Consistency, Spec §FR-016, Spec §SC-008, Research §Serialize MediaWiki API timestamps, Tasks §T006-T007]
 - [x] CHK018 Are warning-summary requirements consistent between the API failure requirement, TUI contract, research decision, and US2 tasks? [Consistency, Spec §FR-017, Spec §SC-009, Contract §Runtime Status, Tasks §T045-T057]
 - [x] CHK019 Are durable-documentation requirements consistent with the feature close-out note that feature-local planning artifacts may be removed after lessons are copied into maintained suppressor docs? [Consistency, Spec §FR-020, Spec §SC-012, Quickstart §Feature Close-Out Notes]

@@ -8,6 +8,7 @@ docmeta:
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
   - speckit-plan human-review queue update on 2026-05-06
+  - speckit-plan server-running launch-path mismatch update on 2026-05-07
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -467,7 +468,8 @@ Fields:
 - `started_at`: Time the command spawned the daemon child.
 - `verification_deadline_seconds`: Maximum startup wait before the command fails.
 - `verification_result`: `running`, `already-running`, `stale-pid`, `missing-config`,
-  `missing-auth`, `status-timeout`, `spawn-failed`, or `unhealthy`.
+  `missing-auth`, `status-timeout`, `spawn-failed`, `pid-mismatch`,
+  `launch-path-mismatch`, `runtime-status-mismatch`, `already-running-untrusted`, or `unhealthy`.
 - `next_action`: Compact safe operator instruction when startup did not become trustworthy.
 
 Validation rules:
@@ -475,6 +477,9 @@ Validation rules:
 - A successful launch requires both a live child process and daemon-owned runtime status evidence.
 - The command must not overwrite a trustworthy live daemon or silently treat stale PID/status files
   as healthy.
+- A live process whose PID file, launch-path PID, runtime-status writer, or detached log evidence
+  cannot be tied to the same `server-start` run is `already-running-untrusted` or a mismatch result,
+  not `running`.
 - Secrets, cookies, tokens, hidden text, and sensitive article content must not appear in the launch
   receipt or detached log path.
 - The detached child must not depend on the invoking terminal after `server-start` exits.

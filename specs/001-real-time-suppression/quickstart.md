@@ -10,6 +10,8 @@ docmeta:
   - user approval on 2026-05-07
   - live-hide incident update with sensitive identifiers redacted
   - server-running launch-path mismatch update on 2026-05-07
+  - live-priority parallel execution update on 2026-05-09
+  - live-latency clarification update on 2026-05-09
 ---
 
 # Quickstart: Real-Time Suppression Recovery
@@ -764,10 +766,26 @@ configured bot test page
 
 2. Confirm benchmark edits are bot-marked and test-only.
 3. Measure publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
-4. Confirm runtime lag uses truthful wall-clock calculation and is not pinned to `0s`.
-5. Measure idle and active CPU, memory, queue depth, state size, and warning-summary counts for the
+4. While a synthetic or controlled background reconciliation/recovery job is active or intentionally
+   delayed, publish or inject a watched live edit and confirm the live lane queues and submits it
+   without waiting for the background lane to drain.
+5. Confirm runtime lag uses truthful wall-clock calculation and is not pinned to `0s`.
+6. Measure idle and active CPU, memory, queue depth, state size, and warning-summary counts for the
    daemon alone and daemon plus TUI.
-6. Confirm bounded-state behavior under repeated failure storms.
+7. Confirm bounded-state behavior under repeated failure storms.
+
+Minimum timing evidence for the live-priority implementation:
+
+- Deterministic tests must record observed-to-queue, queue-to-submit, submit-to-complete, and
+  observed-to-hidden samples for synthetic live edits.
+- A blocked or delayed background lane must not make live queue-to-submit wait for the background
+  lane to drain; any test timeout is only a hang guard, not a fixed internal handoff SLA.
+- A burst of at least 10 synthetic eligible watched edits must report p50, p95, and p99 for recent
+  live samples and preserve final outcomes for every synthetic revision.
+- Live queue saturation or deadline expiry must produce degraded or unhealthy status immediately
+  instead of silent waiting.
+- Target-host smoke evidence must still report publish-to-detect and publish-to-hidden because
+  local tests do not include external EventStreams or wiki-side publication delay.
 
 Minimum resource evidence for T042:
 
@@ -775,7 +793,8 @@ Minimum resource evidence for T042:
 - Measure one active sample that includes live handling plus recovery, reconciliation, or backoff.
 - Record CPU percentage, RSS memory, live queue depth/cap, recovery or reconciliation queue
   depth/cap, API concurrency, `runtime_status.json` size, `command_report.json` size,
-  `processed_revids.json` size, detached log growth rate, and coalesced-warning counts.
+  `processed_revids.json` size, detached log growth rate, coalesced-warning counts, live lane
+  in-flight count, background lane in-flight count, and recent live latency p95/p99.
 - Block release if API concurrency exceeds the default cap of 2 without documented approval, a queue
   reaches its cap without degraded status, `runtime_status.json` or `command_report.json` exceeds
   1 MiB, repeated-root-cause log growth exceeds 10 MiB/hour without mitigation, or any field keeps
@@ -840,6 +859,8 @@ degraded evidence as success.
 Do not treat the fix as production-ready until all of the following are true:
 
 - live protection checks pass
+- live-priority lane checks pass while reconciliation or recovery is active
+- timing tests report p95/p99 for observed-to-queue, queue-to-submit, and observed-to-hidden
 - recovery-from-last-successful-hide checks pass
 - rolling last-24h daytime verification checks pass
 - randomized nightly full recheck checks pass

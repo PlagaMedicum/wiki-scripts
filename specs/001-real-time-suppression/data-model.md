@@ -9,6 +9,7 @@ docmeta:
   - speckit-plan config-stability update on 2026-05-06
   - speckit-plan human-review queue update on 2026-05-06
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
+  - speckit-plan live-priority parallel execution update on 2026-05-09
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -82,6 +83,10 @@ Fields:
 - `submitted_at`: Time the API request was sent.
 - `completed_at`: Time the action reached terminal success or terminal failure.
 - `attempt_count`: Number of attempts.
+- `lane`: `live` for recentchange-triggered work, or `background` for catch-up,
+  reconciliation, verification, manual command, and report work.
+- `deadline_at`: Optional live-action deadline after which the current attempt must record degraded
+  protection and defer retry instead of blocking newer live work.
 - `outcome`: `hidden`, `already-hidden`, `skipped`, `retrying`, `failed`, `unresolved`, or
   `blocked`.
 - `reason_code`: Compact non-sensitive reason such as `duplicate`, `policy-skip`,
@@ -93,17 +98,109 @@ Validation rules:
 - A revision is not treated as fully covered until a terminal outcome is recorded.
 - Replayed events must not create conflicting duplicate actions.
 - Fatal auth or permission failures must surface a blocked protection state.
+- Live-lane actions must not wait behind background-lane actions.
+- Runtime status, processed-revision state, and queue-depth updates for the same action should be
+  persisted as a short transaction around each state transition and must not hold locks across API
+  calls or retry sleeps.
 
 State transitions:
 
 ```text
 queued -> submitted -> hidden
 queued -> submitted -> already-hidden
-queued -> submitted -> retrying -> submitted
+queued -> submitted -> retrying -> deferred-retry -> queued
 queued -> submitted -> failed -> unresolved
 queued -> skipped
 queued -> blocked
 ```
+
+## ExecutionLane
+
+Represents one bounded internal work lane inside the daemon.
+
+Fields:
+
+- `lane_kind`: `live` or `background`.
+- `queue_depth`: Current number of queued actions.
+- `queue_capacity`: Bounded queue capacity.
+- `in_flight`: Number of actions currently submitted or executing.
+- `concurrency_limit`: Maximum in-flight actions allowed for this lane.
+- `latest_saturation_at`: Last time enqueue or capacity pressure degraded protection.
+- `latest_saturation_reason`: Compact reason such as `live-queue-full`,
+  `background-backpressure`, or `deadline-exceeded`.
+- `latency`: Recent `LatencyEvidence` snapshot for this lane.
+
+Validation rules:
+
+- The live lane is reserved for `ObservedEdit.observation_kind=live`.
+- Background queue pressure must not prevent the live lane from accepting or rejecting live work
+  independently.
+- Background concurrency remains bounded by the reviewed default API cap unless a later reviewed
+  config decision changes it.
+- Saturation or deadline failures in the live lane must surface as degraded or unhealthy protection,
+  not as a silent queue wait.
+
+Relationships:
+
+- Owns many `SuppressionAction` items for its lane.
+- Feeds `Real-Time Health State` and `ResourceEconomySnapshot`.
+
+## SuppressionTransaction
+
+Represents the atomic state update around one suppression action transition.
+
+Fields:
+
+- `transaction_id`: Local action transition identifier.
+- `action_id`: Associated `SuppressionAction`.
+- `phase`: `queued`, `submitted`, `completed`, `processed-recorded`, `retry-deferred`, or
+  `failed`.
+- `started_at`: Transaction start time.
+- `completed_at`: Transaction persistence completion time.
+- `status_written`: Whether daemon-owned runtime status was persisted.
+- `processed_state_written`: Whether processed-revision state was persisted when required.
+- `error`: Optional compact non-sensitive persistence failure.
+
+Validation rules:
+
+- Transactions must be short and local: in-memory update plus atomic-file persistence only.
+- Transactions must not contain MediaWiki network calls, retry sleeps, page scans, or reconciliation
+  loops.
+- A completion transaction that records `hidden` or `already-hidden` must update
+  `last_successful_hide_at` and the processed-revision state consistently before reporting success
+  to an operator surface.
+
+Relationships:
+
+- Belongs to one `SuppressionAction`.
+- Produces status evidence consumed by `Real-Time Health State`.
+
+## LatencyEvidence
+
+Represents bounded timing samples used for tests and release evidence.
+
+Fields:
+
+- `sample_count`
+- `latest_ms`
+- `min_ms`
+- `p50_ms`
+- `p95_ms`
+- `p99_ms`
+- `max_ms`
+- `window_label`: `recent-live-samples`, `controlled-burst`, or another explicit test/evidence
+  label.
+- `measured_path`: `observed-to-queue`, `queue-to-submit`, `submit-to-complete`,
+  `observed-to-hidden`, `publish-to-detect`, or `publish-to-hidden`.
+- `computed_at`
+
+Validation rules:
+
+- Runtime samples must remain bounded so latency evidence cannot grow without limit.
+- Local deterministic tests should use synthetic or controlled timestamps and must not store real
+  sensitive-edit identifiers.
+- Deployment evidence may include publish-to-detect and publish-to-hidden, but real incident
+  identifiers must stay out of tracked files.
 
 ## RecoveryAnchor
 

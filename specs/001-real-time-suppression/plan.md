@@ -11,6 +11,8 @@ docmeta:
   - user approval on 2026-05-07
   - operator-provided live-hide incident evidence with sensitive identifiers redacted
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
+  - speckit-plan live-priority parallel execution update on 2026-05-09
+  - speckit-plan live-latency clarification update on 2026-05-09
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -67,11 +69,26 @@ protecting any exposed edit and avoiding duplicate-daemon risk, or fall back to 
 launch workflow. T052 live or dry-run smoke and T042 resource sampling remain blocked until this
 launch-path mismatch is resolved or explicitly accepted as a human go/no-go exception.
 
+The 2026-05-09 latency refinement makes live work isolation concrete: reconciliation, catch-up,
+scheduled verification, and one-shot command work must no longer share a single FIFO execution path
+that can sit in front of newly observed live edits. Keep one daemon process, but split the internal
+execution model into at least two bounded lanes: a live-hide lane for recentchange edits and a
+background lane for reconciliation, recovery, verification, and reports. Live observed edits must
+enqueue or visibly degrade without waiting behind background batches, use short action deadlines,
+persist each state transition atomically, and report observed-to-queue, queue-to-submit,
+submit-to-complete, and observed-to-hidden timings in tests and release evidence. The 2026-05-09
+clarification sets no fixed internal millisecond handoff SLA for the MVP: live handling should be as
+fast as practical, and reconciliation or nightly work may slow it only if recent edits still react
+instead of waiting for background drain. Background lanes may use bounded concurrency, but their
+transactions must not hold live queue, status, or processed-revision locks across network calls.
+
 ## Technical Context
 
 **Language/Version**: Rust edition 2024 in the existing `suppressor` crate
 **Primary Dependencies**: `tokio`, `reqwest`, `reqwest-eventsource`, `serde`, `serde_json`,
-`chrono`, `rand`, `tracing`, `metrics`, `clap`, `ratatui`, `crossterm`, `wiremock`
+`chrono`, `rand`, `tracing`, `metrics`, `clap`, `ratatui`, `crossterm`, `wiremock`; do not add a
+new queueing service or database for this refinement unless later benchmark evidence proves the
+single-process Tokio design cannot meet SC-001
 **Storage**: Local JSON/text state under `suppressor/state/`, including
 `runtime_status.json`, `command_report.json`, `processed_revids.json`,
 `nightly_sweep_progress.json`, `last_event_id.txt`, `daemon.pid`, server-start log evidence, and
@@ -79,17 +96,22 @@ the suppression-list cache
 **Testing**: MVP gate uses `rtk cargo test --manifest-path suppressor/Cargo.toml --
 --test-threads=1`, targeted tests for shared throttle/backoff, runtime-status truth, daemon-vs-
 command isolation, scheduler/reconciliation visibility, and a dry-run or controlled live
-launch-path smoke check. Full `rtk cargo test --manifest-path suppressor/Cargo.toml`, controlled
-benchmark checks against the configured bot test page, and the repo docs gate remain
-release evidence but must not displace the live daemon stabilization path. Test and server-build
-evidence is fresh only for the source tree that produced it: any later daemon-critical edit to
-`suppressor/src/`, `suppressor/tests/`, `suppressor/Cargo.toml`, `suppressor/Cargo.lock`,
-`suppressor/Makefile`, or build/deployment code invalidates the prior T037/T038 evidence. T037 and
-T038 must be rerun after Phase 2, US1, and US2 have changed daemon-critical paths before their
-checkmarks can count as final MVP gate evidence. The next implementation test slice must include a
-regression for a synthetic watched sensitive page edited by a synthetic operator-account actor,
-proving that operator-account eligible edits are not filtered, not silently marked processed, and
-either queue a live RevDel action or record an explicit failed live-hide outcome.
+launch-path smoke check. The latency refinement adds deterministic lane-isolation tests: hold the
+background reconciliation lane on synthetic work, inject a synthetic watched live edit, and assert
+the live lane records observed-to-queue, queue-to-submit, and observed-to-hidden timings without
+waiting for the background lane to drain. Tests must also cover queue saturation, action deadline,
+retry deferral, atomic processed/status transaction ordering, and p95/p99 reporting from a bounded
+sample set. Full `rtk cargo test --manifest-path suppressor/Cargo.toml`, controlled benchmark
+checks against the configured bot test page, and the repo docs gate remain release evidence but
+must not displace the live daemon stabilization path. Test and server-build evidence is fresh only
+for the source tree that produced it: any later daemon-critical edit to `suppressor/src/`,
+`suppressor/tests/`, `suppressor/Cargo.toml`, `suppressor/Cargo.lock`, `suppressor/Makefile`, or
+build/deployment code invalidates the prior T037/T038 evidence. T037 and T038 must be rerun after
+Phase 2, US1, and US2 have changed daemon-critical paths before their checkmarks can count as final
+MVP gate evidence. The next implementation test slice must include a regression for a synthetic
+watched sensitive page edited by a synthetic operator-account actor, proving that operator-account
+eligible edits are not filtered, not silently marked processed, and either queue a live RevDel
+action or record an explicit failed live-hide outcome.
 **Target Platform**: Linux local host running one daemon plus the local supervisor TUI for
 be.wikipedia.org; deployment artifact target is
 `target/aarch64-unknown-linux-musl/release/suppressor` built with
@@ -101,28 +123,33 @@ server host must support an additive `server-start` command that starts the daem
 SSH terminal without relying on systemd, tmux, screen, shell backgrounding, or shell `nohup`.
 **Project Type**: Single Rust CLI/daemon/TUI tool inside `suppressor/`
 **Performance Goals**: At least 95% of eligible live edits hidden within 1 second and 99% within
-5 seconds under normal availability; stale or ineffective protection surfaced within 10 seconds;
-recovery from missed edits since the last successful hide completed or reported unresolved within 2
-minutes for gaps up to 30 minutes; at least one randomized daytime rolling-24h verification and
-one randomized nightly full recheck recorded per uninterrupted 24-hour daemon period; failed
-scheduled verification or stale full watched-set coverage surfaced to the operator within 10
-seconds of status inspection
+5 seconds under normal availability; no separate fixed internal live-worker handoff SLA is required
+for this MVP, but newly observed live edits must react as fast as practical, must not wait for
+reconciliation, catch-up, or nightly work to drain, and must record p50/p95/p99 timings for
+observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden; stale or ineffective
+protection surfaced within 10 seconds; recovery from missed edits since the last successful hide
+completed or reported unresolved within 2 minutes for gaps up to 30 minutes; at least one
+randomized daytime rolling-24h verification and one randomized nightly full recheck recorded per
+uninterrupted 24-hour daemon period; failed scheduled verification or stale full watched-set
+coverage surfaced to the operator within 10 seconds of status inspection
 **Resource Goals**: MVP defaults must keep live hiding isolated from slower work. Initial release
 budgets: live hide queue bounded to a configured cap with visible degradation before saturation;
-catch-up/reconciliation API concurrency no higher than 2 by default; live hide execution not blocked
-behind scheduled reconciliation; unresolved samples capped to a small operator list; warning
+background reconciliation/recovery queue bounded separately; catch-up/reconciliation API
+concurrency no higher than 2 by default; live hide execution not blocked behind scheduled
+reconciliation; live status and processed-revision transactions short enough that no lock is held
+across MediaWiki network calls; unresolved samples capped to a small operator list; warning
 summaries capped and coalesced by root cause; normal status/report state kept compact enough for
 local JSON reads; normal logs rate-limited so repeated API failures do not create log storms; no
 busy loops; idle daemon plus TUI must be measured on the deployment host; any budget relaxation must
 be documented with evidence and must not delay live hiding or hide non-healthy status. The MVP
 resource sample must record CPU percentage, RSS memory, live and recovery/reconciliation queue
 depths versus caps, API concurrency, `runtime_status.json`, `command_report.json`, and
-`processed_revids.json` size, detached log growth rate, and coalesced-warning counts for at least a
-10-minute idle window and one active live/recovery/backoff window. Release is blocked unless queue
-pressure becomes degraded before saturation, API concurrency stays at or below the default cap of 2,
-status/report files remain below 1 MiB each, repeated-root-cause log growth stays below 10 MiB/hour
-or has a documented mitigation, and active samples return to a stable idle baseline without
-monotonic growth.
+`processed_revids.json` size, detached log growth rate, coalesced-warning counts, and recent
+latency p95/p99 for observed-to-queue and observed-to-hidden for at least a 10-minute idle window
+and one active live/recovery/backoff window. Release is blocked unless queue pressure becomes
+degraded before saturation, API concurrency stays at or below the default cap of 2, status/report
+files remain below 1 MiB each, repeated-root-cause log growth stays below 10 MiB/hour or has a
+documented mitigation, and active samples return to a stable idle baseline without monotonic growth.
 **Compatibility/Migration**: Preserve the current config layout and machine-readable status/report
 surfaces additively where possible. Existing `current_day_recheck` settings should continue to load
 as the scheduler input for daytime rolling-24h verification until a compatible rename or alias is
@@ -171,7 +198,10 @@ microservice-like: stream ingestion, cache refresh, catch-up, verification sched
 transport, worker execution, runtime state, command reports, and TUI rendering communicate through
 explicit structs, enums, and bounded channels. The long-running daemon remains the only writer of
 daemon realtime truth. One-shot commands may emit bounded report surfaces but must not overwrite the
-daemon-owned runtime status surface
+daemon-owned runtime status surface. The internal execution model must have explicit live and
+background lanes rather than one shared FIFO for all RevDel work; background lane concurrency must
+be semaphore-bounded and live lane actions must be admitted or rejected with a visible degraded
+state before they can wait behind reconciliation batches.
 **Minimalism Constraints**: Prefer additive changes to existing modules and state files. Avoid new
 dependencies, new always-on background loops, new persistent artifacts, or large refactors unless
 they directly improve correctness, compatibility, observability, or bounded resource behavior for
@@ -213,7 +243,8 @@ launch path and live hiding are proven.
 - Spec Kit First For Non-Trivial Work: PASS. This plan follows the updated `spec.md`; `tasks.md`
   must be regenerated from this plan before implementation continues.
 - Resource Economy, Robustness, And Durable Lessons: PASS. The plan includes bounded state,
-  concurrency, logging, and low-spec verification without relaxing latency or recovery goals.
+  explicit live/background concurrency lanes, short local transactions, logging, and low-spec
+  verification without relaxing latency or recovery goals.
 - Active Human-Safety Freeze For Suppressor MVP: PASS. The active pointer is
   `specs/001-real-time-suppression/`, the work remains inside `suppressor/` and direct feature
   artifacts, and the plan defers unrelated cleanup until the server-runnable daemon MVP is proven.
@@ -243,11 +274,13 @@ launch path and live hiding are proven.
   any additive scheduler or state fields.
 - Update
   [suppressor/docs/implementation.md](../../suppressor/docs/implementation.md)
-  with the internal service boundaries, recovery-anchor rules, scheduler semantics, and TUI
-  information architecture decisions.
+  with the internal service boundaries, live/background execution lanes, short suppression
+  transactions, recovery-anchor rules, scheduler semantics, and TUI information architecture
+  decisions.
 - Update
   [suppressor/docs/testing-strategy.md](../../suppressor/docs/testing-strategy.md)
-  with scheduler, compatibility, last-24h preset, revision-link, and low-spec verification cases.
+  with scheduler, compatibility, last-24h preset, revision-link, live-priority timing, and low-spec
+  verification cases.
 - Add `questions.md` and `review-queue.md` in this feature so the human owner has one convenient
   place to see and answer the approval question that blocks T040.
 - No change is currently expected for `.specify/doc-registry.json` for feature-local queue files;
@@ -359,16 +392,23 @@ share ambiguous state.
 - `cache.rs` and `cache/`: suppression-list fetch, parse, redirect expansion, cache diff, and
   source-triggered watched-title delta identification.
 - `catchup.rs`: gap recovery, rolling last-24h verification, accident-window coverage, bounded
-  unresolved sampling, and recovery summary aggregation.
+  unresolved sampling, and recovery summary aggregation. Catch-up dispatches through the background
+  lane and must not hold live locks while waiting for page scans or worker completion.
 - `scheduler.rs` and `reconcile.rs`: randomized daytime rolling-24h verification scheduling,
   randomized nightly full recheck scheduling, and full watched-set reconciliation control.
+  Reconciliation runs in a bounded background lane with explicit queue depth, in-flight count, and
+  backoff status that cannot block live recentchange submission.
 - `mw_api.rs`: MediaWiki timestamp serialization, revision lookup, rate-limit classification,
   retry-after parsing, revision URL construction, and safe failure snapshots.
 - `worker.rs`: RevDel execution, transient retry, terminal blocked-state handling, and last
-  successful hide recording.
+  successful hide recording. Worker ownership splits into a live worker or live-priority executor
+  and one or more bounded background workers; live actions use short deadlines and deferred retry
+  records so one slow API request cannot hold newer live edits.
 - `runtime.rs` and `state.rs`: daemon-owned realtime truth, compatibility loading, recovery anchor
-  persistence, command-report isolation, bounded resource snapshots, and explicit status-state
-  transitions.
+  persistence, command-report isolation, bounded resource snapshots, lane-depth snapshots, latency
+  percentiles, and explicit status-state transitions. Runtime updates for queue, submit, complete,
+  and processed-revision insertion must be treated as short atomic transactions: update in-memory
+  state, persist the relevant JSON surface, then release locks before network or long-running work.
 - `commands.rs`: one-shot operator actions and bounded command reports that never overwrite daemon
   realtime truth.
 - `commands.rs` plus a small launch helper if needed: additive `server-start` orchestration,
@@ -493,6 +533,37 @@ No constitution violations identified.
 - Ensure the TUI latest log view follows rendered rows correctly and labels one-shot command output
   separately from daemon output.
 
+### Phase 2a - Live-Priority Parallel Execution And Timing Evidence
+
+- Replace the current single shared RevDel FIFO with explicit bounded live and background execution
+  lanes inside the existing daemon. The live lane owns recentchange-triggered hides; the background
+  lane owns catch-up, rolling verification, full recheck, reconciliation, manual coverage, and
+  one-shot command work.
+- Run the live lane independently from reconciliation. Background jobs may keep a bounded
+  concurrency of at most the existing default API cap of 2 unless a reviewed config decision later
+  changes that cap; live jobs must not wait for a background page scan or reconciliation batch to
+  release the only worker.
+- Add a small dispatcher transaction boundary for every suppression action: acquire per-revision
+  duplicate protection, record queued status and queue depth, enqueue into the correct lane, release
+  locks, submit the MediaWiki API call, then atomically record completion and processed-revision
+  state. No transaction may hold runtime-status, processed-ring, or queue locks across network I/O.
+- Use short live action deadlines and deferred retry records. If a live RevDel attempt times out,
+  rate-limits, or exhausts immediate live attempt capacity, record degraded protection and schedule
+  retry or recovery without blocking newer live edits behind the same sleep.
+- Add lane-aware status fields: live queue depth/cap, live in-flight count, background queue
+  depth/cap, background in-flight count, latest lane saturation event, and recent p50/p95/p99
+  timings for observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden.
+- Add deterministic timing tests with synthetic clocks or controlled delays: while background
+  reconciliation is intentionally blocked, a synthetic watched live edit must still queue, submit,
+  and record timing before the background blocker is released. The test evidence must fail if live
+  work waits for reconciliation to drain; any test timeout is a hang guard, not a product handoff
+  SLA.
+- Add burst tests for at least 10 synthetic eligible watched edits, verifying bounded live queue
+  behavior, duplicate protection, transaction ordering, final outcomes, and p95/p99 reporting.
+- Keep this phase code-only unless a later human-reviewed config decision is needed. The first
+  implementation should use constants or existing config values for lane capacities where possible
+  and surface any non-compatible config need as a separate Q/RQ item before relying on it.
+
 ### Phase 3 - Command Surface Cleanup And Useful Presets
 
 - Keep command reports separate from daemon realtime truth, with bounded `command_report.json`
@@ -521,6 +592,9 @@ No constitution violations identified.
 - Add controlled tests for repeated throttle behavior, recovery convergence, source-triggered catch
   up under backoff, the `Last 24 hours` preset, and checkpoint-freshness summaries with stale-page
   coverage age.
+- Add live-priority performance tests from Phase 2a to the release gate: background reconciliation
+  blocked while live edit proceeds, live action timeout/deferred retry, queue saturation degraded
+  status, 10-edit burst timing, and p95/p99 calculation from recent runtime samples.
 - Run suppressor tests, docs workflow, and controlled benchmark checks. Restart the real deployment
   path in use and verify the TUI plus runtime surfaces reflect the new fields and layout.
 - Build the server artifact with the Makefile wrapper for

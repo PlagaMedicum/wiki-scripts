@@ -9,10 +9,17 @@ docmeta:
   - user request on 2026-04-29
   - user request on 2026-05-05
   - user request on 2026-05-05 for one-command detached server start
+  - user clarification on 2026-05-09 for live latency policy
 ---
 
 # Feature Specification: Real-Time Suppression Recovery
 
+
+## Clarifications
+
+### Session 2026-05-09
+
+- Q: What internal live-worker handoff budget should apply while reconciliation or nightly work is active? → A: No fixed internal handoff limit; react as fast as practical, and background work may slow but must not block live recent edits.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -116,7 +123,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 
 - **FR-001**: The system MUST continuously monitor new changes on watched sensitive pages whenever the suppressor daemon is running.
 - **FR-002**: The system MUST automatically hide each newly published eligible edit on a watched sensitive page without requiring manual refresh, cache reload, or nightly reconciliation.
-- **FR-003**: The system MUST keep the real-time hiding path active independently from slower reconciliation, coverage, or reporting work.
+- **FR-003**: The system MUST keep the real-time hiding path active independently from slower reconciliation, coverage, or reporting work. Recentchange-triggered live work MUST be accepted, submitted, or visibly degraded even while reconciliation, catch-up, verification, nightly fallback, or one-shot command work is active; the MVP has no fixed internal live-worker handoff SLA beyond the external hide timing in SC-001, but it MUST measure handoff and completion timings and optimize them as fast as practical.
 - **FR-004**: The system MUST determine and record one final outcome for every observed watched-page edit: hidden, already hidden, skipped by policy, failed, retried, or unresolved.
 - **FR-005**: The system MUST detect stale, stalled, disconnected, or gapped real-time monitoring and attempt recovery without operator intervention.
 - **FR-006**: The system MUST catch up on eligible watched-page edits missed during daemon downtime, feed gaps, restart, or recovery from the timestamp of the last successful hide recorded before the interruption, or from an explicitly documented older trusted recovery anchor if that timestamp is unavailable, before declaring real-time monitoring healthy.
@@ -182,7 +189,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 
 ### Measurable Outcomes
 
-- **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds; release evidence must report p95 and p99 for the controlled realtime path.
+- **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds; release evidence must report p95 and p99 for the controlled realtime path. No separate fixed internal live-worker handoff limit is required for this MVP, but release evidence must record observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden timings and prove background work does not block live recent edits from reacting.
 - **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, including cases where fresh events continue but the latest live hide outcome is failed, throttled, blocked, or unresolved, the operator console shows a non-healthy state and current lag measured against the latest observed target-wiki event or a bounded API freshness probe when the stream is silent.
 - **SC-003**: For daemon restart or real-time recovery gaps up to 30 minutes, eligible watched-page edits missed since the recorded `last_successful_hide_at` timestamp, or since an explicitly documented older trusted fallback anchor when that timestamp is unavailable, are either hidden or reported unresolved within 2 minutes.
 - **SC-003a**: Recovery evidence MUST name the selected anchor, covered window start and end, outcome counts, unresolved samples, and whether the anchor was `last_successful_hide_at` or a fallback; the daemon MUST NOT declare healthy until that selected window is hidden or reported unresolved.

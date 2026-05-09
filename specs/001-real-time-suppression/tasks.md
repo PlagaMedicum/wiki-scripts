@@ -11,6 +11,8 @@ docmeta:
   - live-hide incident update with sensitive identifiers redacted
   - speckit-tasks live-hotfix decomposition with synthetic regression fixtures
   - speckit-tasks server-running launch-path mismatch update on 2026-05-07
+  - speckit-tasks live-priority latency update on 2026-05-09
+  - speckit-tasks live-latency clarification update on 2026-05-09
 ---
 
 # Tasks: Real-Time Suppression Recovery
@@ -26,7 +28,8 @@ through tests, the server build, `server-start`, and the actual launch path.
 
 **Organization**: Tasks are ordered to stabilize the minimal server-runnable daemon first:
 automatic live hiding, recovery/reconciliation/nightly fallback, truthful degraded status,
-`server-start`, command surface separation, `make build-server`, and actual launch-path evidence.
+`server-start`, command surface separation, live/background execution lanes, `make build-server`,
+and actual launch-path evidence.
 
 ## Format: `[ID] [P?] [Story?] Description`
 
@@ -66,6 +69,15 @@ automatic live hiding, recovery/reconciliation/nightly fallback, truthful degrad
 - T047 through T052 are the active live-hide hotfix slice that decomposes failed T041 evidence into
   immediate protection, regression, smallest code fix, rebuild, relaunch, and smoke proof. They
   block T042 resource sampling and production trust.
+- T053 through T066 are the active live-priority latency slice. They must keep reconciliation,
+  catch-up, verification, and one-shot work parallel to live recentchange processing inside the
+  existing daemon, add timing tests, and remain code-only unless a separate human-reviewed config
+  decision is opened. They must not introduce a fixed internal live-worker handoff SLA; the tests
+  should prove live work does not wait for background drain and should record timing observations
+  against SC-001 release evidence. They block T052 target-host smoke, T042 resource sampling, and
+  production trust. After any T058 through T063 daemon-critical edit, previous T037, T038, or T051
+  evidence is historical only; T064 and T065 become the fresh local test/build gate for the
+  lane-aware tree.
 - T052 and T042 remain blocked until T040 launch evidence aligns, a safe fresh `server-start` or
   rollback path is recorded, or an explicit human go/no-go exception records the accepted risk.
 
@@ -209,15 +221,41 @@ tests, contracts, examples, fixtures, or code comments.
 - [X] T049 [US1] Implement the smallest code fix for the first failing live-path boundary found by T041, T047, and T048 without changing config shape or deployment-required config keys in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, and `suppressor/src/worker.rs`
 - [X] T050 [US1] Run the targeted live dispatch, queue handoff, and worker regression tests after T049 and record commands, pass/fail result, and any remaining blocker in `specs/001-real-time-suppression/quickstart.md`
 - [X] T051 Rebuild the server artifact after the live-path code fix with `make -C suppressor build-server` using the `build-server` target in `suppressor/Makefile` and record the artifact path or local prerequisite blocker in `specs/001-real-time-suppression/quickstart.md`
-- [ ] T052 After T040 launch-path/PID/runtime evidence matches, a safe fresh `server-start` or rollback path is chosen, or an explicit human go/no-go exception records the risk, restart, relaunch, or validate the target-host daemon with the rebuilt binary, rerun one controlled watched-page live or dry-run smoke for the operator-account case, and record daemon PID/status freshness, outcome, and any rollback in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
+- [ ] T052 After T040 launch-path/PID/runtime evidence matches, a safe fresh `server-start` or rollback path is chosen, or an explicit human go/no-go exception records the risk, and after T053 through T065 are complete, restart, relaunch, or validate the target-host daemon with the rebuilt lane-aware binary, rerun one controlled watched-page live or dry-run smoke for the operator-account case, and record daemon PID/status freshness, outcome, and any rollback in `suppressor/docs/operations.md` and `specs/001-real-time-suppression/quickstart.md`
 
 ---
 
-## Phase 6b: Post-Hotfix Resource And Close-Out Evidence
+## Phase 6b: Live-Priority Parallel Execution And Timing Evidence
 
-**Purpose**: Run only after the live-hide hotfix is proven or explicitly blocked.
+**Purpose**: Keep live recentchange suppression independent from reconciliation, catch-up,
+verification, and one-shot command work by adding explicit parallel live/background lanes, short
+transactions, bounded concurrency, and timing evidence inside the existing daemon. Do not add a
+fixed internal live-worker handoff SLA; measure timings and fail only when live work waits for
+background drain or violates the external SC-001 hide targets.
 
-- [ ] T042 Measure at least 10 minutes of idle daemon-alone and daemon-plus-TUI CPU/RSS, one active live/recovery/backoff sample, live and recovery/reconciliation queue depths versus caps, API concurrency, state/report file sizes, detached log growth rate, and coalesced-warning counts on the deployment host; record pass/fail against SC-011 bounds in `suppressor/docs/operations.md`
+- [ ] T053 [P] [US1] Add bounded latency percentile tests for `queue-to-submit`, `submit-to-complete`, and `observed-to-hidden` snapshots alongside existing observed-to-queue coverage in `suppressor/src/metrics.rs`
+- [ ] T054 [P] [US1] Add runtime-status compatibility and serialization tests for additive live/background lane snapshots, queue depths, in-flight counts, saturation metadata, and latency fields in `suppressor/src/state.rs` and `suppressor/tests/config_and_state.rs`
+- [ ] T055 [US1] Add a deterministic live-priority test that blocks synthetic background reconciliation work, injects a synthetic watched live edit, records observed-to-queue and queue-to-submit timings, and fails if live queue-to-submit waits for background drain rather than asserting a fixed internal handoff SLA in `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, and `suppressor/src/reconcile.rs`
+- [ ] T056 [US1] Add live queue saturation, short live action deadline, deferred retry, and degraded-status tests for timeout, rate-limit, and full-queue paths in `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, and `suppressor/src/mw_api.rs`
+- [ ] T057 [US1] Add a burst test with at least 10 synthetic eligible watched edits that verifies bounded live queue behavior, duplicate protection, final outcomes, and p50/p95/p99 reporting in `suppressor/src/stream.rs`, `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, and `suppressor/src/metrics.rs`
+- [ ] T058 [US1] Extend the action, lane, status, and latency models with `live`/`background` lane kind, queue capacity/depth, in-flight count, saturation reason, action deadline, `queue-to-submit`, `submit-to-complete`, and `observed-to-hidden` fields without changing tracked config shape in `suppressor/src/runtime.rs`, `suppressor/src/state.rs`, and `suppressor/src/metrics.rs`
+- [ ] T059 [US1] Replace the single shared RevDel work channel with bounded live and background execution lanes, keeping recentchange-triggered hides on the live lane and preventing background work from occupying the only worker path in `suppressor/src/runtime.rs` and `suppressor/src/worker.rs`
+- [ ] T060 [US2] Route catch-up, reconciliation, rolling last-24h verification, nightly full recheck, manual coverage, and one-shot suppression work through the bounded background lane with concurrency no higher than the reviewed default API cap in `suppressor/src/catchup.rs`, `suppressor/src/reconcile.rs`, `suppressor/src/scheduler.rs`, `suppressor/src/commands.rs`, and `suppressor/src/runtime.rs`
+- [ ] T061 [US1] Implement short dispatcher transaction boundaries for duplicate protection, queued status/depth persistence, enqueue, submit status, completion status, and processed-revision persistence so no runtime-status, queue, or processed-state lock is held across MediaWiki API calls or retry sleeps in `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, and `suppressor/src/state.rs`
+- [ ] T062 [US1] Implement live action deadlines, full-live-queue degraded status, and deferred retry or recovery scheduling so a timed-out or rate-limited live attempt cannot block newer live edits behind the same wait in `suppressor/src/runtime.rs`, `suppressor/src/worker.rs`, and `suppressor/src/mw_api.rs`
+- [ ] T063 [US1] Surface lane-aware runtime evidence in operator status and TUI views, including live/background queue depth/cap, live/background in-flight count, latest saturation, and p50/p95/p99 live timing fields in `suppressor/src/tui_status.rs`, `suppressor/src/tui_view.rs`, `suppressor/src/state.rs`, and `suppressor/src/runtime.rs`
+- [ ] T064 [US1] Run targeted live-priority, blocked-background, burst, deadline, deferred-retry, transaction-ordering, and lane-status tests and record commands, pass/fail results, timing observations, no-fixed-internal-SLA confirmation, and any remaining blocker in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T065 After T064 passes or records an explicit blocker, rerun `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` and `make -C suppressor build-server` for the lane-aware source tree and record the fresh serial-test and server-artifact evidence in `specs/001-real-time-suppression/quickstart.md`
+- [ ] T066 Update suppressor operator, runtime-boundary, implementation, and testing docs with the live/background lane model, transaction boundaries, live deadline behavior, latency evidence, and resource-sampling expectations in `suppressor/docs/operations.md`, `suppressor/docs/runtime-boundaries.md`, `suppressor/docs/implementation.md`, and `suppressor/docs/testing-strategy.md`
+
+---
+
+## Phase 6c: Post-Hotfix Resource And Close-Out Evidence
+
+**Purpose**: Run only after the live-hide hotfix and live-priority lane slice are proven or
+explicitly blocked.
+
+- [ ] T042 Measure at least 10 minutes of idle daemon-alone and daemon-plus-TUI CPU/RSS, one active live/recovery/backoff sample, live lane and background lane queue depths versus caps, live/background in-flight counts, API concurrency at or below the reviewed default cap, state/report file sizes, detached log growth rate, coalesced-warning counts, and live timing p50/p95/p99 for observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden on the deployment host; record pass/fail against SC-011 bounds in `suppressor/docs/operations.md`
 - [X] T043 Update operator and runtime docs with the MVP launch path, `make build-server`, `server-start`, recovery anchor, rolling last-24h verification, nightly full recheck, config-stability review, and degraded-status meanings in `suppressor/README.md`, `suppressor/docs/operations.md`, and `suppressor/docs/runtime-boundaries.md`
 - [X] T044 Update implementation and testing docs with the shared backoff contract, scheduler semantics, timestamp formatting lesson, detached server-start launch checks, config-stability review gate, and minimum server verification path in `suppressor/docs/implementation.md` and `suppressor/docs/testing-strategy.md`
 - [X] T045 Run `rtk python3 tools/doc_workflow.py all` and record the result or the known inactive-`002` metadata blocker in `specs/001-real-time-suppression/quickstart.md`
@@ -244,11 +282,15 @@ tests, contracts, examples, fixtures, or code comments.
 - **Live-Hide Hotfix (Phase 6a)**: Depends on T041 incident facts for the local live-path fix.
   T047 through T051 may stay closed as synthetic regression, code-fix, test, and rebuild evidence,
   but T052 target-host trust depends on T040 launch evidence alignment, a safe fresh
-  `server-start` or rollback path, or an explicit human go/no-go exception. Phase 6a blocks T042
-  resource sampling and production trust before any broader close-out.
-- **Post-Hotfix Evidence (Phase 6b)**: Depends on Phase 6a unless Phase 6a records an explicit
-  blocker or human go/no-go exception; T042 resource evidence must not be used to hide a failed
-  live-protection path or mismatched launch path.
+  `server-start` or rollback path, or an explicit human go/no-go exception. Phase 6a blocks T052,
+  T042 resource sampling, and production trust before any broader close-out.
+- **Live-Priority Parallel Execution (Phase 6b)**: Depends on Phase 6a local hotfix evidence and
+  the current performance plan. T053 through T057 are the failing-test/coverage front edge; T058
+  through T063 implement the lane-aware runtime; T064 through T066 provide fresh local evidence and
+  docs. This phase blocks T052 target-host smoke, T042 resource sampling, and production trust.
+- **Post-Hotfix Evidence (Phase 6c)**: Depends on Phase 6a and Phase 6b unless either phase records
+  an explicit blocker or human go/no-go exception; T042 resource evidence must not be used to hide a
+  failed live-protection path, mismatched launch path, or missing lane-priority timing evidence.
 
 ### User Story Dependencies
 
@@ -267,6 +309,14 @@ tests, contracts, examples, fixtures, or code comments.
   `suppressor/src/stream.rs` and `suppressor/src/recentchange.rs` test path versus the
   `suppressor/src/runtime.rs` and `suppressor/tests/config_and_state.rs` queue/processed-state
   path; otherwise keep the hotfix sequential.
+- T053 and T054 can run in parallel because latency math and status compatibility touch different
+  test surfaces.
+- T055, T056, and T057 should be written before implementation but are not independent of each
+  other once the runtime harness shape changes; keep ownership explicit if they are split.
+- T060 can proceed in parallel with T063 only after T058 and T059 define the shared lane model and
+  status fields.
+- T066 can start in parallel with T064/T065 only as documentation of implemented behavior; do not
+  document unverified lane timing as release evidence.
 - T043 and T044 can run in parallel after code behavior stabilizes.
 
 ---
@@ -295,6 +345,13 @@ Task: "T030 [P] [US3] Add or repair command-report compatibility and bounded unr
 Task: "T031 [P] [US3] Add or repair TUI action and log separation tests for reload watched pages, refresh status, command output, and daemon output in suppressor/src/tui.rs and suppressor/src/tui_view.rs"
 ```
 
+## Parallel Example: Live-Priority Lane Slice
+
+```text
+Task: "T053 [P] [US1] Add bounded latency percentile tests for queue-to-submit, submit-to-complete, and observed-to-hidden snapshots in suppressor/src/metrics.rs"
+Task: "T054 [P] [US1] Add runtime-status compatibility and serialization tests for additive live/background lane snapshots in suppressor/src/state.rs and suppressor/tests/config_and_state.rs"
+```
+
 ---
 
 ## Implementation Strategy
@@ -309,19 +366,24 @@ Task: "T031 [P] [US3] Add or repair TUI action and log separation tests for relo
 6. Treat the config-stability gate as Q001-approved path 1, then resolve the current T040
    server-running launch-path mismatch from non-secret facts. Do not mark T040 from process liveness
    alone, and do not stop a possibly protective daemon only to make evidence cleaner.
-7. Execute any remaining T041 and T052 evidence around the closed T047 through T051 hotfix slice:
+7. Complete the T053 through T066 live-priority lane slice before trusting new deployment evidence:
+   add timing tests first, implement separate bounded live/background lanes, keep transactions short,
+   avoid config-shape changes, and refresh local test/build evidence for the lane-aware tree.
+8. Execute any remaining T041 and T052 evidence around the closed T047 through T051 hotfix slice:
    preserve the exposed revision when known through operator-local action only, keep real incident
    identifiers out of tracked files, validate or relaunch with aligned T040 evidence or an approved
-   fallback/exception, and prove one controlled live or dry-run watched edit.
-8. Run T042 deployment-host resource sampling only after T052 passes, records an explicit blocker,
-   or records a human go/no-go exception.
-9. Keep US3 command/report hardening and final docs evidence closed only if they remain consistent
+   fallback/exception, and prove one controlled live or dry-run watched edit against the lane-aware
+   binary.
+9. Run T042 deployment-host resource sampling only after T052 passes, records an explicit blocker,
+   or records a human go/no-go exception, and include lane depths, in-flight counts, and live
+   latency p50/p95/p99.
+10. Keep US3 command/report hardening and final docs evidence closed only if they remain consistent
    with the config-stability and deployment evidence.
 
 ### Suggested MVP Scope
 
 The active safety-freeze MVP is Phase 1 + Phase 2 + US1 + US2 + T037 through T042 plus T047 through
-T052. US3 and T043 through T046 are required before broader operator-command trust or feature
+T066. US3 and T043 through T046 are required before broader operator-command trust or feature
 close-out.
 
 ### Guardrails
@@ -334,6 +396,8 @@ close-out.
   fixtures, comments, screenshots, logs, or copied command output.
 - Do not let reconciliation, catch-up, scheduled verification, or detached launch checks starve live
   hiding.
+- Do not let background lane retries, page scans, or reconciliation sleeps hold runtime-status,
+  queue, or processed-revision locks across MediaWiki API calls.
 - Do not make further target-host or tracked config changes as a shortcut around T040 evidence.
 - Do not treat process liveness, fresh but mismatched status, or stale PID evidence as T040 or T052
   proof.

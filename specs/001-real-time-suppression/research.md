@@ -10,6 +10,8 @@ docmeta:
   - speckit-plan human-review queue update on 2026-05-06
   - speckit-plan live-hide incident update with sensitive identifiers redacted
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
+  - speckit-plan live-priority parallel execution update on 2026-05-09
+  - speckit-plan live-latency clarification update on 2026-05-09
 ---
 
 # Research: Real-Time Suppression Recovery
@@ -358,6 +360,76 @@ early under one repeated root cause, and retain only bounded unresolved samples.
   state and burns API budget under a single transient fault.
 - Disable verification under any throttle condition. Rejected because bounded resume is still
   required.
+
+## Decision: Split live and background suppression execution into parallel bounded lanes
+
+**Rationale**: The latest performance concern is not only EventStreams delay. The implementation
+can pass local queue and worker tests while still letting reconciliation, catch-up, scheduled
+verification, or one-shot work occupy the same suppression worker path ahead of a newly observed
+live edit. That makes seconds-to-minutes delay plausible whenever a background batch, API retry
+sleep, or long page scan is already in progress.
+
+The plan keeps one daemon process, but makes internal parallelism explicit. Recentchange-triggered
+live hides use a live lane with its own bounded queue, in-flight count, short action deadline, and
+latency samples. Recovery, reconciliation, rolling verification, nightly full recheck, and command
+work use a separate background lane with semaphore-bounded concurrency and shared backoff. The two
+lanes still share duplicate protection, policy checks, MediaWiki transport classification, and
+daemon-owned status, but those shared pieces must be used through short transaction boundaries:
+record queued/submitted/completed state and processed-revision changes atomically, then release
+locks before network calls or sleeps.
+
+This design preserves the low-spec single-binary model while directly attacking the observed delay
+mode. It also makes tests defensible: a synthetic blocked reconciliation lane should not prevent a
+synthetic watched live edit from reaching the live worker and recording timing before the
+test-controlled background blocker is released.
+
+**Alternatives considered**:
+
+- Keep one FIFO and rely on a small queue capacity. Rejected because a short FIFO can still have a
+  slow background item at the head of the line.
+- Increase background concurrency only. Rejected because it can burn API budget and still leaves
+  live work competing with reconciliation under rate limits.
+- Split into separate OS processes or services. Rejected because the constitution prefers one local
+  daemon for this MVP and the immediate problem can be solved with internal Tokio lanes.
+- Add a database transaction layer. Rejected for the MVP because the current state is local JSON and
+  the needed transaction is short in-memory plus atomic-file persistence, not cross-process SQL
+  coordination.
+
+## Decision: Measure live latency in deterministic tests and deployment evidence
+
+**Rationale**: SC-001 requires 95% of eligible live edits hidden within 1 second and 99% within 5
+seconds, but local tests currently prove only that metrics can be recorded, not that live work stays
+responsive when background work is active. The 2026-05-09 clarification intentionally avoids a
+separate fixed internal millisecond handoff limit: live handling should be as fast as practical, and
+reconciliation or nightly work may slow it only if recent edits still react instead of waiting for
+background drain. Timing evidence must therefore become part of the implementation plan, not an
+afterthought.
+
+The test strategy should include deterministic unit/subsystem tests with controlled delays and
+bounded assertions for:
+
+- observed-to-queue
+- queue-to-submit
+- submit-to-complete
+- observed-to-hidden
+- p50/p95/p99 from recent samples
+- live behavior while background reconciliation is blocked
+- 10-edit synthetic burst behavior
+
+Deployment evidence should keep reporting publish-to-detect and publish-to-hidden for controlled
+live or dry-run events because those include EventStreams and wiki-side delay that local tests
+cannot simulate.
+
+**Alternatives considered**:
+
+- Rely only on Prometheus histograms. Rejected because release evidence needs an inspectable summary
+  even when metrics scraping is not configured.
+- Rely only on live wiki benchmark runs. Rejected because external conditions can mask regressions
+  and make failures hard to reproduce.
+- Assert exact sub-millisecond or fixed internal handoff values in unit tests. Rejected because the
+  MVP has no separate internal handoff SLA and scheduler jitter is normal; tests should use
+  synthetic delays to prove live work does not wait for background drain, while timeouts remain hang
+  guards rather than release targets.
 
 ## Decision: Treat scheduled verification failure and full-recheck freshness as protection-trust evidence
 

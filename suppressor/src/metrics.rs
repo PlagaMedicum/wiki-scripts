@@ -26,13 +26,18 @@ pub struct LatencyMetricSnapshot {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RuntimeLatencyMetricsSnapshot {
     pub observed_to_queue: LatencyMetricSnapshot,
+    pub queue_to_submit: LatencyMetricSnapshot,
+    pub submit_to_complete: LatencyMetricSnapshot,
+    pub observed_to_hidden: LatencyMetricSnapshot,
     pub observed_to_hide: LatencyMetricSnapshot,
 }
 
 #[derive(Clone, Debug, Default)]
 struct RuntimeLatencyMetrics {
     observed_to_queue: BoundedLatencyMetric,
-    observed_to_hide: BoundedLatencyMetric,
+    queue_to_submit: BoundedLatencyMetric,
+    submit_to_complete: BoundedLatencyMetric,
+    observed_to_hidden: BoundedLatencyMetric,
 }
 
 #[derive(Clone, Debug)]
@@ -118,18 +123,41 @@ pub fn record_observed_to_queue_latency_ms(value_ms: u64) {
     }
 }
 
+pub fn record_queue_to_submit_latency_ms(value_ms: u64) {
+    histogram!("event_queue_to_submit_latency_ms").record(value_ms as f64);
+    if let Ok(mut metrics) = runtime_latency_metrics().lock() {
+        metrics.queue_to_submit.record(value_ms);
+    }
+}
+
+pub fn record_submit_to_complete_latency_ms(value_ms: u64) {
+    histogram!("event_submit_to_complete_latency_ms").record(value_ms as f64);
+    if let Ok(mut metrics) = runtime_latency_metrics().lock() {
+        metrics.submit_to_complete.record(value_ms);
+    }
+}
+
+pub fn record_observed_to_hidden_latency_ms(value_ms: u64) {
+    histogram!("event_observed_to_hidden_latency_ms").record(value_ms as f64);
+    if let Ok(mut metrics) = runtime_latency_metrics().lock() {
+        metrics.observed_to_hidden.record(value_ms);
+    }
+}
+
 pub fn record_observed_to_hide_latency_ms(value_ms: u64) {
     histogram!("event_observed_to_hide_latency_ms").record(value_ms as f64);
-    if let Ok(mut metrics) = runtime_latency_metrics().lock() {
-        metrics.observed_to_hide.record(value_ms);
-    }
+    record_observed_to_hidden_latency_ms(value_ms);
 }
 
 pub fn snapshot_runtime_latency_metrics() -> RuntimeLatencyMetricsSnapshot {
     if let Ok(metrics) = runtime_latency_metrics().lock() {
+        let observed_to_hidden = metrics.observed_to_hidden.snapshot();
         return RuntimeLatencyMetricsSnapshot {
             observed_to_queue: metrics.observed_to_queue.snapshot(),
-            observed_to_hide: metrics.observed_to_hide.snapshot(),
+            queue_to_submit: metrics.queue_to_submit.snapshot(),
+            submit_to_complete: metrics.submit_to_complete.snapshot(),
+            observed_to_hidden: observed_to_hidden.clone(),
+            observed_to_hide: observed_to_hidden,
         };
     }
     RuntimeLatencyMetricsSnapshot::default()
@@ -139,7 +167,9 @@ pub fn snapshot_runtime_latency_metrics() -> RuntimeLatencyMetricsSnapshot {
 pub fn reset_runtime_latency_metrics_for_tests() {
     if let Ok(mut metrics) = runtime_latency_metrics().lock() {
         metrics.observed_to_queue.reset();
-        metrics.observed_to_hide.reset();
+        metrics.queue_to_submit.reset();
+        metrics.submit_to_complete.reset();
+        metrics.observed_to_hidden.reset();
     }
 }
 
@@ -181,5 +211,25 @@ mod tests {
         assert_eq!(snapshot.p50_ms, Some(15));
         assert_eq!(snapshot.p95_ms, Some(25));
         assert_eq!(snapshot.p99_ms, Some(25));
+    }
+
+    #[test]
+    fn runtime_latency_snapshot_reports_live_path_percentiles() {
+        reset_runtime_latency_metrics_for_tests();
+
+        for value in [1_u64, 2, 3, 4, 5] {
+            record_observed_to_queue_latency_ms(value);
+            record_queue_to_submit_latency_ms(value + 10);
+            record_submit_to_complete_latency_ms(value + 20);
+            record_observed_to_hidden_latency_ms(value + 30);
+        }
+
+        let snapshot = snapshot_runtime_latency_metrics();
+
+        assert_eq!(snapshot.observed_to_queue.p50_ms, Some(3));
+        assert_eq!(snapshot.queue_to_submit.p50_ms, Some(13));
+        assert_eq!(snapshot.submit_to_complete.p95_ms, Some(25));
+        assert_eq!(snapshot.observed_to_hidden.p99_ms, Some(35));
+        assert_eq!(snapshot.observed_to_hide, snapshot.observed_to_hidden);
     }
 }

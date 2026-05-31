@@ -302,15 +302,27 @@ fn populate_runtime_derivatives(
 ) {
     let now = Utc::now();
     let active_backoff_until = normalize_backoff_derivatives(status, now);
-    if let Some(observed_at) = status.realtime.last_event_observed_at {
+    if status.realtime.last_freshness_probe_source.as_deref() == Some("polling") {
+        if let Some(polled_at) = status.realtime.last_freshness_probe_at {
+            let lag_millis = (now - polled_at).num_milliseconds().max(0);
+            status.realtime.current_lag_seconds = Some(lag_millis / 1000);
+            status.realtime.current_lag_millis = Some(lag_millis);
+            status.realtime.current_lag_source = Some("polling".to_string());
+        }
+    } else if let Some(observed_at) = status.realtime.last_event_observed_at {
         let lag_millis = (now - observed_at).num_milliseconds().max(0);
         status.realtime.current_lag_seconds = Some(lag_millis / 1000);
         status.realtime.current_lag_millis = Some(lag_millis);
         if status.realtime.current_lag_source.is_none() {
-            status.realtime.current_lag_source = Some("stream".to_string());
+            status.realtime.current_lag_source = status
+                .realtime
+                .last_freshness_probe_source
+                .clone()
+                .or_else(|| Some("unknown".to_string()));
         }
     }
 
+    populate_lane_defaults(status);
     populate_live_outcome_derivatives(status);
     populate_recheck_freshness_derivatives(status, checkpoint_progress, watched_titles, now);
 
@@ -376,6 +388,15 @@ fn populate_runtime_derivatives(
             started_at,
             expected_resume_at: active_backoff_until,
         });
+    }
+}
+
+fn populate_lane_defaults(status: &mut RuntimeStatus) {
+    if status.realtime.live_lane.queue_depth == 0 && status.realtime.queue_depth > 0 {
+        status.realtime.live_lane.queue_depth = status.realtime.queue_depth;
+    }
+    if status.realtime.queue_depth == 0 && status.realtime.live_lane.queue_depth > 0 {
+        status.realtime.queue_depth = status.realtime.live_lane.queue_depth;
     }
 }
 
@@ -1140,6 +1161,33 @@ mod tests {
         assert_eq!(
             status.realtime.last_successful_hide_url.as_deref(),
             Some("https://example.invalid/wiki/Special:Diff/88")
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_uses_poll_freshness_for_polling_lag() {
+        let polled_at = Utc::now() - chrono::TimeDelta::seconds(3);
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                last_event_observed_at: Some(Utc::now() - chrono::TimeDelta::hours(3)),
+                last_freshness_probe_at: Some(polled_at),
+                last_freshness_probe_source: Some("polling".to_string()),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status, None, 0);
+
+        assert_eq!(
+            status.realtime.current_lag_source.as_deref(),
+            Some("polling")
+        );
+        assert!(
+            status
+                .realtime
+                .current_lag_millis
+                .is_some_and(|millis| (3000..5000).contains(&millis))
         );
     }
 

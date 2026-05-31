@@ -16,7 +16,9 @@ pub struct AppConfig {
     pub queue: QueueConfig,
     pub state: StateConfig,
     pub retry: RetryConfig,
+    #[serde(default)]
     pub realtime: RealtimeConfig,
+    #[serde(default)]
     pub catchup: CatchupConfig,
     pub nightly_sweep: NightlySweepConfig,
     #[serde(alias = "current_day_recheck")]
@@ -87,15 +89,21 @@ pub struct RetryConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RealtimeConfig {
+    #[serde(default = "default_realtime_stale_threshold_seconds")]
     pub stale_threshold_seconds: u64,
+    #[serde(default = "default_realtime_stream_read_timeout_seconds")]
     pub stream_read_timeout_seconds: u64,
+    #[serde(default = "default_realtime_freshness_probe_seconds")]
     pub freshness_probe_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CatchupConfig {
+    #[serde(default = "default_catchup_default_window_seconds")]
     pub default_window_seconds: i64,
+    #[serde(default = "default_catchup_max_window_seconds")]
     pub max_window_seconds: i64,
+    #[serde(default = "default_catchup_max_revisions_per_run")]
     pub max_revisions_per_run: usize,
     #[serde(default = "default_warning_sample_limit")]
     pub warning_sample_limit: usize,
@@ -199,6 +207,55 @@ fn default_unresolved_sample_limit() -> usize {
 
 fn default_daytime_window_hours() -> u64 {
     24
+}
+
+fn default_realtime_stale_threshold_seconds() -> u64 {
+    10
+}
+
+fn default_realtime_stream_read_timeout_seconds() -> u64 {
+    10
+}
+
+fn default_realtime_freshness_probe_seconds() -> u64 {
+    30
+}
+
+fn default_catchup_default_window_seconds() -> i64 {
+    1800
+}
+
+fn default_catchup_max_window_seconds() -> i64 {
+    7200
+}
+
+fn default_catchup_max_revisions_per_run() -> usize {
+    5000
+}
+
+impl Default for RealtimeConfig {
+    fn default() -> Self {
+        Self {
+            stale_threshold_seconds: default_realtime_stale_threshold_seconds(),
+            stream_read_timeout_seconds: default_realtime_stream_read_timeout_seconds(),
+            freshness_probe_seconds: default_realtime_freshness_probe_seconds(),
+        }
+    }
+}
+
+impl Default for CatchupConfig {
+    fn default() -> Self {
+        Self {
+            default_window_seconds: default_catchup_default_window_seconds(),
+            max_window_seconds: default_catchup_max_window_seconds(),
+            max_revisions_per_run: default_catchup_max_revisions_per_run(),
+            warning_sample_limit: default_warning_sample_limit(),
+            source_refresh_title_scope_limit: default_source_refresh_title_scope_limit(),
+            rate_limit_backoff_default_seconds: default_rate_limit_backoff_default_seconds(),
+            rate_limit_stop_after_failures: default_rate_limit_stop_after_failures(),
+            unresolved_sample_limit: default_unresolved_sample_limit(),
+        }
+    }
 }
 
 impl AppConfig {
@@ -658,6 +715,8 @@ mod tests {
             config.suppression_list.request_pages,
             vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()]
         );
+        assert!(!config.nightly_sweep.enabled);
+        assert!(!config.daytime_verification.enabled);
         assert_eq!(config.catchup.warning_sample_limit, 5);
         assert_eq!(config.catchup.source_refresh_title_scope_limit, 250);
         assert_eq!(config.catchup.rate_limit_backoff_default_seconds, 30);

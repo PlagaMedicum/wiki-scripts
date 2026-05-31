@@ -10,10 +10,11 @@ SERVER_TARGET ?= aarch64-unknown-linux-musl
 SERVER_BINARY ?= target/$(SERVER_TARGET)/release/suppressor
 LOG_LEVEL ?= warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn
 LOG_FORMAT ?= text
+TEST_ARGS ?= -- --test-threads=1
 
 RUN_ENV = RUST_LOG=$(LOG_LEVEL) BEWIKI_LOG_FORMAT=$(LOG_FORMAT) BEWIKI_ENV_FILE=$(ENV_FILE)
 
-.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint check
+.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint check
 
 define REQUIRE_CONFIG
 	@if [ -f "$(CONFIG)" ]; then :; else \
@@ -42,6 +43,7 @@ help:
 		'  make check-auth [CONFIG=./config.toml]' \
 		'  make reload-cache [CONFIG=./config.toml]' \
 		'  make hide-revid REVID=<revision_id> [CONFIG=./config.toml] [ARGS="..."]' \
+		'  make smoke-test [CONFIG=./config.toml] [ARGS="--page User:Bot/Test"]' \
 		'  make emergency-catchup [CONFIG=./config.toml] [ARGS="--dry-run"]' \
 		'  make coverage-report [CONFIG=./config.toml] [ARGS="--start 2026-04-24T00:00:00Z --report-only"]' \
 		'  make nightly-sweep-now [CONFIG=./config.toml]' \
@@ -61,7 +63,8 @@ help:
 		'  ENV_FILE=./.env' \
 		'  SERVER_TARGET=aarch64-unknown-linux-musl' \
 		'  LOG_LEVEL=warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn' \
-		'  LOG_FORMAT=text'
+		'  LOG_FORMAT=text' \
+		'  TEST_ARGS=-- --test-threads=1'
 
 env-check:
 	$(call REQUIRE_CONFIG)
@@ -102,6 +105,11 @@ hide-revid:
 	$(call REQUIRE_ENV)
 	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" hide-revid "$(REVID)" $(ARGS)
 
+smoke-test:
+	$(call REQUIRE_CONFIG)
+	$(call REQUIRE_ENV)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" smoke-test $(ARGS)
+
 nightly-sweep-now:
 	$(call REQUIRE_CONFIG)
 	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" nightly-sweep-now $(ARGS)
@@ -132,7 +140,7 @@ release:
 	$(CARGO) build --release $(ARGS)
 
 test:
-	$(CARGO) test $(ARGS)
+	$(CARGO) test $(ARGS) $(TEST_ARGS)
 
 fmt:
 	$(CARGO) fmt $(ARGS)
@@ -143,4 +151,4 @@ lint:
 check:
 	$(CARGO) fmt --check
 	$(CARGO) clippy --all-targets --all-features -- -D warnings
-	$(CARGO) test
+	$(CARGO) test $(TEST_ARGS)

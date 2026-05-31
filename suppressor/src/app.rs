@@ -5,7 +5,7 @@ use crate::cli::{Cli, Command};
 use crate::commands::{
     run_check_auth, run_coverage_last_24h, run_coverage_report, run_emergency_catchup,
     run_hide_revid, run_manual_sweep, run_print_effective_config, run_reload_cache,
-    run_server_start,
+    run_server_start, run_supervisor,
 };
 use crate::daemon::run_daemon;
 
@@ -17,6 +17,9 @@ pub async fn run() -> Result<()> {
         Command::DryRun => run_daemon(cli.config, true, cli.verbose).await,
         Command::CheckAuth => run_check_auth(cli.config, cli.verbose).await,
         Command::HideRevid { id } => run_hide_revid(cli.config, id, cli.verbose).await,
+        Command::SmokeTest { page } => {
+            crate::simple_daemon::run_smoke_test(cli.config, page, cli.verbose).await
+        }
         Command::EmergencyCatchup {
             start,
             end,
@@ -68,6 +71,9 @@ pub async fn run() -> Result<()> {
             log_file,
             cli.verbose,
         ),
+        Command::SupervisorRun { dry_run, log_file } => {
+            run_supervisor(cli.config, dry_run, log_file, cli.verbose)
+        }
         Command::ReloadCache => run_reload_cache(cli.config),
         Command::NightlySweepNow => run_manual_sweep(cli.config),
         Command::PrintEffectiveConfig => run_print_effective_config(cli.config, cli.verbose),

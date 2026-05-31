@@ -108,6 +108,9 @@ pub struct RealtimeRuntimeStatus {
     pub current_lag_millis: Option<i64>,
     pub current_lag_source: Option<String>,
     pub queue_depth: usize,
+    pub live_lane: ExecutionLaneSnapshot,
+    pub background_lane: ExecutionLaneSnapshot,
+    pub latency: RuntimeLatencyStatus,
     pub daemon_started_at: Option<DateTime<Utc>>,
     pub current_task: Option<CurrentTaskSnapshot>,
     pub last_recovery_trigger: Option<String>,
@@ -161,6 +164,9 @@ impl Default for RealtimeRuntimeStatus {
             current_lag_millis: None,
             current_lag_source: None,
             queue_depth: 0,
+            live_lane: ExecutionLaneSnapshot::default(),
+            background_lane: ExecutionLaneSnapshot::default(),
+            latency: RuntimeLatencyStatus::default(),
             daemon_started_at: None,
             current_task: None,
             last_recovery_trigger: None,
@@ -190,6 +196,38 @@ impl Default for RealtimeRuntimeStatus {
             last_nightly_full_recheck_result: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ExecutionLaneSnapshot {
+    pub queue_depth: usize,
+    pub queue_capacity: usize,
+    pub in_flight: usize,
+    pub concurrency_limit: usize,
+    pub latest_saturation_at: Option<DateTime<Utc>>,
+    pub latest_saturation_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RuntimeLatencyStatus {
+    pub observed_to_queue: LatencyMetricStatus,
+    pub queue_to_submit: LatencyMetricStatus,
+    pub submit_to_complete: LatencyMetricStatus,
+    pub observed_to_hidden: LatencyMetricStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct LatencyMetricStatus {
+    pub sample_count: usize,
+    pub latest_ms: Option<u64>,
+    pub min_ms: Option<u64>,
+    pub p50_ms: Option<u64>,
+    pub p95_ms: Option<u64>,
+    pub p99_ms: Option<u64>,
+    pub max_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -265,6 +303,8 @@ pub struct SourceListRefresh {
 #[serde(default)]
 pub struct ResourceEconomySnapshot {
     pub queue_depth_max_recent: usize,
+    pub live_queue_depth_max_recent: usize,
+    pub background_queue_depth_max_recent: usize,
     pub api_concurrency_max_recent: usize,
     pub state_bytes_recent: u64,
     pub coalesced_warning_count_recent: usize,
@@ -283,7 +323,10 @@ pub struct SuppressionOutcomeSnapshot {
     pub source_label: String,
     pub observed_at: Option<DateTime<Utc>>,
     pub queued_at: Option<DateTime<Utc>>,
+    pub submitted_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub lane: Option<String>,
+    pub deadline_at: Option<DateTime<Utc>>,
     pub attempt_count: u32,
 }
 
@@ -294,6 +337,12 @@ pub struct CoverageSummary {
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub requested_by: String,
+    pub candidate_source: Option<String>,
+    pub candidate_count: usize,
+    pub watched_candidate_count: usize,
+    pub candidate_chunk_count: usize,
+    pub candidate_discovery_elapsed_ms: Option<u64>,
+    pub fallback_reason: Option<String>,
     pub pages_checked: usize,
     pub edits_checked: usize,
     pub hidden_count: usize,
@@ -395,6 +444,8 @@ pub struct ReconciliationRuntimeStatus {
     pub mode: Option<String>,
     pub phase: Option<String>,
     pub queued_mode: Option<String>,
+    pub stopped_early_reason: Option<String>,
+    pub backoff_until: Option<DateTime<Utc>>,
     pub freshness: Option<RecheckFreshnessSnapshot>,
     pub total_titles: usize,
     pub completed_titles: usize,
@@ -599,6 +650,113 @@ mod tests {
             Some("https://example.invalid/wiki/Special:Diff/42")
         );
         assert_eq!(latest_outcome.source_label, "live hiding");
+    }
+
+    #[test]
+    fn runtime_status_round_trips_lane_and_latency_fields() {
+        let detected_at = Utc::now();
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            realtime: RealtimeRuntimeStatus {
+                queue_depth: 1,
+                live_lane: ExecutionLaneSnapshot {
+                    queue_depth: 1,
+                    queue_capacity: 100,
+                    in_flight: 1,
+                    concurrency_limit: 1,
+                    latest_saturation_at: Some(detected_at),
+                    latest_saturation_reason: Some("live-queue-full".to_string()),
+                },
+                background_lane: ExecutionLaneSnapshot {
+                    queue_depth: 7,
+                    queue_capacity: 100,
+                    in_flight: 1,
+                    concurrency_limit: 1,
+                    ..ExecutionLaneSnapshot::default()
+                },
+                latency: RuntimeLatencyStatus {
+                    observed_to_queue: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(12),
+                        p95_ms: Some(20),
+                        p99_ms: Some(25),
+                        ..LatencyMetricStatus::default()
+                    },
+                    queue_to_submit: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(2),
+                        p95_ms: Some(4),
+                        p99_ms: Some(5),
+                        ..LatencyMetricStatus::default()
+                    },
+                    submit_to_complete: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(75),
+                        p95_ms: Some(140),
+                        p99_ms: Some(180),
+                        ..LatencyMetricStatus::default()
+                    },
+                    observed_to_hidden: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(90),
+                        p95_ms: Some(180),
+                        p99_ms: Some(250),
+                        ..LatencyMetricStatus::default()
+                    },
+                },
+                latest_outcome: Some(SuppressionOutcomeSnapshot {
+                    title: "Synthetic Sensitive Page".to_string(),
+                    revid: 42,
+                    outcome: "hidden".to_string(),
+                    mode: "live".to_string(),
+                    source_label: "live hiding".to_string(),
+                    submitted_at: Some(detected_at),
+                    lane: Some("live".to_string()),
+                    deadline_at: Some(detected_at),
+                    ..SuppressionOutcomeSnapshot::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            resource_economy: Some(ResourceEconomySnapshot {
+                queue_depth_max_recent: 8,
+                live_queue_depth_max_recent: 1,
+                background_queue_depth_max_recent: 7,
+                api_concurrency_max_recent: 2,
+                ..ResourceEconomySnapshot::default()
+            }),
+            ..RuntimeStatus::default()
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(loaded.realtime.live_lane.queue_capacity, 100);
+        assert_eq!(
+            loaded
+                .realtime
+                .live_lane
+                .latest_saturation_reason
+                .as_deref(),
+            Some("live-queue-full")
+        );
+        assert_eq!(loaded.realtime.background_lane.queue_depth, 7);
+        assert_eq!(loaded.realtime.latency.queue_to_submit.p95_ms, Some(4));
+        assert_eq!(loaded.realtime.latency.observed_to_hidden.p99_ms, Some(250));
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .and_then(|outcome| outcome.lane.as_deref()),
+            Some("live")
+        );
+        assert_eq!(
+            loaded
+                .resource_economy
+                .as_ref()
+                .map(|resource| resource.background_queue_depth_max_recent),
+            Some(7)
+        );
     }
 
     #[test]

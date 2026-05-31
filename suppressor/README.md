@@ -15,11 +15,11 @@ data.
 
 ## Current Shape
 
-- one daemon
-- one local TUI / supervisor client
+- one production daemon path: recentchanges polling, watched-title matching, RevDel, bounded catch-up
+- one detached `server-start` supervisor that restarts the daemon child after exits
 - one current production baseline aimed at be.wiki
-- one local TUI/supervisor workflow
-- one rsync-ready detached binary launch path for the server
+- one rsync-ready aarch64 binary launch path for the server
+- legacy TUI, reconciliation, and report commands retained for manual diagnostics
 
 Future multiwiki support is possible, but it is not the current runtime model.
 
@@ -31,6 +31,7 @@ Run from `suppressor/`:
 cp .env.example .env
 make env-check
 make check-auth
+make smoke-test
 make dry-run
 ```
 
@@ -58,6 +59,7 @@ receipt, and is trusted only after the PID and `runtime_status.json` keep updati
 
 - `make env-check`
 - `make check-auth`
+- `make smoke-test`
 - `make dry-run`
 - `make run`
 - `make tui`
@@ -74,16 +76,18 @@ receipt, and is trusted only after the PID and `runtime_status.json` keep updati
 
 Current scope:
 
-- EventStreams ingestion
+- MediaWiki recentchanges polling
 - watched-title matching
 - immediate public RevDel for `user|comment`
-- reconciliation and backfill
-- local TUI supervision
-- realtime health reporting
+- bounded startup and gap catch-up
+- supervisor restart after daemon exits
+- truthful realtime health reporting
 - bounded emergency catch-up and coverage reporting
 
 Not current scope:
 
+- EventStreams as the production live source
+- TUI, reconciliation, and nightly verification as required live-hide paths
 - broader moderation platform work
 - remote multi-operator control
 - public network service exposure
@@ -95,21 +99,17 @@ not a promise that every other wiki is already supported.
 
 ## Realtime Health
 
-The daemon now persists a dedicated realtime section in `runtime_status.json`. The TUI shows realtime
-state separately from daemon process state and reconciliation state so "running" is not treated as
-"hiding". Important states are:
+The daemon persists a realtime section in `runtime_status.json`. Process state and protection state
+are separate so "running" is not treated as "hiding". Important states are:
 
 - `healthy`: the stream is fresh and no catch-up is active
 - `catching-up`: bounded recovery is checking recent watched-page edits
-- `stale` or `reconnecting`: the stream is delayed or being reopened
-- `unhealthy`: the realtime path could not prove protection
+- `degraded`: polling or hiding has failed but the daemon is alive and retrying
 - `blocked`: rights, session, or wiki-side failures prevent hiding
 
-Recovery starts from `last_successful_hide_at` when that anchor exists; otherwise it uses the
-bounded recent emergency window. Rolling `Last 24 hours` verification and nightly full watched-set
-recheck are separate evidence paths. Manual cache reload and one-shot reports remain diagnostic or
-fallback actions; they are not the normal path for newly published sensitive edits and do not
-replace daemon-owned realtime truth.
+Recovery starts from the persisted recentchanges poll cursor when that anchor exists; otherwise it
+uses the bounded recent emergency window. Manual cache reload, TUI, reconciliation, and one-shot
+reports remain diagnostic or fallback actions; they do not replace daemon-owned realtime truth.
 
 ## Further Reading
 

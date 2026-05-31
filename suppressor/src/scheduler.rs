@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,6 +11,7 @@ use rand::Rng;
 use tracing::{debug, info, warn};
 
 use crate::cache::{CachePersistence, CacheRefreshMode, refresh_cache};
+use crate::mw_api::classify_api_failure;
 use crate::reconcile::ReconcileMode;
 use crate::runtime::AppRuntime;
 
@@ -18,8 +21,10 @@ pub fn spawn_metadata_refresh_loop(runtime: Arc<AppRuntime>) {
             every_seconds = runtime.config.suppression_list.metadata_recheck_seconds,
             "metadata recheck loop started"
         );
+        let mut last_failure_key: Option<String> = None;
+        let mut repeated_failure_count: usize = 0;
         loop {
-            if let Err(error) = refresh_cache(
+            let result = refresh_cache(
                 &runtime.cache,
                 &runtime.client,
                 &runtime.config,
@@ -31,9 +36,53 @@ pub fn spawn_metadata_refresh_loop(runtime: Arc<AppRuntime>) {
                     CachePersistence::Persist
                 },
             )
-            .await
-            {
-                warn!("metadata recheck failed: {error:#}");
+            .await;
+            match result {
+                Ok(_) => {
+                    if repeated_failure_count > 0 {
+                        info!(
+                            count = repeated_failure_count,
+                            "metadata recheck recovered after repeated failures"
+                        );
+                        runtime
+                            .record_notice(
+                                "metadata recheck recovered; watched-page cache is readable",
+                            )
+                            .await;
+                    }
+                    last_failure_key = None;
+                    repeated_failure_count = 0;
+                }
+                Err(error) => {
+                    let snapshot =
+                        classify_api_failure(&error, "source-metadata-recheck", None, None);
+                    let failure_key = format!(
+                        "{}|{}|{}",
+                        snapshot.class,
+                        snapshot.api_code.as_deref().unwrap_or(""),
+                        snapshot
+                            .http_status
+                            .map(|status| status.to_string())
+                            .unwrap_or_default()
+                    );
+                    if last_failure_key.as_deref() == Some(failure_key.as_str()) {
+                        repeated_failure_count += 1;
+                    } else {
+                        last_failure_key = Some(failure_key);
+                        repeated_failure_count = 1;
+                    }
+                    if repeated_failure_count == 1 || repeated_failure_count.is_multiple_of(6) {
+                        warn!(
+                            count = repeated_failure_count,
+                            class = %snapshot.class,
+                            api_code = ?snapshot.api_code,
+                            http_status = ?snapshot.http_status,
+                            retry_after_seconds = ?snapshot.retry_after_seconds,
+                            "metadata recheck failed"
+                        );
+                    }
+                    runtime.record_api_failure(snapshot).await;
+                }
             }
             tokio::time::sleep(Duration::from_secs(
                 runtime.config.suppression_list.metadata_recheck_seconds,
@@ -79,16 +128,15 @@ pub fn spawn_nightly_reconciliation_loop(runtime: Arc<AppRuntime>) {
             }
             if let Some(delay) =
                 scheduler_backoff_delay(Utc::now(), runtime.current_backoff_until().await)
+                    .filter(|delay| !delay.is_zero())
             {
-                if !delay.is_zero() {
-                    runtime
-                        .record_notice(format!(
-                            "full watched-set recheck deferred by backoff for {}s",
-                            delay.as_secs()
-                        ))
-                        .await;
-                    tokio::time::sleep(delay).await;
-                }
+                runtime
+                    .record_notice(format!(
+                        "full watched-set recheck deferred by backoff for {}s",
+                        delay.as_secs()
+                    ))
+                    .await;
+                tokio::time::sleep(delay).await;
             }
             runtime.reconcile.request_run(ReconcileMode::Full).await;
         }
@@ -120,16 +168,15 @@ pub fn spawn_current_day_reconciliation_loop(runtime: Arc<AppRuntime>) {
             tokio::time::sleep(delay).await;
             if let Some(delay) =
                 scheduler_backoff_delay(Utc::now(), runtime.current_backoff_until().await)
+                    .filter(|delay| !delay.is_zero())
             {
-                if !delay.is_zero() {
-                    runtime
-                        .record_notice(format!(
-                            "Last 24 hours verification deferred by backoff for {}s",
-                            delay.as_secs()
-                        ))
-                        .await;
-                    tokio::time::sleep(delay).await;
-                }
+                runtime
+                    .record_notice(format!(
+                        "Last 24 hours verification deferred by backoff for {}s",
+                        delay.as_secs()
+                    ))
+                    .await;
+                tokio::time::sleep(delay).await;
             }
             runtime
                 .reconcile

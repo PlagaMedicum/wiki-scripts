@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -7,8 +7,9 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::mw_api::classify_api_failure;
-use crate::runtime::{AppRuntime, RevDelDispatch, RevDelMode};
+use crate::runtime::{AppRuntime, DispatchCompletion, RevDelDispatch, RevDelMode};
 use crate::state::{ApiFailureSnapshot, CoverageSummary, UnresolvedExposureItem, WarningSummary};
+use crate::titles::normalize_title;
 
 #[derive(Clone, Debug)]
 pub struct CatchupRequest {
@@ -83,7 +84,6 @@ pub async fn run_catchup_window(
             request.end,
         )
         .await;
-    let titles = scoped_titles(runtime, request.title_scope.clone()).await;
     let mut warning_aggregates =
         WarningAggregates::new(runtime.config.catchup.warning_sample_limit);
     let mut summary = CoverageSummary {
@@ -100,6 +100,63 @@ pub async fn run_catchup_window(
         runtime.mark_recovery_completed(summary.clone()).await;
         return Ok(summary);
     }
+
+    if request.title_scope.is_none() {
+        match discover_recentchange_candidates(runtime, request.start, request.end).await {
+            Ok(discovery) if !discovery.truncated => {
+                summary.candidate_source = Some("recentchanges".to_string());
+                summary.candidate_count = discovery.candidate_count;
+                summary.watched_candidate_count = discovery.watched_candidates.len();
+                summary.candidate_chunk_count = discovery.chunk_count;
+                summary.candidate_discovery_elapsed_ms = Some(discovery.elapsed_ms);
+                summary.pages_checked = discovery
+                    .watched_candidates
+                    .iter()
+                    .map(|candidate| candidate.title.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .len();
+                info!(
+                    trigger = %request.trigger,
+                    candidate_count = discovery.candidate_count,
+                    watched_candidate_count = discovery.watched_candidates.len(),
+                    chunk_count = discovery.chunk_count,
+                    elapsed_ms = discovery.elapsed_ms,
+                    "starting candidate-first catch-up"
+                );
+                for candidate in discovery.watched_candidates {
+                    if !process_revision_candidate(runtime, &request, &mut summary, candidate)
+                        .await?
+                    {
+                        break;
+                    }
+                }
+                summary.warning_summaries = warning_aggregates.into_summaries();
+                runtime.mark_recovery_completed(summary.clone()).await;
+                return Ok(summary);
+            }
+            Ok(discovery) => {
+                summary.candidate_source = Some("full-scan-fallback".to_string());
+                summary.candidate_count = discovery.candidate_count;
+                summary.watched_candidate_count = discovery.watched_candidates.len();
+                summary.candidate_chunk_count = discovery.chunk_count;
+                summary.candidate_discovery_elapsed_ms = Some(discovery.elapsed_ms);
+                summary.fallback_reason = Some("candidate-limit-reached".to_string());
+            }
+            Err(error) => {
+                let failure = classify_api_failure(&error, "recentchanges", None, None);
+                warning_aggregates.record(
+                    failure,
+                    runtime.config.catchup.rate_limit_stop_after_failures,
+                    runtime.config.catchup.rate_limit_backoff_default_seconds,
+                    Utc::now(),
+                );
+                summary.candidate_source = Some("full-scan-fallback".to_string());
+                summary.fallback_reason = Some("candidate-source-unavailable".to_string());
+            }
+        }
+    }
+
+    let titles = scoped_titles(runtime, request.title_scope.clone()).await;
 
     info!(
         trigger = %request.trigger,
@@ -149,99 +206,21 @@ pub async fn run_catchup_window(
         };
 
         for revision in revisions.into_iter().rev() {
-            if summary.edits_checked >= runtime.config.catchup.max_revisions_per_run {
-                summary.stopped_early_reason = Some("max-revisions-reached".to_string());
-                push_unresolved_item(
-                    &mut summary,
-                    runtime.config.catchup.unresolved_sample_limit,
-                    UnresolvedExposureItem {
-                        title: title.clone(),
-                        revid: revision.revid,
-                        revision_url: Some(crate::mw_api::revision_url(
-                            &runtime.config.wiki.server_name,
-                            revision.revid,
-                        )),
-                        age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                        reason: "max-revisions-reached".to_string(),
-                        next_action: "rerun catch-up with a narrower window".to_string(),
-                    },
-                );
-                break 'titles;
-            }
-            summary.edits_checked += 1;
-            if revision.user_hidden && revision.comment_hidden {
-                summary.already_hidden_count += 1;
-                continue;
-            }
-            if request.report_only {
-                push_unresolved_item(
-                    &mut summary,
-                    runtime.config.catchup.unresolved_sample_limit,
-                    UnresolvedExposureItem {
-                        title: title.clone(),
-                        revid: revision.revid,
-                        revision_url: Some(crate::mw_api::revision_url(
-                            &runtime.config.wiki.server_name,
-                            revision.revid,
-                        )),
-                        age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                        reason: "report-only-not-hidden".to_string(),
-                        next_action: "run emergency catch-up without report-only".to_string(),
-                    },
-                );
-                continue;
-            }
-            let (completion_tx, completion_rx) = oneshot::channel();
-            runtime
-                .dispatch_action(RevDelDispatch {
+            if !process_revision_candidate(
+                runtime,
+                &request,
+                &mut summary,
+                CatchupRevisionCandidate {
                     title: title.clone(),
-                    revids: vec![revision.revid],
-                    event_id: None,
-                    user: None,
-                    comment: None,
-                    mode: RevDelMode::Catchup,
-                    observed_at: Some(Utc::now()),
-                    recovery_trigger: Some(request.trigger.clone()),
-                    completion_tx: Some(completion_tx),
-                })
-                .await?;
-            match tokio::time::timeout(std::time::Duration::from_secs(60), completion_rx).await {
-                Ok(Ok(Ok(()))) => summary.hidden_count += 1,
-                Ok(Ok(Err(reason))) => {
-                    summary.failed_count += 1;
-                    push_unresolved_item(
-                        &mut summary,
-                        runtime.config.catchup.unresolved_sample_limit,
-                        UnresolvedExposureItem {
-                            title: title.clone(),
-                            revid: revision.revid,
-                            revision_url: Some(crate::mw_api::revision_url(
-                                &runtime.config.wiki.server_name,
-                                revision.revid,
-                            )),
-                            age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                            reason,
-                            next_action: "review auth/API state and rerun catch-up".to_string(),
-                        },
-                    );
-                }
-                Ok(Err(_)) | Err(_) => {
-                    push_unresolved_item(
-                        &mut summary,
-                        runtime.config.catchup.unresolved_sample_limit,
-                        UnresolvedExposureItem {
-                            title: title.clone(),
-                            revid: revision.revid,
-                            revision_url: Some(crate::mw_api::revision_url(
-                                &runtime.config.wiki.server_name,
-                                revision.revid,
-                            )),
-                            age_seconds: Some((Utc::now() - revision.timestamp).num_seconds()),
-                            reason: "worker-completion-timeout".to_string(),
-                            next_action: "check worker status and rerun catch-up".to_string(),
-                        },
-                    );
-                }
+                    revid: revision.revid,
+                    timestamp: revision.timestamp,
+                    user_hidden: revision.user_hidden,
+                    comment_hidden: revision.comment_hidden,
+                },
+            )
+            .await?
+            {
+                break 'titles;
             }
         }
     }
@@ -261,6 +240,165 @@ pub async fn run_catchup_window(
     }
     runtime.mark_recovery_completed(summary.clone()).await;
     Ok(summary)
+}
+
+#[derive(Clone, Debug)]
+struct CatchupRevisionCandidate {
+    title: String,
+    revid: u64,
+    timestamp: DateTime<Utc>,
+    user_hidden: bool,
+    comment_hidden: bool,
+}
+
+#[derive(Clone, Debug)]
+struct CandidateDiscovery {
+    candidate_count: usize,
+    watched_candidates: Vec<CatchupRevisionCandidate>,
+    chunk_count: usize,
+    truncated: bool,
+    elapsed_ms: u64,
+}
+
+async fn discover_recentchange_candidates(
+    runtime: &Arc<AppRuntime>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<CandidateDiscovery> {
+    let started = std::time::Instant::now();
+    let recent = runtime
+        .client
+        .fetch_recent_changes_in_window(start, end, runtime.config.catchup.max_revisions_per_run)
+        .await?;
+    let watched_set = runtime.cache.read().await.watched_set.clone();
+    let candidate_count = recent.changes.len();
+    let mut seen_revids = BTreeSet::new();
+    let mut watched_candidates = Vec::new();
+    for change in recent.changes {
+        if !watched_set.contains(&normalize_title(&change.title))
+            || !seen_revids.insert(change.revid)
+        {
+            continue;
+        }
+        watched_candidates.push(CatchupRevisionCandidate {
+            title: change.title,
+            revid: change.revid,
+            timestamp: change.timestamp,
+            user_hidden: false,
+            comment_hidden: false,
+        });
+    }
+    Ok(CandidateDiscovery {
+        candidate_count,
+        watched_candidates,
+        chunk_count: recent.chunk_count,
+        truncated: recent.truncated,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+async fn process_revision_candidate(
+    runtime: &Arc<AppRuntime>,
+    request: &CatchupRequest,
+    summary: &mut CoverageSummary,
+    candidate: CatchupRevisionCandidate,
+) -> Result<bool> {
+    if summary.edits_checked >= runtime.config.catchup.max_revisions_per_run {
+        summary.stopped_early_reason = Some("max-revisions-reached".to_string());
+        push_unresolved_item(
+            summary,
+            runtime.config.catchup.unresolved_sample_limit,
+            UnresolvedExposureItem {
+                title: candidate.title,
+                revid: candidate.revid,
+                revision_url: Some(crate::mw_api::revision_url(
+                    &runtime.config.wiki.server_name,
+                    candidate.revid,
+                )),
+                age_seconds: Some((Utc::now() - candidate.timestamp).num_seconds()),
+                reason: "max-revisions-reached".to_string(),
+                next_action: "rerun catch-up with a narrower window".to_string(),
+            },
+        );
+        return Ok(false);
+    }
+    summary.edits_checked += 1;
+    if candidate.user_hidden && candidate.comment_hidden {
+        summary.already_hidden_count += 1;
+        return Ok(true);
+    }
+    if request.report_only {
+        push_unresolved_item(
+            summary,
+            runtime.config.catchup.unresolved_sample_limit,
+            UnresolvedExposureItem {
+                title: candidate.title,
+                revid: candidate.revid,
+                revision_url: Some(crate::mw_api::revision_url(
+                    &runtime.config.wiki.server_name,
+                    candidate.revid,
+                )),
+                age_seconds: Some((Utc::now() - candidate.timestamp).num_seconds()),
+                reason: "report-only-not-hidden".to_string(),
+                next_action: "run emergency catch-up without report-only".to_string(),
+            },
+        );
+        return Ok(true);
+    }
+    let (completion_tx, completion_rx) = oneshot::channel();
+    runtime
+        .dispatch_action(RevDelDispatch {
+            title: candidate.title.clone(),
+            revids: vec![candidate.revid],
+            event_id: None,
+            user: None,
+            comment: None,
+            mode: RevDelMode::Catchup,
+            observed_at: Some(candidate.timestamp),
+            recovery_trigger: Some(request.trigger.clone()),
+            completion_tx: Some(completion_tx),
+        })
+        .await?;
+    match tokio::time::timeout(std::time::Duration::from_secs(60), completion_rx).await {
+        Ok(Ok(Ok(DispatchCompletion::Hidden))) => summary.hidden_count += 1,
+        Ok(Ok(Ok(DispatchCompletion::AlreadyHandled))) => summary.already_hidden_count += 1,
+        Ok(Ok(Err(reason))) => {
+            summary.failed_count += 1;
+            push_unresolved_item(
+                summary,
+                runtime.config.catchup.unresolved_sample_limit,
+                UnresolvedExposureItem {
+                    title: candidate.title,
+                    revid: candidate.revid,
+                    revision_url: Some(crate::mw_api::revision_url(
+                        &runtime.config.wiki.server_name,
+                        candidate.revid,
+                    )),
+                    age_seconds: Some((Utc::now() - candidate.timestamp).num_seconds()),
+                    reason,
+                    next_action: "review auth/API state and rerun catch-up".to_string(),
+                },
+            );
+        }
+        Ok(Err(_)) | Err(_) => {
+            push_unresolved_item(
+                summary,
+                runtime.config.catchup.unresolved_sample_limit,
+                UnresolvedExposureItem {
+                    title: candidate.title,
+                    revid: candidate.revid,
+                    revision_url: Some(crate::mw_api::revision_url(
+                        &runtime.config.wiki.server_name,
+                        candidate.revid,
+                    )),
+                    age_seconds: Some((Utc::now() - candidate.timestamp).num_seconds()),
+                    reason: "worker-completion-timeout".to_string(),
+                    next_action: "check worker status and rerun catch-up".to_string(),
+                },
+            );
+        }
+    }
+    Ok(true)
 }
 
 async fn scoped_titles(runtime: &Arc<AppRuntime>, title_scope: Option<Vec<String>>) -> Vec<String> {
@@ -317,6 +455,30 @@ pub fn format_summary_lines(summary: &CoverageSummary) -> Vec<String> {
         format!("coverage.failed={}", summary.failed_count),
         format!("coverage.unresolved={}", summary.unresolved_count),
     ];
+    if let Some(source) = summary.candidate_source.as_deref() {
+        lines.push(format!("coverage.candidate_source={}", source));
+        lines.push(format!(
+            "coverage.candidate_count={}",
+            summary.candidate_count
+        ));
+        lines.push(format!(
+            "coverage.watched_candidate_count={}",
+            summary.watched_candidate_count
+        ));
+        lines.push(format!(
+            "coverage.candidate_chunk_count={}",
+            summary.candidate_chunk_count
+        ));
+        if let Some(elapsed_ms) = summary.candidate_discovery_elapsed_ms {
+            lines.push(format!(
+                "coverage.candidate_discovery_elapsed_ms={}",
+                elapsed_ms
+            ));
+        }
+    }
+    if let Some(reason) = summary.fallback_reason.as_deref() {
+        lines.push(format!("coverage.fallback_reason={}", reason));
+    }
     if let Some(reason) = summary.stopped_early_reason.as_deref() {
         lines.push(format!("coverage.stopped_early_reason={}", reason));
     }
@@ -538,7 +700,7 @@ fn rate_limit_retry_after_seconds(
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -766,6 +928,25 @@ mod tests {
         r#"{"query":{"pages":[{"pageid":1,"revisions":[]}]}}"#
     }
 
+    fn recentchanges_response() -> &'static str {
+        r#"{
+          "query": {
+            "recentchanges": [
+              {
+                "title": "Foo",
+                "timestamp": "2026-05-13T12:00:00Z",
+                "revid": 101
+              },
+              {
+                "title": "Unwatched",
+                "timestamp": "2026-05-13T12:01:00Z",
+                "revid": 102
+              }
+            ]
+          }
+        }"#
+    }
+
     #[tokio::test]
     async fn default_catchup_reports_last_successful_hide_anchor_in_summary() {
         let server = MockServer::start().await;
@@ -848,5 +1029,162 @@ mod tests {
             (end - start).num_seconds(),
             harness.runtime.config.catchup.default_window_seconds
         );
+    }
+
+    #[tokio::test]
+    async fn ordinary_catchup_uses_recentchanges_candidates_before_full_scan() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("list", "recentchanges"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(recentchanges_response(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        let start = DateTime::parse_from_rfc3339("2026-05-13T11:59:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-05-13T12:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let summary = run_catchup_window(
+            &harness.runtime,
+            CatchupRequest {
+                start,
+                end,
+                trigger: "startup".to_string(),
+                scope_label: "recent emergency window".to_string(),
+                report_only: true,
+                allow_large_window: false,
+                title_scope: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.candidate_source.as_deref(), Some("recentchanges"));
+        assert_eq!(summary.candidate_count, 2);
+        assert_eq!(summary.watched_candidate_count, 1);
+        assert_eq!(summary.pages_checked, 1);
+        assert_eq!(summary.edits_checked, 1);
+        assert_eq!(summary.unresolved_count, 1);
+        assert_eq!(summary.fallback_reason, None);
+        assert!(summary.candidate_discovery_elapsed_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn catchup_counts_already_processed_candidate_as_already_hidden() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("list", "recentchanges"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(recentchanges_response(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        harness.runtime.processed.write().await.insert(101);
+        let start = DateTime::parse_from_rfc3339("2026-05-13T11:59:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-05-13T12:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let summary = run_catchup_window(
+            &harness.runtime,
+            CatchupRequest {
+                start,
+                end,
+                trigger: "startup".to_string(),
+                scope_label: "recent emergency window".to_string(),
+                report_only: false,
+                allow_large_window: false,
+                title_scope: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.hidden_count, 0);
+        assert_eq!(summary.already_hidden_count, 1);
+        assert_eq!(summary.failed_count, 0);
+    }
+
+    #[tokio::test]
+    async fn full_scan_fallback_requires_candidate_failure_reason() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("list", "recentchanges"))
+            .respond_with(ResponseTemplate::new(500).set_body_raw("temporary", "text/plain"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("prop", "revisions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(empty_revisions_response(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        let end = Utc::now();
+
+        let summary = run_catchup_window(
+            &harness.runtime,
+            CatchupRequest {
+                start: end - TimeDelta::minutes(5),
+                end,
+                trigger: "startup".to_string(),
+                scope_label: "recent emergency window".to_string(),
+                report_only: true,
+                allow_large_window: false,
+                title_scope: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            summary.candidate_source.as_deref(),
+            Some("full-scan-fallback")
+        );
+        assert_eq!(
+            summary.fallback_reason.as_deref(),
+            Some("candidate-source-unavailable")
+        );
+        assert_eq!(summary.pages_checked, 2);
     }
 }

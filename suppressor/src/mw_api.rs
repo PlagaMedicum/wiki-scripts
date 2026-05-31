@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -19,6 +20,7 @@ pub struct MediaWikiClient {
     api_url: String,
     stream_url: String,
     user_agent: String,
+    retry: RetryConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +51,20 @@ pub struct RecentChangeProbe {
     pub revid: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecentChangeRecord {
+    pub title: String,
+    pub timestamp: DateTime<Utc>,
+    pub revid: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecentChangeWindow {
+    pub changes: Vec<RecentChangeRecord>,
+    pub chunk_count: usize,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct ApiUserInfo {
     pub name: String,
@@ -76,9 +92,14 @@ pub struct ApiTransportError {
 
 impl MediaWikiClient {
     pub fn new(env: &EnvConfig) -> Result<Self> {
+        Self::new_with_retry(env, &default_client_retry())
+    }
+
+    pub fn new_with_retry(env: &EnvConfig, retry: &RetryConfig) -> Result<Self> {
         let http = Client::builder()
             .cookie_store(true)
             .user_agent(env.user_agent.clone())
+            .timeout(Duration::from_secs(60))
             .build()
             .context("Failed to build HTTP client")?;
         Ok(Self {
@@ -86,6 +107,7 @@ impl MediaWikiClient {
             api_url: env.api_url.clone(),
             stream_url: env.stream_url.clone(),
             user_agent: env.user_agent.clone(),
+            retry: retry.clone(),
         })
     }
 
@@ -303,6 +325,77 @@ impl MediaWikiClient {
         }))
     }
 
+    pub async fn fetch_recent_changes_in_window(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<RecentChangeWindow> {
+        if limit == 0 {
+            return Ok(RecentChangeWindow::default());
+        }
+        let page_limit = limit.clamp(1, 500).to_string();
+        let rcstart = mediawiki_timestamp(end);
+        let rcend = mediawiki_timestamp(start);
+        let mut continue_token: Option<String> = None;
+        let mut changes = Vec::new();
+        let mut chunk_count = 0;
+        let mut truncated = false;
+
+        loop {
+            let mut params = vec![
+                ("action", "query".to_string()),
+                ("list", "recentchanges".to_string()),
+                ("rclimit", page_limit.clone()),
+                ("rctype", "edit|new".to_string()),
+                ("rcprop", "title|timestamp|ids".to_string()),
+                ("rcdir", "older".to_string()),
+                ("rcstart", rcstart.clone()),
+                ("rcend", rcend.clone()),
+            ];
+            if let Some(token) = continue_token.as_ref() {
+                params.push(("rccontinue", token.clone()));
+            }
+            let borrowed = params
+                .iter()
+                .map(|(key, value)| (*key, value.as_str()))
+                .collect::<Vec<_>>();
+            let value = self.get_json(&borrowed).await?;
+            chunk_count += 1;
+            if let Some(raw_changes) = value["query"]["recentchanges"].as_array() {
+                for change in raw_changes {
+                    if changes.len() >= limit {
+                        truncated = true;
+                        break;
+                    }
+                    let (Some(title), Some(timestamp), Some(revid)) = (
+                        change["title"].as_str(),
+                        change["timestamp"].as_str(),
+                        change["revid"].as_u64(),
+                    ) else {
+                        continue;
+                    };
+                    changes.push(RecentChangeRecord {
+                        title: title.to_string(),
+                        timestamp: parse_timestamp(timestamp)?,
+                        revid,
+                    });
+                }
+            }
+            continue_token = value["continue"]["rccontinue"].as_str().map(str::to_string);
+            if truncated || continue_token.is_none() {
+                truncated = truncated || continue_token.is_some();
+                break;
+            }
+        }
+
+        Ok(RecentChangeWindow {
+            changes,
+            chunk_count,
+            truncated,
+        })
+    }
+
     pub async fn resolve_redirect_target(&self, title: &str) -> Result<Option<String>> {
         let value = self
             .get_json(&[("action", "query"), ("titles", title), ("redirects", "1")])
@@ -333,6 +426,33 @@ impl MediaWikiClient {
         Ok(())
     }
 
+    pub async fn append_text(
+        &self,
+        title: &str,
+        append_text: &str,
+        summary: &str,
+        csrf_token: &str,
+    ) -> Result<u64> {
+        let value = self
+            .post_form_json(&[
+                ("action", "edit".to_string()),
+                ("title", title.to_string()),
+                ("appendtext", append_text.to_string()),
+                ("summary", summary.to_string()),
+                ("minor", "1".to_string()),
+                ("bot", "1".to_string()),
+                ("token", csrf_token.to_string()),
+            ])
+            .await?;
+        let result = value["edit"]["result"].as_str().unwrap_or_default();
+        if result != "Success" {
+            bail!("Unexpected edit response");
+        }
+        value["edit"]["newrevid"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Missing newrevid in edit response"))
+    }
+
     pub async fn revision_delete_with_retry<Relogin, RefreshToken, ReloginFuture, RefreshFuture>(
         &self,
         ids: &[u64],
@@ -349,28 +469,39 @@ impl MediaWikiClient {
         RefreshFuture: Future<Output = Result<String>> + Send + 'static,
     {
         let mut attempts = 0;
+        let mut refreshed_token = false;
+        let mut relogged_in = false;
         loop {
             match self.revision_delete(ids, reason, csrf_token).await {
                 Ok(()) => return Ok(()),
                 Err(error) => {
                     attempts += 1;
                     if let Some(api_error) = error.downcast_ref::<ApiError>() {
+                        let auth_session_code = matches!(
+                            api_error.code.as_str(),
+                            "badtoken" | "notloggedin" | "assertuserfailed"
+                        );
                         match api_error.code.as_str() {
-                            "badtoken" if attempts <= 1 => {
+                            "badtoken" if !refreshed_token => {
+                                refreshed_token = true;
                                 *csrf_token = refresh_token().await?;
                                 continue;
                             }
-                            "notloggedin" | "assertuserfailed" if attempts <= 2 => {
+                            "badtoken" | "notloggedin" | "assertuserfailed" if !relogged_in => {
+                                relogged_in = true;
                                 *csrf_token = relogin().await?;
                                 continue;
                             }
                             "permissiondenied" | "cantdelete" => {
-                                bail!(
-                                    "Permission failure during revisiondelete: {}",
-                                    api_error.info
-                                );
+                                let info = api_error.info.clone();
+                                return Err(error.context(format!(
+                                    "Permission failure during revisiondelete: {info}"
+                                )));
                             }
                             _ => {}
+                        }
+                        if auth_session_code {
+                            return Err(error);
                         }
                     }
                     if attempts <= retry.api_max_retries && is_transient(&error) {
@@ -379,6 +510,7 @@ impl MediaWikiClient {
                             attempts,
                             delay_seconds = delay,
                             ids_count = ids.len(),
+                            error = %error,
                             "transient revisiondelete failure; retrying after backoff"
                         );
                         histogram!("api_retry_backoff_seconds").record(delay as f64);
@@ -391,7 +523,42 @@ impl MediaWikiClient {
         }
     }
 
+    async fn with_api_retry<F, Fut>(&self, operation: &str, mut request: F) -> Result<Value>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<Value>>,
+    {
+        let mut attempts = 0;
+        loop {
+            match request().await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    attempts += 1;
+                    if attempts <= self.retry.api_max_retries && is_transient(&error) {
+                        let delay = retry_delay_seconds(&error, attempts);
+                        warn!(
+                            operation,
+                            attempts,
+                            delay_seconds = delay,
+                            error = %error,
+                            "transient MediaWiki API failure; retrying after backoff"
+                        );
+                        histogram!("api_retry_backoff_seconds").record(delay as f64);
+                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
     async fn get_json(&self, params: &[(&str, &str)]) -> Result<Value> {
+        self.with_api_retry("GET", || self.get_json_once(params))
+            .await
+    }
+
+    async fn get_json_once(&self, params: &[(&str, &str)]) -> Result<Value> {
         let mut request = self.http.get(&self.api_url);
         for (key, value) in params {
             request = request.query(&[(*key, *value)]);
@@ -402,6 +569,11 @@ impl MediaWikiClient {
     }
 
     async fn post_form_json(&self, params: &[(&str, String)]) -> Result<Value> {
+        self.with_api_retry("POST", || self.post_form_json_once(params))
+            .await
+    }
+
+    async fn post_form_json_once(&self, params: &[(&str, String)]) -> Result<Value> {
         let form = params
             .iter()
             .map(|(key, value)| (*key, value.clone()))
@@ -434,6 +606,29 @@ impl MediaWikiClient {
         }
         Ok(url)
     }
+}
+
+fn default_client_retry() -> RetryConfig {
+    RetryConfig {
+        stream_backoff_initial_ms: 1000,
+        stream_backoff_max_ms: 10000,
+        api_max_retries: 0,
+        since_recovery_seconds: 0,
+    }
+}
+
+fn retry_delay_seconds(error: &anyhow::Error, attempts: u32) -> u64 {
+    if let Some(api_error) = error.downcast_ref::<ApiError>()
+        && let Some(seconds) = api_error.retry_after_seconds
+    {
+        return seconds;
+    }
+    if let Some(transport_error) = error.downcast_ref::<ApiTransportError>()
+        && let Some(seconds) = transport_error.retry_after_seconds
+    {
+        return seconds;
+    }
+    2_u64.saturating_pow(attempts.saturating_sub(1))
 }
 
 pub fn revision_url(server_name: &str, revid: u64) -> String {
@@ -471,14 +666,7 @@ pub fn classify_api_failure(
     sample_revid: Option<u64>,
 ) -> ApiFailureSnapshot {
     if let Some(api_error) = error.downcast_ref::<ApiError>() {
-        let class = if matches!(
-            api_error.code.as_str(),
-            "badtoken" | "notloggedin" | "assertuserfailed" | "permissiondenied" | "cantdelete"
-        ) {
-            "auth-session"
-        } else {
-            "api-json-error"
-        };
+        let class = api_error_class(&api_error.code);
         return ApiFailureSnapshot {
             class: class.to_string(),
             api_code: Some(api_error.code.clone()),
@@ -536,29 +724,41 @@ pub fn classify_api_failure(
         };
     }
     let rendered = format!("{error:#}");
-    let class = if rendered.contains("Failed to decode JSON response") {
-        "decode-error"
-    } else if rendered.contains("Permission failure")
-        || rendered.contains("re-login failed")
-        || rendered.contains("CSRF refresh failed")
-        || rendered.contains("Authenticated session lacks")
-    {
-        "auth-session"
-    } else {
-        "unknown"
-    };
+    let class = rendered_error_class(&rendered);
     ApiFailureSnapshot {
         class: class.to_string(),
         api_code: None,
         http_status: None,
         content_type: None,
-        retryable: class != "auth-session",
+        retryable: !matches!(class, "auth-session" | "permission"),
         retry_after_seconds: None,
         operation: operation.to_string(),
         sample_title: sample_title.map(str::to_string),
         sample_revid,
         message: safe_error_message(&rendered),
         occurred_at: Some(Utc::now()),
+    }
+}
+
+fn api_error_class(code: &str) -> &'static str {
+    match code {
+        "badtoken" | "notloggedin" | "assertuserfailed" => "auth-session",
+        "permissiondenied" | "cantdelete" => "permission",
+        _ => "api-json-error",
+    }
+}
+
+fn rendered_error_class(rendered: &str) -> &'static str {
+    if rendered.contains("Failed to decode JSON response") {
+        "decode-error"
+    } else if rendered.contains("Permission failure")
+        || rendered.contains("Authenticated session lacks")
+    {
+        "permission"
+    } else if rendered.contains("re-login failed") || rendered.contains("CSRF refresh failed") {
+        "auth-session"
+    } else {
+        "unknown"
     }
 }
 
@@ -659,10 +859,7 @@ fn parse_retry_after_seconds(value: &reqwest::header::HeaderValue) -> Option<u64
 }
 
 fn api_code_retryable(code: &str) -> bool {
-    matches!(
-        code,
-        "badtoken" | "notloggedin" | "assertuserfailed" | "maxlag" | "ratelimited" | "readonly"
-    )
+    matches!(code, "maxlag" | "ratelimited" | "readonly")
 }
 
 fn safe_error_message(value: &str) -> String {
@@ -691,7 +888,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use wiremock::matchers::{method, path};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use wiremock::matchers::{body_string_contains, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_env(api_url: String) -> crate::config::EnvConfig {
@@ -776,6 +976,381 @@ mod tests {
     fn parses_retry_after_seconds_header_value() {
         let header = reqwest::header::HeaderValue::from_static("120");
         assert_eq!(parse_retry_after_seconds(&header), Some(120));
+    }
+
+    fn retry_config(max_retries: u32) -> RetryConfig {
+        RetryConfig {
+            stream_backoff_initial_ms: 1000,
+            stream_backoff_max_ms: 10000,
+            api_max_retries: max_retries,
+            since_recovery_seconds: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn revision_delete_with_retry_refreshes_badtoken_once_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=stale"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"badtoken","info":"bad csrf"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=refreshed"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"revisiondelete":{"status":"Success"},"success":1}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(0)).unwrap();
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+        let relogin_calls = Arc::new(AtomicUsize::new(0));
+        let mut csrf = "stale".to_string();
+
+        client
+            .revision_delete_with_retry(
+                &[42],
+                "test",
+                &mut csrf,
+                &retry_config(0),
+                {
+                    let relogin_calls = Arc::clone(&relogin_calls);
+                    move || {
+                        let relogin_calls = Arc::clone(&relogin_calls);
+                        async move {
+                            relogin_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok("relogged".to_string())
+                        }
+                    }
+                },
+                {
+                    let refresh_calls = Arc::clone(&refresh_calls);
+                    move || {
+                        let refresh_calls = Arc::clone(&refresh_calls);
+                        async move {
+                            refresh_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok("refreshed".to_string())
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(csrf, "refreshed");
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(relogin_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn revision_delete_with_retry_relogins_after_second_badtoken() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=stale"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"badtoken","info":"bad csrf"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=refreshed"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"badtoken","info":"still bad csrf"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=relogged"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"revisiondelete":{"status":"Success"},"success":1}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(0)).unwrap();
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+        let relogin_calls = Arc::new(AtomicUsize::new(0));
+        let mut csrf = "stale".to_string();
+
+        client
+            .revision_delete_with_retry(
+                &[42],
+                "test",
+                &mut csrf,
+                &retry_config(0),
+                {
+                    let relogin_calls = Arc::clone(&relogin_calls);
+                    move || {
+                        let relogin_calls = Arc::clone(&relogin_calls);
+                        async move {
+                            relogin_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok("relogged".to_string())
+                        }
+                    }
+                },
+                {
+                    let refresh_calls = Arc::clone(&refresh_calls);
+                    move || {
+                        let refresh_calls = Arc::clone(&refresh_calls);
+                        async move {
+                            refresh_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok("refreshed".to_string())
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(csrf, "relogged");
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(relogin_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn revision_delete_with_retry_stops_after_refresh_and_relogin_fail_to_fix_badtoken() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=stale"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"badtoken","info":"bad csrf"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=refreshed"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"badtoken","info":"still bad csrf"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .and(body_string_contains("token=relogged"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"badtoken","info":"session still broken"}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(3)).unwrap();
+        let refresh_calls = Arc::new(AtomicUsize::new(0));
+        let relogin_calls = Arc::new(AtomicUsize::new(0));
+        let mut csrf = "stale".to_string();
+
+        let error = client
+            .revision_delete_with_retry(
+                &[42],
+                "test",
+                &mut csrf,
+                &retry_config(3),
+                {
+                    let relogin_calls = Arc::clone(&relogin_calls);
+                    move || {
+                        let relogin_calls = Arc::clone(&relogin_calls);
+                        async move {
+                            relogin_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok("relogged".to_string())
+                        }
+                    }
+                },
+                {
+                    let refresh_calls = Arc::clone(&refresh_calls);
+                    move || {
+                        let refresh_calls = Arc::clone(&refresh_calls);
+                        async move {
+                            refresh_calls.fetch_add(1, Ordering::SeqCst);
+                            Ok("refreshed".to_string())
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+
+        let snapshot = classify_api_failure(&error, "revisiondelete", Some("Fixture"), Some(42));
+        assert_eq!(csrf, "relogged");
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(relogin_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(snapshot.class, "auth-session");
+        assert_eq!(snapshot.api_code.as_deref(), Some("badtoken"));
+    }
+
+    #[tokio::test]
+    async fn revision_delete_with_retry_preserves_permission_error_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=revisiondelete"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"error":{"code":"permissiondenied","info":"synthetic denied"}}"#,
+                "application/json; charset=utf-8",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(3)).unwrap();
+        let mut csrf = "csrf".to_string();
+        let error = client
+            .revision_delete_with_retry(
+                &[42],
+                "test",
+                &mut csrf,
+                &retry_config(3),
+                || async { Ok("relogged".to_string()) },
+                || async { Ok("refreshed".to_string()) },
+            )
+            .await
+            .unwrap_err();
+
+        let snapshot = classify_api_failure(&error, "revisiondelete", Some("Fixture"), Some(42));
+        assert_eq!(snapshot.class, "permission");
+        assert_eq!(snapshot.api_code.as_deref(), Some("permissiondenied"));
+        assert_eq!(snapshot.http_status, Some(200));
+        assert_eq!(
+            snapshot.content_type.as_deref(),
+            Some("application/json; charset=utf-8")
+        );
+        assert!(!snapshot.retryable);
+    }
+
+    #[test]
+    fn classify_permission_failure_separately_from_auth_session() {
+        let error = anyhow::anyhow!(
+            "Permission failure during revisiondelete: You don't have permission to delete or undelete specific revisions of pages."
+        );
+
+        let snapshot = classify_api_failure(&error, "revisiondelete", Some("Fixture"), Some(42));
+
+        assert_eq!(snapshot.class, "permission");
+        assert!(!snapshot.retryable);
+        assert_eq!(snapshot.sample_revid, Some(42));
+    }
+
+    #[tokio::test]
+    async fn append_text_returns_new_revision_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/w/api.php"))
+            .and(body_string_contains("action=edit"))
+            .and(body_string_contains("bot=1"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"edit":{"result":"Success","newrevid":777}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(0)).unwrap();
+        let revid = client
+            .append_text("User:Bot/Test", "* smoke", "summary", "csrf")
+            .await
+            .unwrap();
+
+        assert_eq!(revid, 777);
+    }
+
+    #[tokio::test]
+    async fn generic_get_retries_retry_after_non_json_429() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("action", "query"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("content-type", "text/plain; charset=utf-8")
+                    .insert_header("retry-after", "0")
+                    .set_body_string("too many requests"),
+            )
+            .expect(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("action", "query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"query":{"tokens":{"logintoken":"login-token"}}}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(1)).unwrap();
+
+        let token = client.get_login_token().await.unwrap();
+
+        assert_eq!(token, "login-token");
+    }
+
+    #[tokio::test]
+    async fn generic_get_exhausts_retry_with_classified_non_json_429() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("list", "recentchanges"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("content-type", "text/plain; charset=utf-8")
+                    .insert_header("retry-after", "0")
+                    .set_body_string("too many requests"),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new_with_retry(&env, &retry_config(1)).unwrap();
+        let error = client.fetch_latest_recent_change().await.unwrap_err();
+        let snapshot = classify_api_failure(&error, "recentchanges-poll", None, None);
+
+        assert_eq!(snapshot.class, "non-json-response");
+        assert_eq!(snapshot.http_status, Some(429));
+        assert_eq!(snapshot.retry_after_seconds, Some(0));
+        assert!(snapshot.retryable);
     }
 
     #[tokio::test]
@@ -937,6 +1512,47 @@ mod tests {
         assert_eq!(probe.title.as_deref(), Some("Fixture Page"));
         assert_eq!(probe.revid, Some(9000001));
         assert_eq!(probe.timestamp.to_rfc3339(), "2026-04-29T09:10:02+00:00");
+    }
+
+    #[tokio::test]
+    async fn fetches_recentchanges_window_candidates() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("list", "recentchanges"))
+            .and(query_param("rcdir", "older"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+                  "query": {
+                    "recentchanges": [
+                      {
+                        "title": "Fixture Page",
+                        "timestamp": "2026-05-13T12:00:00Z",
+                        "revid": 9000001
+                      }
+                    ]
+                  }
+                }"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = test_env(format!("{}/w/api.php", server.uri()));
+        let client = MediaWikiClient::new(&env).unwrap();
+        let start = parse_timestamp("2026-05-13T11:59:00Z").unwrap();
+        let end = parse_timestamp("2026-05-13T12:01:00Z").unwrap();
+        let window = client
+            .fetch_recent_changes_in_window(start, end, 50)
+            .await
+            .unwrap();
+
+        assert_eq!(window.chunk_count, 1);
+        assert!(!window.truncated);
+        assert_eq!(window.changes.len(), 1);
+        assert_eq!(window.changes[0].title, "Fixture Page");
+        assert_eq!(window.changes[0].revid, 9000001);
     }
 
     #[tokio::test]

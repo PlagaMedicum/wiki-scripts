@@ -13,7 +13,7 @@ docmeta:
 
 The daemon:
 
-- consumes Wikimedia EventStreams recent-change data
+- polls MediaWiki recentchanges as the authoritative live detector
 - matches revisions against the watched-title set
 - performs public RevDel for `user|comment`
 - maintains reconciliation and backfill state
@@ -26,9 +26,10 @@ The daemon:
 
 ## Current Behavior
 
-- one daemon worker path for live and bounded catch-up handling
-- EventStreams live handling with a silence watchdog
-- bounded catch-up for startup, reconnect, stale-stream recovery, and operator commands
+- separate bounded live and background RevDel execution lanes inside one daemon process
+- recentchanges live polling with overlap dedupe and watched-title filtering
+- retained EventStreams observer compatibility kept out of healthy-state truth
+- bounded catch-up for startup, reconnect, stale-poll recovery, and operator commands
 - source-list edits refresh the cache, diff watched titles, and start title-scoped catch-up for newly added titles
 - request-page edits start immediate recent-window catch-up over the current watched set
 - recovery defaults to `last_successful_hide_at` when present and labels fallback recent windows
@@ -45,14 +46,16 @@ The daemon:
 - `server-start` launches the deployed binary as a detached child and verifies PID/runtime/log
   evidence before printing success
 - runtime status with a dedicated realtime health section
+- lane-aware runtime status for live/background queue depth, queue cap, in-flight count, saturation
+  metadata, action deadlines, submitted timestamps, and recent p50/p95/p99 live timing samples
 - reconciliation and backfill support
 - local cache and local state persistence
 - strict right checks before live operation
 - process operator-account edits too
 
-Realtime status records stream freshness, last observed target-wiki event, last watched-page match,
-last queued action, last completed action, latest outcome, recovery trigger, and catch-up summary.
-This keeps process liveness separate from realtime protection effectiveness.
+Realtime status records polling-backed freshness, last observed target-wiki event, last watched-page
+match, last queued action, last completed action, latest outcome, recovery trigger, and catch-up
+summary. This keeps process liveness separate from realtime protection effectiveness.
 
 ## Current Deployment Model
 
@@ -63,7 +66,8 @@ This keeps process liveness separate from realtime protection effectiveness.
 
 ## Safety Rules
 
-- fail closed on unrecoverable auth or permission loss
+- fail closed on unrecoverable auth or permission loss by blocking protection in status while the
+  daemon stays alive for operator evidence
 - never log secrets or sensitive payloads
 - keep RevDel requests limited to public `user|comment` metadata with `suppress=no`
 - record skipped, already-hidden, failed, unresolved, and blocked outcomes distinctly
@@ -72,18 +76,42 @@ This keeps process liveness separate from realtime protection effectiveness.
 
 ## Live And Recovery Boundaries
 
-`stream.rs` owns EventStreams parsing, target-wiki filtering, watched-title matching, realtime
-freshness updates, and watchdog-triggered reconnects. `catchup.rs` owns bounded window selection and
-coverage accounting. `worker.rs` owns actual RevDel execution, retries, processed-revision
-persistence, and fatal auth/permission blocking.
+`stream.rs` owns recentchanges polling, overlap dedupe, target-wiki filtering, watched-title
+matching, source-page/request-page trigger detection, retained observer compatibility, and realtime
+freshness updates. `catchup.rs` owns bounded window selection and coverage accounting. `worker.rs`
+owns actual RevDel execution, retries, processed-revision persistence, and fatal auth/permission
+blocking.
 
 Nightly/current-day reconciliation remains a safety net. It must not be used as proof that the
 sub-second realtime path is healthy.
 
+Live recentchange candidates enter the `live` lane. Catch-up, reconciliation, rolling verification,
+nightly full recheck, manual coverage, and one-shot command work enter the `background` lane. Live
+enqueue uses immediate bounded admission: when the live lane is full, the daemon records unhealthy
+live protection with a saturation reason instead of waiting behind queued work. Live actions carry a
+short deadline and record retrying `deadline-exceeded` when the current attempt should no longer
+hold the lane.
+
+Classified RevDel auth or permission failures are blocked protection, not process-fatal runtime
+events. The worker records the compact failure snapshot, blocked action outcome, and actionable
+issue, then keeps the daemon alive so `runtime_status.json` and logs remain fresh.
+
+Local live-detector state persistence is also treated as runtime evidence. Retained `last_event_id`
+writes create parent directories where possible; remaining write or rename failures record
+`state-persistence`, keep realtime status non-healthy, and reopen the retained observer through
+bounded backoff. This is compatibility evidence only: authoritative polling remains the live path
+that determines whether protection is healthy now.
+
+Ordinary startup and emergency catch-up are candidate-first. The recovery path queries bounded
+recentchanges for the selected window, filters by the normalized watched-title cache, and records
+candidate source/counts/chunks/elapsed time. The older full watched-set scan is allowed only with an
+explicit fallback reason or for explicit full verification work.
+
 ## Internal Service Boundaries
 
-- `stream.rs`: stream connection lifecycle, source-page/request-page trigger detection, source
-  refresh orchestration, and live candidate routing.
+- `stream.rs`: recentchanges poll lifecycle, overlap dedupe, source-page/request-page trigger
+  detection, retained observer compatibility, source refresh orchestration, and live candidate
+  routing.
 - `cache/`: suppression-list parsing, redirect-enriched watched-title cache, and watched-title
   diffing.
 - `commands.rs`: one-shot command orchestration, bounded command-report persistence, and detached
@@ -92,9 +120,9 @@ sub-second realtime path is healthy.
   unresolved revision links, next-action text, and warning aggregation.
 - `mw_api.rs`: MediaWiki transport, shared timestamp formatting, response parsing, retryability, and
   safe API failure classification.
-- `runtime.rs` and `state.rs`: bounded queue status, shared backoff, source-refresh snapshots,
-  latest classified errors, recovery summaries, command-report contracts, and local JSON
-  compatibility.
+- `runtime.rs` and `state.rs`: lane dispatch, bounded queue status, shared backoff, source-refresh
+  snapshots, latest classified errors, recovery summaries, command-report contracts, latency
+  snapshots, and local JSON compatibility.
 - `worker.rs`: RevDel submission, retry/relogin/token-refresh flow, final outcome recording, and
   blocked-state persistence.
 - `tui_status.rs` and `tui_view.rs`: read-only local status collection and compact operator
@@ -119,13 +147,17 @@ failure. They count failures by classified root cause and preserve only the conf
 safe sample titles. Repeated failures set shared backoff evidence and keep scheduled verification
 failed or degraded until a later successful run clears it.
 
+The runtime latency sample window is bounded. It records observed-to-queue, queue-to-submit,
+submit-to-complete, and observed-to-hidden paths for live evidence. The older observed-to-hide
+metric remains as a compatibility alias for observed-to-hidden.
+
 ## Scheduler And Launch Contracts
 
 The daytime scheduler uses a rolling `now-24h .. now` window, not a calendar-day-from-midnight
 window. The nightly scheduler is a full watched-set recheck and must stay labeled separately from
-the rolling verification path. Stream reopen, idle status, or a fresh recentchange event must not
-clear failed scheduled verification, stale full-recheck freshness, or shared backoff evidence on
-their own.
+the rolling verification path. Retained observer reopen, idle status, or one fresh polled event
+must not clear failed scheduled verification, stale full-recheck freshness, or shared backoff
+evidence on their own.
 
 `server-start` is additive. It keeps `run`, `dry-run`, TUI-managed starts, and optional systemd
 starts available, but it provides the current rsync server path: prepare runtime parents, validate

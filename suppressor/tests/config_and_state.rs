@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use suppressor::config::{AppConfig, RuntimePaths};
 use suppressor::state::{
-    CommandReportSurface, ProcessedRevidsState, RuntimeStatus, SharedBackoffSnapshot,
+    CommandReportSurface, ExecutionLaneSnapshot, LatencyMetricStatus, ProcessedRevidsState,
+    RuntimeLatencyStatus, RuntimeStatus, SharedBackoffSnapshot, SuppressionOutcomeSnapshot,
     compatibility_notice_for_unreadable_surface, load_json, load_text, save_json_atomic,
     save_text_atomic,
 };
@@ -65,6 +66,25 @@ fn legacy_current_day_config() -> String {
     include_str!("../config.toml").replace("[daytime_verification]", "[current_day_recheck]")
 }
 
+fn legacy_config_without_realtime_and_catchup() -> String {
+    let mut rendered = String::new();
+    let mut skipped_section = false;
+    for line in include_str!("../config.toml").lines() {
+        if matches!(line, "[realtime]" | "[catchup]") {
+            skipped_section = true;
+            continue;
+        }
+        if skipped_section && line.starts_with('[') {
+            skipped_section = false;
+        }
+        if !skipped_section {
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+    }
+    rendered
+}
+
 fn command_report_fixture_path(paths: &RuntimePaths) -> PathBuf {
     paths.command_report_file()
 }
@@ -87,6 +107,22 @@ fn loads_tracked_config() {
     assert_eq!(config.queue.capacity, 100);
     assert_eq!(config.realtime.stale_threshold_seconds, 10);
     assert_eq!(config.catchup.default_window_seconds, 1800);
+}
+
+#[test]
+fn legacy_config_without_realtime_and_catchup_sections_still_loads() {
+    let temp = tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    fs::write(&config_path, legacy_config_without_realtime_and_catchup()).unwrap();
+
+    let config = AppConfig::load(&config_path).unwrap();
+
+    assert_eq!(config.realtime.stale_threshold_seconds, 10);
+    assert_eq!(config.realtime.stream_read_timeout_seconds, 10);
+    assert_eq!(config.realtime.freshness_probe_seconds, 30);
+    assert_eq!(config.catchup.default_window_seconds, 1800);
+    assert_eq!(config.catchup.max_window_seconds, 7200);
+    assert_eq!(config.catchup.max_revisions_per_run, 5000);
 }
 
 #[test]
@@ -121,6 +157,83 @@ fn older_runtime_status_fixture_loads_with_safe_defaults() {
     assert!(loaded.realtime.current_task.is_none());
     assert!(loaded.realtime.current_lag_millis.is_none());
     assert!(loaded.realtime.latest_actionable_issue.is_none());
+    assert_eq!(loaded.realtime.live_lane.queue_depth, 0);
+    assert_eq!(loaded.realtime.background_lane.in_flight, 0);
+    assert_eq!(loaded.realtime.latency.queue_to_submit.sample_count, 0);
+}
+
+#[test]
+fn runtime_status_accepts_additive_lane_latency_and_outcome_fields() {
+    let temp = tempdir().unwrap();
+    let paths = runtime_paths_for_tempdir(&temp);
+    fs::create_dir_all(&paths.state_dir).unwrap();
+    let now = chrono::Utc::now();
+    let status = RuntimeStatus {
+        realtime: suppressor::state::RealtimeRuntimeStatus {
+            state: "healthy".to_string(),
+            queue_depth: 1,
+            live_lane: ExecutionLaneSnapshot {
+                queue_depth: 1,
+                queue_capacity: 100,
+                in_flight: 1,
+                concurrency_limit: 1,
+                latest_saturation_at: Some(now),
+                latest_saturation_reason: Some("deadline-exceeded".to_string()),
+            },
+            background_lane: ExecutionLaneSnapshot {
+                queue_depth: 4,
+                queue_capacity: 100,
+                in_flight: 1,
+                concurrency_limit: 1,
+                ..ExecutionLaneSnapshot::default()
+            },
+            latency: RuntimeLatencyStatus {
+                queue_to_submit: LatencyMetricStatus {
+                    sample_count: 3,
+                    p50_ms: Some(2),
+                    p95_ms: Some(8),
+                    p99_ms: Some(8),
+                    ..LatencyMetricStatus::default()
+                },
+                observed_to_hidden: LatencyMetricStatus {
+                    sample_count: 3,
+                    p50_ms: Some(110),
+                    p95_ms: Some(280),
+                    p99_ms: Some(280),
+                    ..LatencyMetricStatus::default()
+                },
+                ..RuntimeLatencyStatus::default()
+            },
+            latest_outcome: Some(SuppressionOutcomeSnapshot {
+                title: "Synthetic Sensitive Page".to_string(),
+                revid: 77,
+                outcome: "submitted".to_string(),
+                mode: "live".to_string(),
+                source_label: "live hiding".to_string(),
+                submitted_at: Some(now),
+                lane: Some("live".to_string()),
+                deadline_at: Some(now),
+                ..SuppressionOutcomeSnapshot::default()
+            }),
+            ..suppressor::state::RealtimeRuntimeStatus::default()
+        },
+        ..RuntimeStatus::default()
+    };
+
+    save_json_atomic(&paths.runtime_status_file, &status).unwrap();
+    let loaded: RuntimeStatus = load_json(&paths.runtime_status_file).unwrap().unwrap();
+
+    assert_eq!(loaded.realtime.live_lane.in_flight, 1);
+    assert_eq!(loaded.realtime.background_lane.queue_depth, 4);
+    assert_eq!(loaded.realtime.latency.queue_to_submit.p95_ms, Some(8));
+    assert_eq!(
+        loaded
+            .realtime
+            .latest_outcome
+            .as_ref()
+            .and_then(|outcome| outcome.deadline_at),
+        Some(now)
+    );
 }
 
 #[test]
@@ -216,7 +329,7 @@ fn tracked_config_accepts_legacy_current_day_recheck_alias() {
 
     let config = AppConfig::load(&config_path).unwrap();
 
-    assert!(config.daytime_verification.enabled);
+    assert!(!config.daytime_verification.enabled);
     assert_eq!(config.daytime_verification.min_delay_seconds, 3600);
     assert_eq!(config.daytime_verification.max_delay_seconds, 21600);
     assert_eq!(config.daytime_verification.window_hours, 24);

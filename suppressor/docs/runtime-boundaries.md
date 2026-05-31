@@ -25,8 +25,9 @@ That shape is intentional:
 - `app.rs` / `cli.rs` / `commands.rs`: CLI dispatch and one-shot commands
 - `daemon.rs` / `runtime.rs`: daemon lifecycle, launch-path snapshots, and runtime assembly
 - `auth.rs` / `mw_api.rs`: auth and MediaWiki transport
-- `stream.rs`: EventStreams ingestion
-- `catchup.rs`: bounded recovery and accident-window accounting
+- `stream.rs`: recentchanges polling as the authoritative live detector, with retained
+  EventStreams observer/fallback code kept out of the healthy-state truth path for the MVP
+- `catchup.rs`: candidate-first bounded recovery and accident-window accounting
 - `scheduler.rs` / `reconcile.rs`: scheduling and reconciliation
 - `worker.rs`: queued RevDel execution
 - `cache/`: watched-title cache loading and persistence
@@ -64,7 +65,25 @@ Ephemeral coordination:
 - PID file
 - detached `server-start` log
 - locks
-- in-memory queues
+- bounded live and background in-memory queues
+
+## Execution Lanes
+
+The daemon remains one process, but RevDel work has two explicit internal lanes:
+
+- `live` owns recentchange-triggered watched edits.
+- `background` owns recovery catch-up, reconciliation, rolling last-24h verification, nightly full
+  recheck, manual coverage, and one-shot command work.
+
+The live lane must never wait for the background lane to drain before it can accept, submit, or
+visibly reject a watched edit. The background lane is separately bounded and its concurrency stays at
+or below the reviewed API cap. Runtime status exposes both lanes with queue depth, capacity,
+in-flight count, concurrency limit, and latest saturation metadata.
+
+Local transactions are intentionally short: duplicate/processed checks, queued status, submit
+status, completion status, and processed-revision persistence are separate local transitions. No
+runtime-status, queue, or processed-revision lock is held across MediaWiki API calls, retry sleeps,
+page scans, or reconciliation sleeps.
 
 ## Scope Rules
 
@@ -77,13 +96,23 @@ Ephemeral coordination:
 - keep emergency catch-up bounded by configured windows and revision limits
 - prefer `last_successful_hide_at` as the recovery anchor when it exists, and label any fallback
   recent emergency window explicitly
-- keep source-list/request-page recovery inside the stream/cache/catch-up boundaries instead of
+- keep source-list/request-page recovery inside the polling/cache/catch-up boundaries instead of
   routing it through nightly reconciliation
 - keep rolling `Last 24 hours` verification distinct from nightly full watched-set recheck
 - keep API errors compact and classified; do not persist response bodies or sensitive payloads
+- keep classified auth/permission failures process-alive and operator-visible as blocked
+  protection
+- keep polling freshness authoritative for healthy realtime trust; retained stream observer evidence
+  may help diagnose gaps, but it must not restore healthy status on its own
+- keep retained observer cursor and local state persistence failures non-healthy until a retry
+  succeeds or the operator fixes the state path
+- query bounded recentchanges before ordinary recovery full scans, and record an explicit fallback
+  reason whenever a full watched-set scan is used outside explicit full verification
 - coalesce repeated warning causes before they reach the operator surface
 - surface shared throttle/backoff as degraded or unhealthy protection until the affected live,
   recovery, command, or reconciliation path has later successful evidence
+- surface live-lane saturation or deadline expiry as non-healthy live protection instead of a silent
+  queue wait
 - trust `server-start` only when the PID file, daemon-owned status, launch-path label, and detached
   log path agree for that detached child
 - do not broaden the service unless there is a strong operational reason

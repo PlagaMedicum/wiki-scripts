@@ -27,6 +27,11 @@ pub enum Command {
     HideRevid {
         id: u64,
     },
+    #[command(name = "smoke-test")]
+    SmokeTest {
+        #[arg(long)]
+        page: Option<String>,
+    },
     EmergencyCatchup {
         #[arg(long)]
         start: Option<String>,
@@ -62,10 +67,17 @@ pub enum Command {
     ServerStart {
         #[arg(long)]
         dry_run: bool,
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 120)]
         status_timeout_seconds: u64,
         #[arg(long)]
         log_file: Option<PathBuf>,
+    },
+    #[command(name = "supervisor-run", hide = true)]
+    SupervisorRun {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        log_file: PathBuf,
     },
     NightlySweepNow,
     PrintEffectiveConfig,
@@ -92,6 +104,16 @@ mod tests {
         assert!(cli.verbose);
         match cli.command {
             Command::HideRevid { id } => assert_eq!(id, 42),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_smoke_test_command() {
+        let cli =
+            Cli::try_parse_from(["suppressor", "smoke-test", "--page", "User:Bot/Test"]).unwrap();
+        match cli.command {
+            Command::SmokeTest { page } => assert_eq!(page.as_deref(), Some("User:Bot/Test")),
             other => panic!("unexpected command: {other:?}"),
         }
     }

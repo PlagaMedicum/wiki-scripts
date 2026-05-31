@@ -19,6 +19,21 @@ docmeta:
 6. Move to `make run`, `make tui`, `systemd`, or the rsynced binary `server-start` path only after
    the dry run is clean and the actual launch path has its own evidence.
 
+## Emergency 001 Trust Gate
+
+Treat the active suppressor recovery gate as the minimal stable server only:
+
+1. prove the exact binary that is running on the target host
+2. prove the same PID survives logout and owns fresh daemon status
+3. prove a new watched edit hides quickly
+4. prove the daemon stays current or within bounded lag under active edits
+5. prove auth-session, rate-limit, transport, and local-persistence failures stay visible without
+   daemon exit
+
+A stale replayed hide while the daemon remains hours behind is a failed smoke result, not partial
+success. PID evidence, receipt evidence, or checklist completion without same-run current-binary
+freshness proof does not count as realtime protection proof.
+
 ## Authoritative Launch-Path Baseline
 
 Treat the active supervisor path on this host as the source of truth for whether protection is
@@ -27,7 +42,8 @@ running.
 - The normal local operator workflow is `make tui`, which starts and supervises a TUI-managed child
   daemon.
 - The rsync server workflow is `./suppressor --config ./config.toml server-start` from the deployed
-  directory. It is authoritative only for the detached child it starts and verifies.
+  directory. It starts a detached supervisor, which starts and restarts the daemon child it
+  verifies.
 - `systemd` remains supported as an optional launch path, but it is not the default verification
   route unless this host is actually using it.
 - `runtime_status.json` is daemon-owned realtime truth for the running daemon.
@@ -45,6 +61,26 @@ For day-to-day use:
 3. Use one-shot commands only for bounded manual verification or catch-up.
 4. Treat `command_report.json` and command log lines as separate evidence from daemon-owned
    realtime protection state.
+
+The current MVP daemon trusts MediaWiki `recentchanges` polling as the authoritative live detector.
+Retained EventStreams code is not the healthy-state source of truth for this hotfix tree.
+
+## Emergency Live-Only Production Profile
+
+Until the target-host daemon passes live-hide soak, keep automatic verification disabled in the
+checked-in production baseline:
+
+- `[daytime_verification].enabled = false`
+- `[nightly_sweep].enabled = false`
+
+Keep these manual operator tools available:
+
+- `Emergency catch-up`
+- `Coverage: Last 24 hours`
+- `Run full watched-set recheck`
+
+Those commands are bounded operator actions. They do not prove the daemon is currently protecting
+live edits, and they must not be used to excuse a failing live path.
 
 ## Auth Contract
 
@@ -77,14 +113,14 @@ grants needed for that setup.
 The checked-in `config.toml` is the current be.wiki production baseline for:
 
 - API URL
-- EventStreams URL
+- EventStreams URL, retained only for non-authoritative observer/fallback code in this hotfix tree
 - watched-list title
 - request-page triggers, currently `Вікіпедыя:Запыты да схавальнікаў`
 - RevDel reason
 - realtime stale/read timeouts
 - bounded catch-up window and maximum revisions per run
 - catch-up warning sample retention
-- reconciliation timing
+- disabled automatic daytime and nightly verification in the emergency production profile
 - queue capacity
 - metrics bind
 
@@ -149,12 +185,28 @@ T040 may use an already-started daemon only if the operator evidence ties that p
 Q001-approved config migration and the deployed binary's
 `./suppressor --config ./config.toml server-start` command. If the original receipt is unavailable,
 the safe replacement evidence is the same receipt fields from daemon-owned status and local process
-inspection: mode, PID, config path, PID file, `runtime_status.json` path, detached log path, and
-`launch_path=server-start`. `runtime_status.json` must match the live PID when present, have a
-daemon timestamp or file mtime no older than 10 seconds at inspection, and remain fresh on a second
+inspection: mode, PID, binary path, config path, PID file, `runtime_status.json` path, detached log
+path, and `launch_path=server-start`. Record a safe artifact identity tuple for that launched
+binary, such as resolved path plus size/mtime from `stat`, and tie it to the same PID and
+daemon-owned status file. `runtime_status.json` must match the live PID when present, have a daemon
+timestamp or file mtime no older than 10 seconds at inspection, and remain fresh on a second
 inspection within 10 seconds. After closing the SSH terminal and reconnecting, the same PID must be
 alive and daemon-owned status must still be fresh. Do not record `.env` values, passwords, cookies,
 tokens, session material, raw hidden text, sensitive article content, or full unredacted logs.
+
+2026-05-13 rsynced update: the target-host bundle safely proved that the reviewed `[realtime]`
+config is present and that one `server-start` run wrote aligned PID/status/log metadata. Safe facts
+from that bundle include `launch_path.kind=server-start`, `launch_path.pid=28423`,
+`launch_path.binary_path=/home/ubuntu/wiki-supressor/suppressor/suppressor`,
+`launch_path.config_path=config.toml`, `launch_path.runtime_status_file=./state/runtime_status.json`,
+`launch_path.log_path=./state/daemon.log`, and a `runtime_status.json` file mtime of
+`2026-05-13 22:36:45 +0200`. Treat this as partial T040 launch evidence only; logout-survival and
+current-binary proof are still missing.
+
+2026-05-14 rsynced relaunch update: the follow-up bundle still lacked `live_lane`,
+`background_lane`, and `latency`, and its recovery summary still showed the legacy shape rather
+than current candidate-first evidence. Therefore the active blocker is deployment identity and
+launch workflow trust, not another unresolved local crash-policy design.
 
 Rollback or fallback until then: keep target-host deployment blocked, use the last trusted
 binary/config/state workflow if one exists, or use manual emergency catch-up while a reviewed fix is
@@ -196,6 +248,15 @@ The rsync source is:
 target/aarch64-unknown-linux-musl/release/suppressor
 ```
 
+For target-host proof, also record a safe artifact identity tuple for the exact deployed copy, such
+as:
+
+```bash
+stat -c '%n %s %y' ./suppressor
+```
+
+That tuple is non-secret and should be recorded alongside the `server-start` receipt and live PID.
+
 After copying the binary, `config.toml`, and the operator-managed `.env` or equivalent secret input
 to the server, start the daemon with one binary command:
 
@@ -203,16 +264,20 @@ to the server, start the daemon with one binary command:
 ./suppressor --config ./config.toml server-start
 ```
 
-The receipt must include mode, PID, config path, PID file, `runtime_status.json` path, detached log
-path, and `launch_path=server-start`. Trust this launch only after reconnecting to the server and
-confirming the same PID is still alive, stdout/stderr are going to the printed log path, and
-daemon-owned `runtime_status.json` continues updating under the 10-second freshness rule above.
-Missing receipt fields, missing config, missing secrets, unwritable state/log paths, duplicate
-daemon, startup timeout, stale PID, stale runtime status, launch-path/PID mismatch,
-non-`server-start` launch labels, missing logout-survival evidence, or unhealthy startup evidence
-blocks deployment trust. A running daemon may continue protecting edits while evidence is
-incomplete, but T040 and MVP deployment trust stay blocked until the missing or mismatched evidence
-is resolved and recorded.
+The receipt must include mode, daemon PID, supervisor PID, binary path, config path, PID file,
+`runtime_status.json` path, detached log path, and `launch_path=server-start`. Trust this launch
+only after reconnecting to the server and confirming the supervisor PID is alive, the current
+`daemon.pid` process is alive, stdout/stderr are going to the printed log path, and daemon-owned
+`runtime_status.json` continues updating under the 10-second freshness rule above.
+For T052 preflight, the same run must also prove current-MVP status shape: `runtime_status.json`
+should include `live_lane`, `background_lane`, and `latency`, and if a recovery pass runs it should
+surface candidate-first aggregate fields rather than only the older legacy recovery summary. Missing
+receipt fields, missing config, missing secrets, unwritable state/log paths, duplicate daemon,
+startup timeout, stale PID, stale runtime status, launch-path/PID mismatch, non-`server-start`
+launch labels, missing logout-survival evidence, missing safe artifact identity, legacy-only status
+shape, or unhealthy startup evidence blocks deployment trust. A running daemon may continue
+protecting edits while evidence is incomplete, but T040 and MVP deployment trust stay blocked until
+the missing or mismatched evidence is resolved and recorded.
 
 ## Active Live-Hide Incident
 
@@ -227,6 +292,54 @@ last observed event, last matching title/revision, latest outcome, latest action
 depth, processed-revision presence for the exposed revision if known, and whether the watched page is
 in the server cache. Do not copy secrets or raw sensitive logs. Fix the first failed boundary in the
 live path before spending time on resource samples or broader close-out.
+
+## Crash-Resilience And Recovery Status
+
+Do not interpret process liveness as healthy protection. If RevDel auth or wiki-side permission
+fails, the daemon should stay alive but `runtime_status.json` must show blocked or unhealthy live
+protection and a compact `live-hide` actionable issue. The operator action is to check bot session,
+rights, and wiki-side permission state before trusting another smoke result.
+
+If local state persistence fails, including `last_event_id` write or atomic replace errors,
+`runtime_status.json` should show `state-persistence` and non-healthy realtime status while the
+stream reopens through bounded backoff. Check state directory ownership, available disk, and the
+configured state paths before relaunching.
+
+For the rsync `server-start` path, a daemon process exit is no longer final. The detached supervisor
+marks `runtime_status.json` unhealthy, waits with bounded backoff, and starts a new daemon child.
+The current daemon PID may therefore change after a crash; use `daemon.pid` for the live child and
+`state/supervisor.pid` only to identify or stop the restarter itself.
+
+Ordinary startup, polling-gap or retained-observer-gap recovery, and emergency recovery should report aggregate candidate-first
+evidence: candidate source, candidate count, watched candidate count, chunk count, discovery time,
+and a fallback reason if the daemon uses a full watched-set scan. These aggregate counts are safe to
+record. Do not paste raw logs, raw page titles, actor names, comments, revision IDs from real
+incidents, cookies, tokens, or hidden content into tracked docs.
+
+## Live And Background Lanes
+
+The daemon now separates RevDel execution into two bounded in-process lanes:
+
+- `live`: recentchange-triggered watched edits.
+- `background`: catch-up, reconciliation, rolling last-24h verification, nightly full recheck, and
+  command-driven coverage or recovery work.
+
+Live admission is non-blocking. If the live lane is full, runtime status must become non-healthy and
+show the saturation reason instead of silently waiting behind queued work. Live actions also carry a
+short deadline; an expired live attempt records a retrying `deadline-exceeded` outcome so newer live
+edits can still be accepted or visibly rejected.
+
+In `runtime_status.json`, check `realtime.live_lane` and `realtime.background_lane` separately. The
+fields to record for T042 are queue depth, queue capacity, in-flight count, concurrency limit, latest
+saturation time, and latest saturation reason. The legacy `realtime.queue_depth` remains the live
+queue depth for compatibility. Recent timing evidence is under `realtime.latency` for
+observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden.
+
+For deployment evidence, do not treat a quiet background lane as proof of live health. A good
+target-host smoke check records a live or controlled dry-run edit while reconciliation, catch-up, or
+verification is either active or queued, then confirms the live lane reacts without waiting for the
+background lane to drain. This check has no fixed internal millisecond SLA; the release target is
+still the external hide evidence in the feature spec.
 
 ## 2026-04-28 Baseline Evidence
 
@@ -249,12 +362,12 @@ work is closing:
 
 - `realtime.state="catching-up"` with `catchup_active=true` and `backoff_until=null`
 - `last_event_observed_at="2026-04-28T19:00:45.173840784Z"` with `current_lag_seconds=0`
-- `last_freshness_probe_at=null`
+- `last_freshness_probe_at="2026-04-28T19:00:45.500000000Z"`
 - `latest_outcome.mode="live"` and `latest_outcome.outcome="blocked"` with `reason_code="auth-session"`
 - `latest_recovery_warnings=[]` and `latest_recovery_summary.unresolved_items=[]`
 - `reconciliation.last_result="failed: non-json-response: Failed to decode JSON response: expected value at line 1 column 1"`
 
-This means the persisted baseline currently shows a fresh stream event, no retained unresolved sample,
+This means the persisted baseline currently shows a fresh polling cycle, no retained unresolved sample,
 no persisted warning summary growth, and a still-mixed operational picture where the realtime state can
 remain in `catching-up` while the latest actionable live outcome is already blocked for another reason.
 
@@ -300,14 +413,15 @@ panes still use wrapped paragraph rendering.
 - target 95% of controlled realtime hides under one second and 99% under five seconds
 - report p95 and p99 from controlled runs before claiming release readiness
 - prioritize newer edits first during recovery after disconnect or restart
-- treat a stale realtime stream as unhealthy after the configured 10-second threshold
+- treat a stale authoritative polling path as unhealthy after the configured 10-second threshold
 - catch up the default 30-minute window within the configured recovery target where wiki/API health allows it
 - recover from `last_successful_hide_at` when present instead of silently truncating to a newer
   arbitrary recent window
 - record one rolling `Last 24 hours` verification and one nightly full watched-set recheck during
   each uninterrupted 24-hour daemon period
-- stop the service on missing rights, broken auth, persistent API failure, or malformed
-  suppression-list input
+- keep the service running in blocked or unhealthy state on missing rights, broken auth, persistent
+  API failure, or malformed suppression-list input so runtime evidence stays fresh while the
+  operator fixes the root cause
 
 ## Primary Status Questions
 

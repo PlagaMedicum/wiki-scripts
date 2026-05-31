@@ -1,20 +1,24 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use metrics::gauge;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::auth::{AuthState, authenticate};
 use crate::cache::{CachePersistence, RuntimeCache, load_or_bootstrap};
 use crate::config::{AppConfig, EnvConfig, RuntimePaths, init_logging, load_env};
+use crate::daemon::{LAUNCH_KIND_ENV, LAUNCH_LOG_PATH_ENV, LAUNCH_WRITE_PID_ENV};
 use crate::locks::{KeyLockGuard, KeyLockSet};
 use crate::metrics::{
-    init_metrics, record_observed_to_hide_latency_ms, record_observed_to_queue_latency_ms,
+    LatencyMetricSnapshot, init_metrics, record_observed_to_hide_latency_ms,
+    record_observed_to_queue_latency_ms, record_queue_to_submit_latency_ms,
+    record_submit_to_complete_latency_ms, snapshot_runtime_latency_metrics,
 };
 use crate::mw_api::MediaWikiClient;
 use crate::reconcile::{
@@ -22,9 +26,14 @@ use crate::reconcile::{
 };
 use crate::state::{
     ActionableIssueSnapshot, ApiFailureSnapshot, CoverageSummary, CurrentTaskSnapshot,
-    NightlySweepProgress, ProcessedRevidsState, RuntimeStatus, SharedBackoffSnapshot,
-    SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic,
+    ExecutionLaneSnapshot, LatencyMetricStatus, LaunchPathSnapshot, NightlySweepProgress,
+    ProcessedRevidsState, RuntimeLatencyStatus, RuntimeStatus, SharedBackoffSnapshot,
+    SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic, save_text_atomic,
 };
+
+const LIVE_ACTION_DEADLINE_SECONDS: i64 = 5;
+const LIVE_LANE_CONCURRENCY_LIMIT: usize = 1;
+const BACKGROUND_LANE_CONCURRENCY_LIMIT: usize = 1;
 
 pub struct RecoveryWindowSelection {
     pub start: DateTime<Utc>,
@@ -32,7 +41,7 @@ pub struct RecoveryWindowSelection {
     pub allow_large_window: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RevDelMode {
     Live,
     Catchup,
@@ -61,6 +70,37 @@ impl RevDelMode {
             RevDelMode::Manual => "manual operator action",
         }
     }
+
+    pub fn execution_lane(self) -> ExecutionLaneKind {
+        match self {
+            RevDelMode::Live => ExecutionLaneKind::Live,
+            RevDelMode::Catchup
+            | RevDelMode::Coverage
+            | RevDelMode::Reconciliation
+            | RevDelMode::Manual => ExecutionLaneKind::Background,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatchCompletion {
+    Hidden,
+    AlreadyHandled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionLaneKind {
+    Live,
+    Background,
+}
+
+impl ExecutionLaneKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExecutionLaneKind::Live => "live",
+            ExecutionLaneKind::Background => "background",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,6 +115,125 @@ impl RuntimeStatusSurfaceMode {
     }
 }
 
+#[derive(Clone)]
+struct StartupEvidence {
+    launch_path: LaunchPathSnapshot,
+    wrote_pid: bool,
+}
+
+pub(crate) fn launch_path_snapshot_from_paths(
+    paths: &RuntimePaths,
+    started_at: DateTime<Utc>,
+) -> LaunchPathSnapshot {
+    let kind = std::env::var(LAUNCH_KIND_ENV).unwrap_or_else(|_| "foreground".to_string());
+    let binary_path = std::env::current_exe()
+        .ok()
+        .map(|path| path.display().to_string());
+    let log_path = std::env::var(LAUNCH_LOG_PATH_ENV).ok();
+    LaunchPathSnapshot {
+        kind,
+        pid: std::process::id() as i32,
+        binary_path,
+        config_path: paths.config_path.display().to_string(),
+        pid_file: paths.pid_file.display().to_string(),
+        runtime_status_file: paths.runtime_status_file.display().to_string(),
+        log_path,
+        started_at: Some(started_at),
+    }
+}
+
+pub(crate) fn daemon_should_write_pid(dry_run: bool) -> bool {
+    !dry_run
+        || std::env::var(LAUNCH_WRITE_PID_ENV)
+            .map(|value| value == "1")
+            .unwrap_or(false)
+}
+
+fn publish_startup_evidence(
+    paths: &RuntimePaths,
+    dry_run: bool,
+    runtime_status_surface_mode: RuntimeStatusSurfaceMode,
+) -> Result<Option<StartupEvidence>> {
+    if !runtime_status_surface_mode.persists_runtime_status() {
+        return Ok(None);
+    }
+
+    std::fs::create_dir_all(&paths.state_dir)
+        .with_context(|| format!("Failed to create {}", paths.state_dir.display()))?;
+    let started_at = Utc::now();
+    let launch_path = launch_path_snapshot_from_paths(paths, started_at);
+    let wrote_pid = daemon_should_write_pid(dry_run);
+    if wrote_pid {
+        save_text_atomic(&paths.pid_file, &launch_path.pid.to_string())?;
+    }
+
+    let mut status = RuntimeStatus {
+        daemon_state: if dry_run {
+            "dry-run-starting".to_string()
+        } else {
+            "starting".to_string()
+        },
+        dry_run,
+        launch_path: Some(launch_path.clone()),
+        last_notice: Some("startup evidence published".to_string()),
+        last_notice_at: Some(started_at),
+        ..RuntimeStatus::default()
+    };
+    status.realtime.state = "starting".to_string();
+    status.realtime.last_state_changed_at = Some(started_at);
+    save_json_atomic(&paths.runtime_status_file, &status)?;
+
+    Ok(Some(StartupEvidence {
+        launch_path,
+        wrote_pid,
+    }))
+}
+
+fn cleanup_failed_startup_evidence(
+    paths: &RuntimePaths,
+    dry_run: bool,
+    runtime_status_surface_mode: RuntimeStatusSurfaceMode,
+    evidence: Option<&StartupEvidence>,
+) {
+    let Some(evidence) = evidence else {
+        return;
+    };
+
+    if evidence.wrote_pid
+        && let Err(error) = std::fs::remove_file(&paths.pid_file)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            path = %paths.pid_file.display(),
+            error = %error,
+            "failed to remove startup pid marker after bootstrap error"
+        );
+    }
+
+    if !runtime_status_surface_mode.persists_runtime_status() {
+        return;
+    }
+
+    let failed_at = Utc::now();
+    let mut status = RuntimeStatus {
+        daemon_state: "stopped".to_string(),
+        dry_run,
+        launch_path: Some(evidence.launch_path.clone()),
+        last_notice: Some("daemon bootstrap failed before startup completed".to_string()),
+        last_notice_at: Some(failed_at),
+        ..RuntimeStatus::default()
+    };
+    status.realtime.state = "stopped".to_string();
+    status.realtime.last_state_changed_at = Some(failed_at);
+    if let Err(error) = save_json_atomic(&paths.runtime_status_file, &status) {
+        warn!(
+            path = %paths.runtime_status_file.display(),
+            error = %error,
+            "failed to persist bootstrap failure status"
+        );
+    }
+}
+
 pub struct RevDelAction {
     pub title: String,
     pub revids: Vec<u64>,
@@ -82,11 +241,14 @@ pub struct RevDelAction {
     pub user: Option<String>,
     pub comment: Option<String>,
     pub mode: RevDelMode,
+    pub lane: ExecutionLaneKind,
     pub enqueued_at: Instant,
     pub observed_at: Option<DateTime<Utc>>,
     pub queued_at: DateTime<Utc>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub deadline_at: Option<DateTime<Utc>>,
     pub recovery_trigger: Option<String>,
-    pub completion_tx: Option<oneshot::Sender<Result<(), String>>>,
+    pub completion_tx: Option<oneshot::Sender<Result<DispatchCompletion, String>>>,
     pub _revision_guards: Vec<KeyLockGuard<u64>>,
 }
 
@@ -99,10 +261,52 @@ pub struct RevDelDispatch {
     pub mode: RevDelMode,
     pub observed_at: Option<DateTime<Utc>>,
     pub recovery_trigger: Option<String>,
-    pub completion_tx: Option<oneshot::Sender<Result<(), String>>>,
+    pub completion_tx: Option<oneshot::Sender<Result<DispatchCompletion, String>>>,
+}
+
+#[derive(Clone)]
+pub struct ExecutionLaneRuntime {
+    pub kind: ExecutionLaneKind,
+    pub queue_depth: Arc<AtomicUsize>,
+    pub in_flight: Arc<AtomicUsize>,
+    pub queue_capacity: usize,
+    pub concurrency_limit: usize,
+    pub work_tx: mpsc::Sender<RevDelAction>,
+}
+
+impl ExecutionLaneRuntime {
+    fn new(
+        kind: ExecutionLaneKind,
+        queue_depth: Arc<AtomicUsize>,
+        in_flight: Arc<AtomicUsize>,
+        queue_capacity: usize,
+        concurrency_limit: usize,
+        work_tx: mpsc::Sender<RevDelAction>,
+    ) -> Self {
+        Self {
+            kind,
+            queue_depth,
+            in_flight,
+            queue_capacity,
+            concurrency_limit,
+            work_tx,
+        }
+    }
 }
 
 pub struct ActionDispatcher {
+    wiki_server_name: String,
+    revision_locks: Arc<KeyLockSet<u64>>,
+    processed: Arc<RwLock<ProcessedRevidsState>>,
+    live_lane: ExecutionLaneRuntime,
+    background_lane: ExecutionLaneRuntime,
+    runtime_status: Arc<tokio::sync::Mutex<RuntimeStatus>>,
+    runtime_status_file: PathBuf,
+    runtime_status_surface_mode: RuntimeStatusSurfaceMode,
+}
+
+#[cfg(test)]
+struct ActionDispatcherInit {
     wiki_server_name: String,
     revision_locks: Arc<KeyLockSet<u64>>,
     processed: Arc<RwLock<ProcessedRevidsState>>,
@@ -113,26 +317,67 @@ pub struct ActionDispatcher {
     runtime_status_surface_mode: RuntimeStatusSurfaceMode,
 }
 
+struct ActionDispatcherLanesInit {
+    wiki_server_name: String,
+    revision_locks: Arc<KeyLockSet<u64>>,
+    processed: Arc<RwLock<ProcessedRevidsState>>,
+    live_lane: ExecutionLaneRuntime,
+    background_lane: ExecutionLaneRuntime,
+    runtime_status: Arc<tokio::sync::Mutex<RuntimeStatus>>,
+    runtime_status_file: PathBuf,
+    runtime_status_surface_mode: RuntimeStatusSurfaceMode,
+}
+
 impl ActionDispatcher {
-    pub fn new(
-        wiki_server_name: String,
-        revision_locks: Arc<KeyLockSet<u64>>,
-        processed: Arc<RwLock<ProcessedRevidsState>>,
-        queue_depth: Arc<AtomicUsize>,
-        work_tx: mpsc::Sender<RevDelAction>,
-        runtime_status: Arc<tokio::sync::Mutex<RuntimeStatus>>,
-        runtime_status_file: PathBuf,
-        runtime_status_surface_mode: RuntimeStatusSurfaceMode,
-    ) -> Self {
+    #[cfg(test)]
+    fn new(init: ActionDispatcherInit) -> Self {
+        let queue_capacity = init.work_tx.max_capacity();
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let live_lane = ExecutionLaneRuntime::new(
+            ExecutionLaneKind::Live,
+            Arc::clone(&init.queue_depth),
+            Arc::clone(&in_flight),
+            queue_capacity,
+            LIVE_LANE_CONCURRENCY_LIMIT,
+            init.work_tx.clone(),
+        );
+        let background_lane = ExecutionLaneRuntime::new(
+            ExecutionLaneKind::Background,
+            init.queue_depth,
+            in_flight,
+            queue_capacity,
+            BACKGROUND_LANE_CONCURRENCY_LIMIT,
+            init.work_tx,
+        );
+        Self::new_with_lanes(ActionDispatcherLanesInit {
+            wiki_server_name: init.wiki_server_name,
+            revision_locks: init.revision_locks,
+            processed: init.processed,
+            live_lane,
+            background_lane,
+            runtime_status: init.runtime_status,
+            runtime_status_file: init.runtime_status_file,
+            runtime_status_surface_mode: init.runtime_status_surface_mode,
+        })
+    }
+
+    fn new_with_lanes(init: ActionDispatcherLanesInit) -> Self {
         Self {
-            wiki_server_name,
-            revision_locks,
-            processed,
-            queue_depth,
-            work_tx,
-            runtime_status,
-            runtime_status_file,
-            runtime_status_surface_mode,
+            wiki_server_name: init.wiki_server_name,
+            revision_locks: init.revision_locks,
+            processed: init.processed,
+            live_lane: init.live_lane,
+            background_lane: init.background_lane,
+            runtime_status: init.runtime_status,
+            runtime_status_file: init.runtime_status_file,
+            runtime_status_surface_mode: init.runtime_status_surface_mode,
+        }
+    }
+
+    fn lane_for(&self, kind: ExecutionLaneKind) -> &ExecutionLaneRuntime {
+        match kind {
+            ExecutionLaneKind::Live => &self.live_lane,
+            ExecutionLaneKind::Background => &self.background_lane,
         }
     }
 
@@ -181,6 +426,8 @@ impl ActionDispatcher {
             .copied()
             .map(|revid| crate::mw_api::revision_url(&self.wiki_server_name, revid));
         let source_label = mode.source_label().to_string();
+        let lane_kind = mode.execution_lane();
+        let lane = self.lane_for(lane_kind).clone();
         for revid in &revids {
             let Some(guard) = self.revision_locks.try_lock(*revid) else {
                 tracing::debug!(
@@ -198,12 +445,15 @@ impl ActionDispatcher {
                     source_label: source_label.clone(),
                     observed_at,
                     queued_at: None,
+                    submitted_at: None,
                     completed_at: None,
+                    lane: Some(lane_kind.label().to_string()),
+                    deadline_at: None,
                     attempt_count: 0,
                 })
                 .await;
                 if let Some(completion_tx) = completion_tx.take() {
-                    let _ = completion_tx.send(Ok(()));
+                    let _ = completion_tx.send(Ok(DispatchCompletion::AlreadyHandled));
                 }
                 return Ok(());
             };
@@ -223,22 +473,29 @@ impl ActionDispatcher {
                     source_label: source_label.clone(),
                     observed_at,
                     queued_at: None,
+                    submitted_at: None,
                     completed_at: None,
+                    lane: Some(lane_kind.label().to_string()),
+                    deadline_at: None,
                     attempt_count: 0,
                 })
                 .await;
                 if let Some(completion_tx) = completion_tx.take() {
-                    let _ = completion_tx.send(Ok(()));
+                    let _ = completion_tx.send(Ok(DispatchCompletion::AlreadyHandled));
                 }
                 return Ok(());
             }
             guards.push(guard);
         }
-        self.queue_depth.fetch_add(1, Ordering::SeqCst);
-        let depth = self.queue_depth.load(Ordering::SeqCst);
-        gauge!("queue_depth").set(depth as f64);
+        lane.queue_depth.fetch_add(1, Ordering::SeqCst);
+        let depth = lane.queue_depth.load(Ordering::SeqCst);
+        set_lane_queue_gauges(&self.live_lane, &self.background_lane);
         let queued_at = Utc::now();
-        if let Some(observed_at) = observed_at {
+        let deadline_at = (lane_kind == ExecutionLaneKind::Live)
+            .then(|| queued_at + chrono::TimeDelta::seconds(LIVE_ACTION_DEADLINE_SECONDS));
+        if lane_kind == ExecutionLaneKind::Live
+            && let Some(observed_at) = observed_at
+        {
             let elapsed_ms = (queued_at - observed_at).num_milliseconds().max(0) as u64;
             record_observed_to_queue_latency_ms(elapsed_ms);
         }
@@ -247,6 +504,7 @@ impl ActionDispatcher {
             revids = ?revids,
             event_id = ?event_id,
             mode = ?mode,
+            lane = lane_kind.label(),
             queue_depth = depth,
             "queueing revisiondelete action"
         );
@@ -261,43 +519,90 @@ impl ActionDispatcher {
                 source_label,
                 observed_at,
                 queued_at: Some(queued_at),
+                submitted_at: None,
                 completed_at: None,
+                lane: Some(lane_kind.label().to_string()),
+                deadline_at,
                 attempt_count: 0,
             })
             .await;
         }
-        self.work_tx
-            .send(RevDelAction {
-                title,
-                revids,
-                event_id,
-                user,
-                comment,
-                mode,
-                enqueued_at: Instant::now(),
-                observed_at,
-                queued_at,
-                recovery_trigger,
-                completion_tx,
-                _revision_guards: guards,
-            })
-            .await
-            .context("Failed to queue revisiondelete action")
+        let action = RevDelAction {
+            title,
+            revids,
+            event_id,
+            user,
+            comment,
+            mode,
+            lane: lane_kind,
+            enqueued_at: Instant::now(),
+            observed_at,
+            queued_at,
+            submitted_at: None,
+            deadline_at,
+            recovery_trigger,
+            completion_tx,
+            _revision_guards: guards,
+        };
+        if lane_kind == ExecutionLaneKind::Live {
+            match lane.work_tx.try_send(action) {
+                Ok(()) => Ok(()),
+                Err(TrySendError::Full(mut action)) => {
+                    decrement_atomic_saturating(&lane.queue_depth);
+                    self.record_lane_saturation(lane_kind, "live-queue-full", &action, "retrying")
+                        .await;
+                    if let Some(completion_tx) = action.completion_tx.take() {
+                        let _ = completion_tx.send(Err("live queue is full".to_string()));
+                    }
+                    Err(anyhow::anyhow!(
+                        "Failed to queue revisiondelete action: live queue is full"
+                    ))
+                }
+                Err(TrySendError::Closed(mut action)) => {
+                    decrement_atomic_saturating(&lane.queue_depth);
+                    self.record_lane_saturation(lane_kind, "live-queue-closed", &action, "failed")
+                        .await;
+                    if let Some(completion_tx) = action.completion_tx.take() {
+                        let _ = completion_tx.send(Err("live queue is closed".to_string()));
+                    }
+                    Err(anyhow::anyhow!(
+                        "Failed to queue revisiondelete action: live queue is closed"
+                    ))
+                }
+            }
+        } else {
+            if let Err(error) = lane.work_tx.send(action).await {
+                decrement_atomic_saturating(&lane.queue_depth);
+                return Err(error).context("Failed to queue revisiondelete action");
+            }
+            Ok(())
+        }
     }
 
     async fn record_latest_outcome(&self, outcome: SuppressionOutcomeSnapshot) {
-        let queue_depth = self.queue_depth.load(Ordering::SeqCst);
         let queued_title = outcome.title.clone();
         let queued_at = outcome.queued_at;
         let outcome_name = outcome.outcome.clone();
         let mut status = self.runtime_status.lock().await;
-        status.realtime.queue_depth = queue_depth;
+        apply_lane_status_to_runtime_status(&mut status, &self.live_lane, &self.background_lane);
         status.realtime.last_action_queued_at =
             outcome.queued_at.or(status.realtime.last_action_queued_at);
         status.realtime.latest_notice =
             Some(format!("{} revid {}", outcome.outcome, outcome.revid));
-        status.realtime.latest_outcome = Some(outcome);
-        if outcome_name == "queued" {
+        let should_surface_outcome =
+            should_replace_latest_outcome(status.realtime.latest_outcome.as_ref(), &outcome);
+        if should_surface_outcome {
+            status.realtime.latest_outcome = Some(outcome);
+        }
+        if outcome_name == "queued"
+            && should_surface_outcome
+            && status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .and_then(|outcome| outcome.lane.as_deref())
+                == Some(ExecutionLaneKind::Live.label())
+        {
             status.realtime.current_task = Some(CurrentTaskSnapshot {
                 task_kind: "live-hide".to_string(),
                 label: format!("hiding watched edit {queued_title}"),
@@ -319,6 +624,165 @@ impl ActionDispatcher {
             );
         }
     }
+
+    async fn record_lane_saturation(
+        &self,
+        lane_kind: ExecutionLaneKind,
+        reason: &'static str,
+        action: &RevDelAction,
+        outcome: &'static str,
+    ) {
+        let now = Utc::now();
+        let revid = action.revids.first().copied().unwrap_or_default();
+        let mut status = self.runtime_status.lock().await;
+        apply_lane_status_to_runtime_status(&mut status, &self.live_lane, &self.background_lane);
+        let lane_snapshot = match lane_kind {
+            ExecutionLaneKind::Live => &mut status.realtime.live_lane,
+            ExecutionLaneKind::Background => &mut status.realtime.background_lane,
+        };
+        lane_snapshot.latest_saturation_at = Some(now);
+        lane_snapshot.latest_saturation_reason = Some(reason.to_string());
+        status.realtime.state = "unhealthy".to_string();
+        status.realtime.last_state_changed_at = Some(now);
+        status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+            source: actionable_issue_source_for_mode(action.mode.label()).to_string(),
+            severity: "warning".to_string(),
+            summary: format!(
+                "{} lane could not accept revid {}",
+                lane_kind.label(),
+                revid
+            ),
+            next_action: "watch recovery and rerun emergency catch-up if the edit stays public"
+                .to_string(),
+            detected_at: Some(now),
+        });
+        status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
+            title: action.title.clone(),
+            revid,
+            revision_url: Some(crate::mw_api::revision_url(&self.wiki_server_name, revid)),
+            outcome: outcome.to_string(),
+            reason_code: Some(reason.to_string()),
+            mode: action.mode.label().to_string(),
+            source_label: action.mode.source_label().to_string(),
+            observed_at: action.observed_at,
+            queued_at: None,
+            submitted_at: None,
+            completed_at: Some(now),
+            lane: Some(lane_kind.label().to_string()),
+            deadline_at: action.deadline_at,
+            attempt_count: 0,
+        });
+        status.realtime.latest_notice = Some(format!("{} revid {}", outcome, revid));
+        if self.runtime_status_surface_mode.persists_runtime_status()
+            && let Err(error) = save_json_atomic(&self.runtime_status_file, &*status)
+        {
+            warn!(
+                path = %self.runtime_status_file.display(),
+                error = %error,
+                "failed to persist runtime status"
+            );
+        }
+    }
+}
+
+fn decrement_atomic_saturating(value: &AtomicUsize) -> usize {
+    let mut current = value.load(Ordering::SeqCst);
+    loop {
+        if current == 0 {
+            return 0;
+        }
+        match value.compare_exchange(current, current - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return current - 1,
+            Err(next) => current = next,
+        }
+    }
+}
+
+fn set_lane_queue_gauges(live_lane: &ExecutionLaneRuntime, background_lane: &ExecutionLaneRuntime) {
+    gauge!("queue_depth").set(live_lane.queue_depth.load(Ordering::SeqCst) as f64);
+    gauge!("live_queue_depth").set(live_lane.queue_depth.load(Ordering::SeqCst) as f64);
+    gauge!("background_queue_depth").set(background_lane.queue_depth.load(Ordering::SeqCst) as f64);
+    gauge!("live_in_flight").set(live_lane.in_flight.load(Ordering::SeqCst) as f64);
+    gauge!("background_in_flight").set(background_lane.in_flight.load(Ordering::SeqCst) as f64);
+}
+
+fn lane_snapshot(
+    lane: &ExecutionLaneRuntime,
+    previous: &ExecutionLaneSnapshot,
+) -> ExecutionLaneSnapshot {
+    ExecutionLaneSnapshot {
+        queue_depth: lane.queue_depth.load(Ordering::SeqCst),
+        queue_capacity: lane.queue_capacity,
+        in_flight: lane.in_flight.load(Ordering::SeqCst),
+        concurrency_limit: lane.concurrency_limit,
+        latest_saturation_at: previous.latest_saturation_at,
+        latest_saturation_reason: previous.latest_saturation_reason.clone(),
+    }
+}
+
+fn latency_metric_status(snapshot: &LatencyMetricSnapshot) -> LatencyMetricStatus {
+    LatencyMetricStatus {
+        sample_count: snapshot.sample_count,
+        latest_ms: snapshot.latest_ms,
+        min_ms: snapshot.min_ms,
+        p50_ms: snapshot.p50_ms,
+        p95_ms: snapshot.p95_ms,
+        p99_ms: snapshot.p99_ms,
+        max_ms: snapshot.max_ms,
+    }
+}
+
+fn runtime_latency_status() -> RuntimeLatencyStatus {
+    let snapshot = snapshot_runtime_latency_metrics();
+    RuntimeLatencyStatus {
+        observed_to_queue: latency_metric_status(&snapshot.observed_to_queue),
+        queue_to_submit: latency_metric_status(&snapshot.queue_to_submit),
+        submit_to_complete: latency_metric_status(&snapshot.submit_to_complete),
+        observed_to_hidden: latency_metric_status(&snapshot.observed_to_hidden),
+    }
+}
+
+fn load_runtime_status_seed(path: &Path) -> RuntimeStatus {
+    match load_json(path) {
+        Ok(status) => status.unwrap_or_default(),
+        Err(error) => {
+            warn!(
+                path = %path.display(),
+                error = %error,
+                "ignoring unreadable previous runtime status; daemon will replace it"
+            );
+            RuntimeStatus::default()
+        }
+    }
+}
+
+fn apply_lane_status_to_runtime_status(
+    status: &mut RuntimeStatus,
+    live_lane: &ExecutionLaneRuntime,
+    background_lane: &ExecutionLaneRuntime,
+) {
+    let live_snapshot = lane_snapshot(live_lane, &status.realtime.live_lane);
+    let background_snapshot = lane_snapshot(background_lane, &status.realtime.background_lane);
+    status.realtime.queue_depth = live_snapshot.queue_depth;
+    status.realtime.live_lane = live_snapshot.clone();
+    status.realtime.background_lane = background_snapshot.clone();
+    status.realtime.latency = runtime_latency_status();
+    let now = Utc::now();
+    let mut resource = status.resource_economy.clone().unwrap_or_default();
+    resource.queue_depth_max_recent = resource
+        .queue_depth_max_recent
+        .max(live_snapshot.queue_depth + background_snapshot.queue_depth);
+    resource.live_queue_depth_max_recent = resource
+        .live_queue_depth_max_recent
+        .max(live_snapshot.queue_depth);
+    resource.background_queue_depth_max_recent = resource
+        .background_queue_depth_max_recent
+        .max(background_snapshot.queue_depth);
+    resource.api_concurrency_max_recent = resource
+        .api_concurrency_max_recent
+        .max(live_snapshot.in_flight + background_snapshot.in_flight);
+    resource.latest_measurement_at = Some(now);
+    status.resource_economy = Some(resource);
 }
 
 pub struct ReconciliationRuntime {
@@ -346,6 +810,7 @@ pub struct ReconcilePassContext {
     pub(crate) batch_limit: usize,
     pub(crate) warning_sample_limit: usize,
     pub(crate) rate_limit_backoff_default_seconds: u64,
+    pub(crate) stop_after_failures: usize,
     pub(crate) persistence: CachePersistence,
     pub(crate) client: MediaWikiClient,
     pub(crate) cache: Arc<RwLock<RuntimeCache>>,
@@ -441,6 +906,7 @@ impl ReconciliationRuntime {
                 .config
                 .catchup
                 .rate_limit_backoff_default_seconds,
+            stop_after_failures: self.config.catchup.rate_limit_stop_after_failures,
             persistence: if self.dry_run {
                 CachePersistence::Ephemeral
             } else {
@@ -505,6 +971,41 @@ impl ReconciliationRuntime {
         } else {
             None
         };
+        let preflight_stop_reason = {
+            let status = self.runtime_status.lock().await;
+            reconciliation_preflight_stop_reason(&status.realtime, started_at)
+        };
+        if let Some(reason) = preflight_stop_reason {
+            let last_result = format!("stopped-early: {reason}");
+            let notice = format!("{} stopped early: {reason}", mode.operator_label());
+            let completed_at = Utc::now();
+            self.update_runtime_status({
+                let reason = reason.clone();
+                move |status| {
+                    apply_reconciliation_started_status(
+                        status,
+                        mode,
+                        started_at,
+                        daytime_window_start,
+                    );
+                    apply_reconciliation_completed_status(
+                        status,
+                        mode,
+                        completed_at,
+                        daytime_window_start,
+                        last_result,
+                        notice,
+                        Some(reason),
+                        active_runtime_backoff_until(&status.realtime, completed_at),
+                    );
+                }
+            })
+            .await;
+            return Err(anyhow::anyhow!(
+                "{} stopped early",
+                mode.operator_label().to_lowercase()
+            ));
+        }
         self.update_runtime_status(move |status| {
             apply_reconciliation_started_status(status, mode, started_at, daytime_window_start);
         })
@@ -514,14 +1015,31 @@ impl ReconciliationRuntime {
         }
         let pass = self.build_reconcile_pass_context(mode).await;
         let result = reconciliation_loop(Arc::new(pass)).await;
-        let last_result = match &result {
-            Ok(()) => "completed".to_string(),
-            Err(error) => format!("failed: {error:#}"),
-        };
-        let notice = match &result {
-            Ok(()) => format!("{} completed", mode.operator_label()),
-            Err(error) => format!("{} failed: {error}", mode.operator_label()),
-        };
+        let (last_result, notice, stopped_early_reason, reconciliation_backoff_until, pass_result) =
+            match result {
+                Ok(summary) if let Some(reason) = summary.stopped_early_reason.clone() => (
+                    format!("stopped-early: {reason}"),
+                    format!("{} stopped early: {reason}", mode.operator_label()),
+                    Some(reason),
+                    summary.backoff_until,
+                    Err(anyhow::anyhow!(
+                        "{} stopped early",
+                        mode.operator_label().to_lowercase()
+                    )),
+                ),
+                Ok(_) => (
+                    "completed".to_string(),
+                    format!("{} completed", mode.operator_label()),
+                    None,
+                    None,
+                    Ok(()),
+                ),
+                Err(error) => {
+                    let last_result = format!("failed: {error:#}");
+                    let notice = format!("{} failed: {error}", mode.operator_label());
+                    (last_result, notice, None, None, Err(error))
+                }
+            };
         let completed_at = Utc::now();
         self.update_runtime_status(move |status| {
             apply_reconciliation_completed_status(
@@ -531,10 +1049,12 @@ impl ReconciliationRuntime {
                 daytime_window_start,
                 last_result,
                 notice,
+                stopped_early_reason,
+                reconciliation_backoff_until,
             );
         })
         .await;
-        result
+        pass_result
     }
 }
 
@@ -548,10 +1068,15 @@ pub struct AppRuntime {
     pub processed: Arc<RwLock<ProcessedRevidsState>>,
     pub progress: Arc<tokio::sync::Mutex<NightlySweepProgress>>,
     pub queue_depth: Arc<AtomicUsize>,
+    pub background_queue_depth: Arc<AtomicUsize>,
+    pub live_lane: ExecutionLaneRuntime,
+    pub background_lane: ExecutionLaneRuntime,
     pub reconcile: Arc<ReconciliationRuntime>,
     pub revision_locks: Arc<KeyLockSet<u64>>,
     pub page_locks: Arc<KeyLockSet<String>>,
     pub work_tx: mpsc::Sender<RevDelAction>,
+    pub background_work_tx: mpsc::Sender<RevDelAction>,
+    source_refresh_active: AtomicBool,
     pub dry_run: bool,
 }
 
@@ -560,6 +1085,7 @@ pub struct TestRuntimeHarness {
     pub runtime: Arc<AppRuntime>,
     pub runtime_status: Arc<tokio::sync::Mutex<RuntimeStatus>>,
     pub work_rx: mpsc::Receiver<RevDelAction>,
+    pub background_work_rx: mpsc::Receiver<RevDelAction>,
 }
 
 #[cfg(test)]
@@ -579,6 +1105,16 @@ pub(crate) fn build_test_runtime_harness_with_env(
     temp: &tempfile::TempDir,
     runtime_status_surface_mode: RuntimeStatusSurfaceMode,
     env: EnvConfig,
+) -> TestRuntimeHarness {
+    build_test_runtime_harness_with_env_and_dry_run(temp, runtime_status_surface_mode, env, true)
+}
+
+#[cfg(test)]
+pub(crate) fn build_test_runtime_harness_with_env_and_dry_run(
+    temp: &tempfile::TempDir,
+    runtime_status_surface_mode: RuntimeStatusSurfaceMode,
+    env: EnvConfig,
+    dry_run: bool,
 ) -> TestRuntimeHarness {
     use std::collections::HashSet;
     use std::sync::atomic::AtomicUsize;
@@ -615,16 +1151,38 @@ pub(crate) fn build_test_runtime_harness_with_env(
     let page_locks = Arc::new(KeyLockSet::new());
     let revision_locks = Arc::new(KeyLockSet::new());
     let queue_depth = Arc::new(AtomicUsize::new(0));
+    let background_queue_depth = Arc::new(AtomicUsize::new(0));
+    let live_in_flight = Arc::new(AtomicUsize::new(0));
+    let background_in_flight = Arc::new(AtomicUsize::new(0));
     let (work_tx, work_rx) = mpsc::channel(config.queue.capacity);
-    let actions = Arc::new(ActionDispatcher::new(
-        config.wiki.server_name.clone(),
-        Arc::clone(&revision_locks),
-        Arc::clone(&processed),
+    let (background_work_tx, background_work_rx) = mpsc::channel(config.queue.capacity);
+    let live_lane = ExecutionLaneRuntime::new(
+        ExecutionLaneKind::Live,
         Arc::clone(&queue_depth),
+        live_in_flight,
+        config.queue.capacity,
+        LIVE_LANE_CONCURRENCY_LIMIT,
         work_tx.clone(),
-        Arc::clone(&runtime_status),
-        paths.runtime_status_file.clone(),
-        runtime_status_surface_mode,
+    );
+    let background_lane = ExecutionLaneRuntime::new(
+        ExecutionLaneKind::Background,
+        Arc::clone(&background_queue_depth),
+        background_in_flight,
+        config.queue.capacity,
+        BACKGROUND_LANE_CONCURRENCY_LIMIT,
+        background_work_tx.clone(),
+    );
+    let actions = Arc::new(ActionDispatcher::new_with_lanes(
+        ActionDispatcherLanesInit {
+            wiki_server_name: config.wiki.server_name.clone(),
+            revision_locks: Arc::clone(&revision_locks),
+            processed: Arc::clone(&processed),
+            live_lane: live_lane.clone(),
+            background_lane: background_lane.clone(),
+            runtime_status: Arc::clone(&runtime_status),
+            runtime_status_file: paths.runtime_status_file.clone(),
+            runtime_status_surface_mode,
+        },
     ));
     let reconcile = Arc::new(ReconciliationRuntime::new(ReconciliationRuntimeInit {
         config: config.clone(),
@@ -635,7 +1193,7 @@ pub(crate) fn build_test_runtime_harness_with_env(
         runtime_status: Arc::clone(&runtime_status),
         page_locks: Arc::clone(&page_locks),
         paths: paths.clone(),
-        dry_run: true,
+        dry_run,
         actions: Arc::clone(&actions),
         runtime_status_surface_mode,
     }));
@@ -649,16 +1207,22 @@ pub(crate) fn build_test_runtime_harness_with_env(
         processed,
         progress,
         queue_depth,
+        background_queue_depth,
+        live_lane,
+        background_lane,
         reconcile,
         revision_locks,
         page_locks,
         work_tx,
-        dry_run: true,
+        background_work_tx,
+        source_refresh_active: AtomicBool::new(false),
+        dry_run,
     });
     TestRuntimeHarness {
         runtime,
         runtime_status,
         work_rx,
+        background_work_rx,
     }
 }
 
@@ -711,135 +1275,193 @@ impl AppRuntime {
     ) -> Result<Arc<Self>> {
         let config = AppConfig::load(&config_path)?;
         let paths = RuntimePaths::resolve(&config_path, &config);
+        let cleanup_paths = paths.clone();
         init_logging(&config.logging, verbose);
+        let startup_evidence =
+            publish_startup_evidence(&paths, dry_run, runtime_status_surface_mode)?;
         info!(
             dry_run,
             verbose,
             config_path = %paths.config_path.display(),
             "starting suppressor bootstrap"
         );
-        init_metrics(&config.metrics)?;
-        let env = load_env(&paths.config_path)?;
-        info!(env_file = %env.env_file.display(), "loaded local environment");
-        let client = MediaWikiClient::new(&env)?;
-        let auth = authenticate(&client, &env).await?;
-        info!(
-            authenticated_as = %auth.username,
-            high_limits = auth.has_high_limits(),
-            rights_count = auth.rights.len(),
-            "authenticated MediaWiki session"
-        );
-        let cache = load_or_bootstrap(
-            &client,
-            &config,
-            &paths,
-            if dry_run {
-                CachePersistence::Ephemeral
-            } else {
-                CachePersistence::Persist
-            },
-        )
-        .await?;
-
-        std::fs::create_dir_all(&paths.state_dir)
-            .with_context(|| format!("Failed to create {}", paths.state_dir.display()))?;
-        let processed = load_json(&paths.processed_revids_file)?.unwrap_or(ProcessedRevidsState {
-            capacity: 50_000,
-            revids: Vec::new(),
-        });
-        let progress = load_json(&paths.nightly_sweep_progress_file)?.unwrap_or_default();
-        let runtime_status = load_json(&paths.runtime_status_file)?.unwrap_or_default();
-        let revision_locks = Arc::new(KeyLockSet::new());
-        let page_locks = Arc::new(KeyLockSet::new());
-        let queue_depth = Arc::new(AtomicUsize::new(0));
-        let auth = Arc::new(RwLock::new(auth));
-        let cache = Arc::new(RwLock::new(cache));
-        let processed = Arc::new(RwLock::new(processed));
-        let progress = Arc::new(tokio::sync::Mutex::new(progress));
-        let runtime_status = Arc::new(tokio::sync::Mutex::new(runtime_status));
-        let (work_tx, work_rx) = mpsc::channel(config.queue.capacity);
-        let actions = Arc::new(ActionDispatcher::new(
-            config.wiki.server_name.clone(),
-            Arc::clone(&revision_locks),
-            Arc::clone(&processed),
-            Arc::clone(&queue_depth),
-            work_tx.clone(),
-            Arc::clone(&runtime_status),
-            paths.runtime_status_file.clone(),
-            runtime_status_surface_mode,
-        ));
-        let reconcile = Arc::new(ReconciliationRuntime::new(ReconciliationRuntimeInit {
-            config: config.clone(),
-            client: client.clone(),
-            auth: Arc::clone(&auth),
-            cache: Arc::clone(&cache),
-            progress: Arc::clone(&progress),
-            runtime_status: Arc::clone(&runtime_status),
-            page_locks: Arc::clone(&page_locks),
-            paths: paths.clone(),
-            dry_run,
-            actions: Arc::clone(&actions),
-            runtime_status_surface_mode,
-        }));
-        let runtime = Arc::new(Self {
-            config,
-            env,
-            paths,
-            client,
-            auth,
-            cache,
-            processed,
-            progress,
-            queue_depth,
-            reconcile,
-            revision_locks,
-            page_locks,
-            work_tx,
-            dry_run,
-        });
-        runtime
-            .update_runtime_status(|status| {
-                let now = Utc::now();
-                status.daemon_state = if dry_run {
-                    "dry-run-starting".to_string()
+        let result = async {
+            init_metrics(&config.metrics)?;
+            let env = load_env(&paths.config_path)?;
+            info!(env_file = %env.env_file.display(), "loaded local environment");
+            let client = MediaWikiClient::new_with_retry(&env, &config.retry)?;
+            let auth = authenticate(&client, &env).await?;
+            info!(
+                authenticated_as = %auth.username,
+                high_limits = auth.has_high_limits(),
+                rights_count = auth.rights.len(),
+                "authenticated MediaWiki session"
+            );
+            let cache = load_or_bootstrap(
+                &client,
+                &config,
+                &paths,
+                if dry_run {
+                    CachePersistence::Ephemeral
                 } else {
-                    "starting".to_string()
-                };
-                status.dry_run = dry_run;
-                status.last_notice = Some("bootstrap completed".to_string());
-                status.last_notice_at = Some(now);
-                status.resource_economy = Some(crate::state::ResourceEconomySnapshot {
-                    queue_depth_max_recent: 0,
-                    latest_measurement_at: Some(now),
-                    ..crate::state::ResourceEconomySnapshot::default()
+                    CachePersistence::Persist
+                },
+            )
+            .await?;
+
+            std::fs::create_dir_all(&paths.state_dir)
+                .with_context(|| format!("Failed to create {}", paths.state_dir.display()))?;
+            let processed =
+                load_json(&paths.processed_revids_file)?.unwrap_or(ProcessedRevidsState {
+                    capacity: 50_000,
+                    revids: Vec::new(),
                 });
-                status.realtime.state = "starting".to_string();
-                status.realtime.last_state_changed_at = Some(now);
-                status.realtime.stale_threshold_seconds =
-                    runtime.config.realtime.stale_threshold_seconds;
-                status.realtime.stream_read_timeout_seconds =
-                    runtime.config.realtime.stream_read_timeout_seconds;
-                status.realtime.queue_depth = 0;
-                status.realtime.daemon_started_at = Some(now);
-                status.realtime.current_task =
-                    Some(idle_task("waiting for watched-page edits", now));
-                status.realtime.latest_notice = Some("bootstrap completed".to_string());
-            })
-            .await;
-        let cache_snapshot = runtime.cache.read().await.snapshot.clone();
-        let processed_count = runtime.processed.read().await.revids.len();
-        let checkpoint_pages = runtime.progress.lock().await.pages.len();
-        info!(
-            source_title = %cache_snapshot.source_title,
-            listed_titles = cache_snapshot.listed_titles_normalized.len(),
-            watched_titles = cache_snapshot.watched_titles_normalized.len(),
-            processed_revids = processed_count,
-            checkpoint_pages,
-            queue_capacity = runtime.config.queue.capacity,
-            "runtime state loaded"
-        );
-        tokio::spawn(crate::worker::run_worker(Arc::clone(&runtime), work_rx));
-        Ok(runtime)
+            let progress = load_json(&paths.nightly_sweep_progress_file)?.unwrap_or_default();
+            let runtime_status = load_runtime_status_seed(&paths.runtime_status_file);
+            let revision_locks = Arc::new(KeyLockSet::new());
+            let page_locks = Arc::new(KeyLockSet::new());
+            let auth = Arc::new(RwLock::new(auth));
+            let cache = Arc::new(RwLock::new(cache));
+            let processed = Arc::new(RwLock::new(processed));
+            let progress = Arc::new(tokio::sync::Mutex::new(progress));
+            let runtime_status = Arc::new(tokio::sync::Mutex::new(runtime_status));
+            let (work_tx, work_rx) = mpsc::channel(config.queue.capacity);
+            let (background_work_tx, background_work_rx) = mpsc::channel(config.queue.capacity);
+            let queue_depth = Arc::new(AtomicUsize::new(0));
+            let background_queue_depth = Arc::new(AtomicUsize::new(0));
+            let live_lane = ExecutionLaneRuntime::new(
+                ExecutionLaneKind::Live,
+                Arc::clone(&queue_depth),
+                Arc::new(AtomicUsize::new(0)),
+                config.queue.capacity,
+                LIVE_LANE_CONCURRENCY_LIMIT,
+                work_tx.clone(),
+            );
+            let background_lane = ExecutionLaneRuntime::new(
+                ExecutionLaneKind::Background,
+                Arc::clone(&background_queue_depth),
+                Arc::new(AtomicUsize::new(0)),
+                config.queue.capacity,
+                BACKGROUND_LANE_CONCURRENCY_LIMIT,
+                background_work_tx.clone(),
+            );
+            let actions = Arc::new(ActionDispatcher::new_with_lanes(
+                ActionDispatcherLanesInit {
+                    wiki_server_name: config.wiki.server_name.clone(),
+                    revision_locks: Arc::clone(&revision_locks),
+                    processed: Arc::clone(&processed),
+                    live_lane: live_lane.clone(),
+                    background_lane: background_lane.clone(),
+                    runtime_status: Arc::clone(&runtime_status),
+                    runtime_status_file: paths.runtime_status_file.clone(),
+                    runtime_status_surface_mode,
+                },
+            ));
+            let reconcile = Arc::new(ReconciliationRuntime::new(ReconciliationRuntimeInit {
+                config: config.clone(),
+                client: client.clone(),
+                auth: Arc::clone(&auth),
+                cache: Arc::clone(&cache),
+                progress: Arc::clone(&progress),
+                runtime_status: Arc::clone(&runtime_status),
+                page_locks: Arc::clone(&page_locks),
+                paths: paths.clone(),
+                dry_run,
+                actions: Arc::clone(&actions),
+                runtime_status_surface_mode,
+            }));
+            let runtime = Arc::new(Self {
+                config,
+                env,
+                paths,
+                client,
+                auth,
+                cache,
+                processed,
+                progress,
+                queue_depth,
+                background_queue_depth,
+                live_lane,
+                background_lane,
+                reconcile,
+                revision_locks,
+                page_locks,
+                work_tx,
+                background_work_tx,
+                source_refresh_active: AtomicBool::new(false),
+                dry_run,
+            });
+            runtime
+                .update_runtime_status(|status| {
+                    let now = Utc::now();
+                    status.daemon_state = if dry_run {
+                        "dry-run-starting".to_string()
+                    } else {
+                        "starting".to_string()
+                    };
+                    status.dry_run = dry_run;
+                    status.last_notice = Some("bootstrap completed".to_string());
+                    status.last_notice_at = Some(now);
+                    status.resource_economy = Some(crate::state::ResourceEconomySnapshot {
+                        queue_depth_max_recent: 0,
+                        latest_measurement_at: Some(now),
+                        ..crate::state::ResourceEconomySnapshot::default()
+                    });
+                    status.realtime.state = "starting".to_string();
+                    status.realtime.last_state_changed_at = Some(now);
+                    status.realtime.stale_threshold_seconds =
+                        runtime.config.realtime.stale_threshold_seconds;
+                    status.realtime.stream_read_timeout_seconds =
+                        runtime.config.realtime.stream_read_timeout_seconds;
+                    apply_lane_status_to_runtime_status(
+                        status,
+                        &runtime.live_lane,
+                        &runtime.background_lane,
+                    );
+                    status.realtime.daemon_started_at = Some(now);
+                    status.realtime.current_task =
+                        Some(idle_task("waiting for watched-page edits", now));
+                    status.realtime.latest_notice = Some("bootstrap completed".to_string());
+                })
+                .await;
+            let cache_snapshot = runtime.cache.read().await.snapshot.clone();
+            let processed_count = runtime.processed.read().await.revids.len();
+            let checkpoint_pages = runtime.progress.lock().await.pages.len();
+            info!(
+                source_title = %cache_snapshot.source_title,
+                listed_titles = cache_snapshot.listed_titles_normalized.len(),
+                watched_titles = cache_snapshot.watched_titles_normalized.len(),
+                processed_revids = processed_count,
+                checkpoint_pages,
+                queue_capacity = runtime.config.queue.capacity,
+                "runtime state loaded"
+            );
+            tokio::spawn(crate::worker::run_worker_for_lane(
+                Arc::clone(&runtime),
+                ExecutionLaneKind::Live,
+                work_rx,
+            ));
+            tokio::spawn(crate::worker::run_worker_for_lane(
+                Arc::clone(&runtime),
+                ExecutionLaneKind::Background,
+                background_work_rx,
+            ));
+            Ok(runtime)
+        }
+        .await;
+
+        match result {
+            Ok(runtime) => Ok(runtime),
+            Err(error) => {
+                cleanup_failed_startup_evidence(
+                    &cleanup_paths,
+                    dry_run,
+                    runtime_status_surface_mode,
+                    startup_evidence.as_ref(),
+                );
+                Err(error)
+            }
+        }
     }
 
     pub async fn update_runtime_status<F>(&self, update: F)
@@ -849,8 +1471,73 @@ impl AppRuntime {
         self.reconcile.update_runtime_status(update).await;
     }
 
+    fn lane_for(&self, kind: ExecutionLaneKind) -> &ExecutionLaneRuntime {
+        match kind {
+            ExecutionLaneKind::Live => &self.live_lane,
+            ExecutionLaneKind::Background => &self.background_lane,
+        }
+    }
+
+    pub async fn record_action_submitted(&self, action: &mut RevDelAction) {
+        let submitted_at = Utc::now();
+        action.submitted_at = Some(submitted_at);
+        let lane = self.lane_for(action.lane);
+        decrement_atomic_saturating(&lane.queue_depth);
+        lane.in_flight.fetch_add(1, Ordering::SeqCst);
+        set_lane_queue_gauges(&self.live_lane, &self.background_lane);
+        let queue_to_submit_ms = (submitted_at - action.queued_at).num_milliseconds().max(0) as u64;
+        record_queue_to_submit_latency_ms(queue_to_submit_ms);
+        let title = action.title.clone();
+        let revid = action.revids.first().copied().unwrap_or_default();
+        let revision_url = crate::mw_api::revision_url(&self.config.wiki.server_name, revid);
+        let mode = action.mode.label().to_string();
+        let source_label = action.mode.source_label().to_string();
+        let observed_at = action.observed_at;
+        let queued_at = action.queued_at;
+        let lane_label = action.lane.label().to_string();
+        let deadline_at = action.deadline_at;
+        let outcome = SuppressionOutcomeSnapshot {
+            title,
+            revid,
+            revision_url: Some(revision_url),
+            outcome: "submitted".to_string(),
+            reason_code: None,
+            mode,
+            source_label,
+            observed_at,
+            queued_at: Some(queued_at),
+            submitted_at: Some(submitted_at),
+            completed_at: None,
+            lane: Some(lane_label),
+            deadline_at,
+            attempt_count: 1,
+        };
+        let live_lane = self.live_lane.clone();
+        let background_lane = self.background_lane.clone();
+        self.update_runtime_status(move |status| {
+            apply_lane_status_to_runtime_status(status, &live_lane, &background_lane);
+            if should_replace_latest_outcome(status.realtime.latest_outcome.as_ref(), &outcome) {
+                status.realtime.latest_outcome = Some(outcome);
+            }
+        })
+        .await;
+    }
+
     pub async fn record_notice<S: Into<String>>(&self, notice: S) {
         self.reconcile.record_notice(notice).await;
+    }
+
+    pub fn try_begin_source_refresh(&self) -> bool {
+        !self.source_refresh_active.swap(true, Ordering::AcqRel)
+    }
+
+    pub fn finish_source_refresh(&self) {
+        self.source_refresh_active.store(false, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_refresh_is_active(&self) -> bool {
+        self.source_refresh_active.load(Ordering::Acquire)
     }
 
     pub async fn mark_realtime_stream_open(&self) {
@@ -992,6 +1679,145 @@ impl AppRuntime {
         .await;
     }
 
+    pub async fn mark_recentchanges_poll_succeeded(
+        &self,
+        latest_event_at: Option<DateTime<Utc>>,
+        notice: String,
+    ) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            if let Some(latest_event_at) = latest_event_at {
+                status.realtime.last_event_observed_at = Some(
+                    status
+                        .realtime
+                        .last_event_observed_at
+                        .map(|previous| previous.max(latest_event_at))
+                        .unwrap_or(latest_event_at),
+                );
+            }
+            status.realtime.current_lag_seconds = Some(0);
+            status.realtime.current_lag_millis = Some(0);
+            status.realtime.current_lag_source = Some("polling".to_string());
+            status.realtime.last_freshness_probe_at = Some(now);
+            status.realtime.last_freshness_probe_source = Some("polling".to_string());
+            clear_actionable_issue_if_source(
+                &mut status.realtime,
+                &["polling", "stream", "freshness-probe"],
+            );
+            if status
+                .realtime
+                .latest_error
+                .as_ref()
+                .is_some_and(|error| error.operation == "recentchanges-poll")
+            {
+                status.realtime.latest_error_code = None;
+                status.realtime.latest_error = None;
+            }
+            let next_state = converged_realtime_state_after_primary_poll(&status.realtime, now);
+            if status.realtime.state != next_state {
+                status.realtime.state = next_state.clone();
+                status.realtime.last_state_changed_at = Some(now);
+            }
+            if next_state == "healthy" {
+                end_offline_interval_if_active(&mut status.realtime, now);
+                if !status.reconciliation.active && !status.realtime.catchup_active {
+                    set_background_current_task(
+                        status,
+                        idle_task("waiting for watched-page edits", now),
+                    );
+                }
+            } else if matches!(next_state.as_str(), "unhealthy" | "blocked") {
+                restore_persistent_issue(status, now);
+            }
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
+            status.last_notice_at = Some(now);
+        })
+        .await;
+    }
+
+    pub async fn mark_recentchanges_poll_failed(
+        &self,
+        snapshot: ApiFailureSnapshot,
+        notice: String,
+    ) {
+        self.update_runtime_status(move |status| {
+            let now = snapshot.occurred_at.unwrap_or_else(Utc::now);
+            let backoff_until = if snapshot.retryable {
+                snapshot.retry_after_seconds.and_then(|seconds| {
+                    set_shared_backoff(
+                        status,
+                        "recentchanges-poll",
+                        "api-retry-after",
+                        now + chrono::TimeDelta::seconds(seconds as i64),
+                        now,
+                    )
+                })
+            } else {
+                None
+            }
+            .or_else(|| retain_runtime_backoff(status, now));
+            let next_state = if backoff_until.is_some() || status.realtime.catchup_active {
+                "catching-up".to_string()
+            } else if matches!(status.realtime.state.as_str(), "blocked")
+                || matches!(
+                    status.realtime.latest_outcome.as_ref(),
+                    Some(outcome)
+                        if outcome.mode == RevDelMode::Live.label()
+                            && outcome.outcome == "blocked"
+                )
+            {
+                "blocked".to_string()
+            } else {
+                "stale".to_string()
+            };
+            status.realtime.state = next_state;
+            status.realtime.last_state_changed_at = Some(now);
+            status.realtime.latest_error_code = snapshot
+                .api_code
+                .clone()
+                .or_else(|| Some(snapshot.class.clone()));
+            status.realtime.latest_error = Some(snapshot.clone());
+            begin_offline_interval_if_needed(&mut status.realtime, now);
+            status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: "polling".to_string(),
+                severity: if snapshot.retryable {
+                    "warning".to_string()
+                } else {
+                    "error".to_string()
+                },
+                summary: notice.clone(),
+                next_action: backoff_until
+                    .map(|until| {
+                        format!(
+                            "wait until {} and verify the next poll cycle",
+                            render_runtime_time(&until)
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "check API/network state and verify the next poll cycle".to_string()
+                    }),
+                detected_at: Some(now),
+            });
+            if !status.reconciliation.active && !status.realtime.catchup_active {
+                status.realtime.current_task = Some(CurrentTaskSnapshot {
+                    task_kind: "polling".to_string(),
+                    label: notice.clone(),
+                    progress_done: None,
+                    progress_total: None,
+                    window_start: None,
+                    window_end: None,
+                    started_at: Some(now),
+                    expected_resume_at: backoff_until,
+                });
+            }
+            status.realtime.latest_notice = Some(notice.clone());
+            status.last_notice = Some(notice);
+            status.last_notice_at = Some(now);
+        })
+        .await;
+    }
+
     pub async fn mark_stream_quiet_without_gap(&self, silence_seconds: u64, notice: String) {
         self.update_runtime_status(move |status| {
             let now = Utc::now();
@@ -1077,6 +1903,56 @@ impl AppRuntime {
         .await;
     }
 
+    pub async fn record_state_persistence_failure(
+        &self,
+        operation: String,
+        path: String,
+        error: String,
+    ) {
+        self.update_runtime_status(move |status| {
+            let now = Utc::now();
+            let summary = format!("local state persistence failed for {operation}");
+            status.realtime.state = "unhealthy".to_string();
+            status.realtime.last_state_changed_at = Some(now);
+            status.realtime.latest_error_code = Some("state-persistence".to_string());
+            begin_offline_interval_if_needed(&mut status.realtime, now);
+            status.realtime.latest_error = Some(ApiFailureSnapshot {
+                class: "state-persistence".to_string(),
+                api_code: None,
+                http_status: None,
+                content_type: None,
+                retryable: true,
+                retry_after_seconds: None,
+                operation: operation.clone(),
+                sample_title: None,
+                sample_revid: None,
+                message: error,
+                occurred_at: Some(now),
+            });
+            status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                source: "state-persistence".to_string(),
+                severity: "error".to_string(),
+                summary: summary.clone(),
+                next_action: format!("check writable state path {path} and watch reconnect status"),
+                detected_at: Some(now),
+            });
+            status.realtime.current_task = Some(CurrentTaskSnapshot {
+                task_kind: "state-persistence".to_string(),
+                label: "reopening stream after local state write failure".to_string(),
+                progress_done: None,
+                progress_total: None,
+                window_start: None,
+                window_end: None,
+                started_at: Some(now),
+                expected_resume_at: None,
+            });
+            status.realtime.latest_notice = Some(summary.clone());
+            status.last_notice = Some(summary);
+            status.last_notice_at = Some(now);
+        })
+        .await;
+    }
+
     pub async fn mark_stream_gap_detected(
         &self,
         trigger: String,
@@ -1151,8 +2027,8 @@ impl AppRuntime {
 
     pub async fn should_start_recovery(&self, trigger: &str) -> bool {
         let status = self.reconcile.runtime_status.lock().await;
-        !(status.realtime.catchup_active
-            && status.realtime.last_recovery_trigger.as_deref() == Some(trigger))
+        let _ = trigger;
+        !status.realtime.catchup_active
     }
 
     pub async fn mark_realtime_state(
@@ -1228,10 +2104,7 @@ impl AppRuntime {
                     "error".to_string()
                 },
                 summary: format!("{} failed: {}", snapshot.operation, snapshot.message),
-                next_action: snapshot
-                    .retry_after_seconds
-                    .map(|seconds| format!("wait {seconds}s for backoff, then recheck"))
-                    .unwrap_or_else(|| "inspect auth, API, or network state".to_string()),
+                next_action: api_failure_next_action(&snapshot),
                 detected_at: Some(now),
             });
             if snapshot.retryable
@@ -1348,7 +2221,7 @@ impl AppRuntime {
                     expected_resume_at: None,
                 },
             );
-            status.realtime.latest_actionable_issue = None;
+            clear_actionable_issue_if_source(&mut status.realtime, &["recovery", "stream"]);
             status.realtime.latest_notice = Some(notice.clone());
             status.last_notice = Some(notice);
             status.last_notice_at = Some(now);
@@ -1389,15 +2262,27 @@ impl AppRuntime {
                 })
                 .or_else(|| retain_runtime_backoff(status, now));
             let notice = render_recovery_notice(&summary);
+            status.realtime.catchup_active = false;
+            let cleared_live_failure = summary.requested_by == "live-failure"
+                && summary.unresolved_count == 0
+                && (summary.hidden_count > 0 || summary.already_hidden_count > 0)
+                && status
+                    .realtime
+                    .latest_outcome
+                    .as_ref()
+                    .is_some_and(is_persistent_live_failure_outcome);
+            if cleared_live_failure {
+                status.realtime.latest_outcome = None;
+                clear_actionable_issue_if_source(&mut status.realtime, &["live-hide"]);
+            }
             status.realtime.state = if backoff_until.is_some() {
                 "catching-up".to_string()
             } else if summary.unresolved_count == 0 {
-                "healthy".to_string()
+                converged_realtime_state_after_primary_poll(&status.realtime, now)
             } else {
                 "unhealthy".to_string()
             };
             status.realtime.last_state_changed_at = Some(now);
-            status.realtime.catchup_active = false;
             status.realtime.last_recovery_completed_at = Some(now);
             set_background_current_task(
                 status,
@@ -1436,12 +2321,15 @@ impl AppRuntime {
                     occurred_at: Some(now),
                     ..ApiFailureSnapshot::default()
                 });
-            } else if backoff_until.is_none() && summary.unresolved_count == 0 {
+            } else if backoff_until.is_none()
+                && summary.unresolved_count == 0
+                && status.realtime.state == "healthy"
+            {
                 status.realtime.latest_error_code = None;
                 status.realtime.latest_error = None;
             }
-            status.realtime.latest_actionable_issue = if let Some(until) = backoff_until {
-                Some(ActionableIssueSnapshot {
+            if let Some(until) = backoff_until {
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
                     source: "recovery".to_string(),
                     severity: "warning".to_string(),
                     summary: render_recovery_notice(&summary),
@@ -1450,9 +2338,9 @@ impl AppRuntime {
                         render_runtime_time(&until)
                     ),
                     detected_at: Some(now),
-                })
+                });
             } else if summary.unresolved_count > 0 {
-                Some(ActionableIssueSnapshot {
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
                     source: "recovery".to_string(),
                     severity: "error".to_string(),
                     summary: format!(
@@ -1463,10 +2351,12 @@ impl AppRuntime {
                     next_action: "review the unresolved revision link and rerun recovery"
                         .to_string(),
                     detected_at: Some(now),
-                })
+                });
+            } else if status.realtime.state == "healthy" {
+                status.realtime.latest_actionable_issue = None;
             } else {
-                None
-            };
+                restore_persistent_issue(status, now);
+            }
             let warning_count = summary
                 .warning_summaries
                 .iter()
@@ -1477,6 +2367,12 @@ impl AppRuntime {
                 resource.queue_depth_max_recent = resource
                     .queue_depth_max_recent
                     .max(status.realtime.queue_depth);
+                resource.live_queue_depth_max_recent = resource
+                    .live_queue_depth_max_recent
+                    .max(status.realtime.live_lane.queue_depth);
+                resource.background_queue_depth_max_recent = resource
+                    .background_queue_depth_max_recent
+                    .max(status.realtime.background_lane.queue_depth);
                 resource.coalesced_warning_count_recent = warning_count;
                 resource.latest_measurement_at = Some(now);
                 status.resource_economy = Some(resource);
@@ -1496,7 +2392,9 @@ impl AppRuntime {
         attempt_count: u32,
     ) {
         let completed_at = Utc::now();
-        let queue_depth = self.queue_depth.load(Ordering::SeqCst);
+        let lane = self.lane_for(action.lane);
+        decrement_atomic_saturating(&lane.in_flight);
+        set_lane_queue_gauges(&self.live_lane, &self.background_lane);
         let title = action.title.clone();
         let revid = action.revids.first().copied().unwrap_or_default();
         let mode = action.mode.label().to_string();
@@ -1504,18 +2402,45 @@ impl AppRuntime {
         let revision_url = crate::mw_api::revision_url(&self.config.wiki.server_name, revid);
         let observed_at = action.observed_at;
         let queued_at = action.queued_at;
-        if outcome == "hidden"
+        let submitted_at = action.submitted_at;
+        let lane_label = action.lane.label().to_string();
+        let deadline_at = action.deadline_at;
+        if let Some(submitted_at) = submitted_at {
+            let elapsed_ms = (completed_at - submitted_at).num_milliseconds().max(0) as u64;
+            record_submit_to_complete_latency_ms(elapsed_ms);
+        }
+        if action.mode == RevDelMode::Live
+            && outcome == "hidden"
             && let Some(observed_at) = observed_at
         {
             let elapsed_ms = (completed_at - observed_at).num_milliseconds().max(0) as u64;
             record_observed_to_hide_latency_ms(elapsed_ms);
         }
+        let successful_hide_at = observed_at.unwrap_or(completed_at);
+        let outcome_snapshot = SuppressionOutcomeSnapshot {
+            title: title.clone(),
+            revid,
+            revision_url: Some(revision_url.clone()),
+            outcome: outcome.to_string(),
+            reason_code: reason_code.clone(),
+            mode: mode.clone(),
+            source_label: source_label.clone(),
+            observed_at,
+            queued_at: Some(queued_at),
+            submitted_at,
+            completed_at: Some(completed_at),
+            lane: Some(lane_label.clone()),
+            deadline_at,
+            attempt_count,
+        };
+        let live_lane = self.live_lane.clone();
+        let background_lane = self.background_lane.clone();
         self.update_runtime_status(move |status| {
             let backoff_until = retain_runtime_backoff(status, completed_at);
-            status.realtime.queue_depth = queue_depth;
+            apply_lane_status_to_runtime_status(status, &live_lane, &background_lane);
             status.realtime.last_action_completed_at = Some(completed_at);
             if outcome == "hidden" || outcome == "already-hidden" {
-                status.realtime.last_successful_hide_at = Some(completed_at);
+                status.realtime.last_successful_hide_at = Some(successful_hide_at);
                 status.realtime.last_successful_hide_title = Some(title.clone());
                 status.realtime.last_successful_hide_revid = Some(revid);
                 status.realtime.last_successful_hide_url = Some(crate::mw_api::revision_url(
@@ -1526,13 +2451,15 @@ impl AppRuntime {
             if outcome == "blocked" {
                 status.realtime.state = "blocked".to_string();
                 status.realtime.last_state_changed_at = Some(completed_at);
-                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
-                    source: "live-hide".to_string(),
-                    severity: "error".to_string(),
-                    summary: format!("cannot hide revid {} because protection is blocked", revid),
-                    next_action: "check auth and wiki-side rights immediately".to_string(),
-                    detected_at: Some(completed_at),
-                });
+                status.realtime.latest_actionable_issue = Some(blocked_actionable_issue_for_mode(
+                    &mode,
+                    revid,
+                    completed_at,
+                ));
+                if mode == RevDelMode::Live.label() {
+                    status.realtime.current_task =
+                        Some(protection_blocked_task(revid, completed_at));
+                }
             } else if mode == RevDelMode::Live.label()
                 && matches!(outcome, "failed" | "retrying" | "throttled" | "unresolved")
             {
@@ -1552,7 +2479,7 @@ impl AppRuntime {
                 && backoff_until.is_none()
             {
                 let next_state =
-                    converged_realtime_state_after_stream_event(&status.realtime, completed_at);
+                    converged_realtime_state_after_primary_poll(&status.realtime, completed_at);
                 status.realtime.state = next_state.clone();
                 status.realtime.last_state_changed_at = Some(completed_at);
                 if next_state == "healthy" {
@@ -1560,7 +2487,7 @@ impl AppRuntime {
                     status.realtime.latest_error = None;
                     clear_actionable_issue_if_source(
                         &mut status.realtime,
-                        &["live-hide", "stream", "recovery"],
+                        &["live-hide", "stream", "recovery", "polling"],
                     );
                     if !status.reconciliation.active {
                         status.realtime.current_task =
@@ -1570,19 +2497,12 @@ impl AppRuntime {
                     restore_persistent_issue(status, completed_at);
                 }
             }
-            status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
-                title,
-                revid,
-                revision_url: Some(revision_url),
-                outcome: outcome.to_string(),
-                reason_code,
-                mode,
-                source_label,
-                observed_at,
-                queued_at: Some(queued_at),
-                completed_at: Some(completed_at),
-                attempt_count,
-            });
+            if should_replace_latest_outcome(
+                status.realtime.latest_outcome.as_ref(),
+                &outcome_snapshot,
+            ) {
+                status.realtime.latest_outcome = Some(outcome_snapshot);
+            }
             status.realtime.latest_notice = Some(format!("{} revid {}", outcome, revid));
         })
         .await;
@@ -1730,15 +2650,15 @@ fn is_gap_recovery_trigger(trigger: &str) -> bool {
     matches!(trigger, "startup" | "silent-starvation" | "invalid-resume")
 }
 
-fn current_task_is_live_hide(status: &crate::state::RealtimeRuntimeStatus) -> bool {
+fn current_task_blocks_background_status(status: &crate::state::RealtimeRuntimeStatus) -> bool {
     matches!(
         status.current_task.as_ref(),
-        Some(task) if task.task_kind == "live-hide"
+        Some(task) if matches!(task.task_kind.as_str(), "live-hide" | "protection-blocked")
     )
 }
 
 fn set_background_current_task(status: &mut RuntimeStatus, task: CurrentTaskSnapshot) {
-    if !current_task_is_live_hide(&status.realtime) {
+    if !current_task_blocks_background_status(&status.realtime) {
         status.realtime.current_task = Some(task);
     }
 }
@@ -1747,6 +2667,19 @@ fn idle_task(label: &str, started_at: DateTime<Utc>) -> CurrentTaskSnapshot {
     CurrentTaskSnapshot {
         task_kind: "idle".to_string(),
         label: label.to_string(),
+        progress_done: None,
+        progress_total: None,
+        window_start: None,
+        window_end: None,
+        started_at: Some(started_at),
+        expected_resume_at: None,
+    }
+}
+
+fn protection_blocked_task(revid: u64, started_at: DateTime<Utc>) -> CurrentTaskSnapshot {
+    CurrentTaskSnapshot {
+        task_kind: "protection-blocked".to_string(),
+        label: format!("protection blocked for revid {revid}"),
         progress_done: None,
         progress_total: None,
         window_start: None,
@@ -1801,6 +2734,8 @@ fn apply_reconciliation_started_status(
     status.reconciliation.current_title = None;
     status.reconciliation.last_started_at = Some(started_at);
     status.reconciliation.last_result = None;
+    status.reconciliation.stopped_early_reason = None;
+    status.reconciliation.backoff_until = None;
     status.daemon_state = if status.dry_run {
         "dry-run-running".to_string()
     } else {
@@ -1815,6 +2750,7 @@ fn apply_reconciliation_started_status(
     status.last_notice_at = Some(started_at);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_reconciliation_completed_status(
     status: &mut RuntimeStatus,
     mode: ReconcileMode,
@@ -1822,13 +2758,18 @@ fn apply_reconciliation_completed_status(
     daytime_window_start: Option<DateTime<Utc>>,
     last_result: String,
     notice: String,
+    stopped_early_reason: Option<String>,
+    reconciliation_backoff_until: Option<DateTime<Utc>>,
 ) {
     let verification_failed = last_result.starts_with("failed:");
+    let stopped_early = stopped_early_reason.is_some();
     status.reconciliation.active = false;
     status.reconciliation.phase = Some("idle".to_string());
     status.reconciliation.current_title = None;
     status.reconciliation.last_completed_at = Some(completed_at);
     status.reconciliation.last_result = Some(last_result.clone());
+    status.reconciliation.stopped_early_reason = stopped_early_reason.clone();
+    status.reconciliation.backoff_until = reconciliation_backoff_until;
     set_background_current_task(
         status,
         idle_task("waiting for watched-page edits", completed_at),
@@ -1850,6 +2791,38 @@ fn apply_reconciliation_completed_status(
             &last_result,
             completed_at,
         ));
+    } else if stopped_early {
+        let protection_blocked = status
+            .realtime
+            .latest_actionable_issue
+            .as_ref()
+            .is_some_and(|issue| issue.source == "live-hide")
+            || matches!(
+                status.realtime.latest_outcome.as_ref(),
+                Some(outcome)
+                    if outcome.mode == RevDelMode::Live.label() && outcome.outcome == "blocked"
+            );
+        status.realtime.state = if protection_blocked {
+            "blocked".to_string()
+        } else if active_runtime_backoff_until(&status.realtime, completed_at).is_some() {
+            "catching-up".to_string()
+        } else {
+            "unhealthy".to_string()
+        };
+        status.realtime.last_state_changed_at = Some(completed_at);
+        if stopped_early_reason
+            .as_deref()
+            .is_some_and(|reason| !matches!(reason, "yielding-to-live" | "live-hide-unresolved"))
+        {
+            status.realtime.latest_actionable_issue = Some(reconciliation_stopped_early_issue(
+                mode,
+                stopped_early_reason.as_deref().unwrap_or("stopped-early"),
+                completed_at,
+                active_runtime_backoff_until(&status.realtime, completed_at),
+            ));
+        } else {
+            restore_persistent_issue(status, completed_at);
+        }
     } else if !status.realtime.catchup_active
         && active_runtime_backoff_until(&status.realtime, completed_at).is_none()
         && !latest_live_outcome_is_degraded(&status.realtime)
@@ -1857,29 +2830,37 @@ fn apply_reconciliation_completed_status(
         && !has_scheduled_verification_failure(&status.realtime)
         && !latest_persistent_issue_is_degraded(&status.realtime, mode)
     {
-        status.realtime.state = "healthy".to_string();
+        let next_state =
+            converged_realtime_state_after_primary_poll(&status.realtime, completed_at);
+        status.realtime.state = next_state.clone();
         status.realtime.last_state_changed_at = Some(completed_at);
-        if mode == ReconcileMode::Full {
-            clear_actionable_issue_if_source(
-                &mut status.realtime,
-                &[
-                    "last-24h-verification",
-                    "full-watched-set-recheck",
-                    "full-watched-set-freshness",
-                    "recovery",
-                    "stream",
-                ],
-            );
-        } else {
-            clear_actionable_issue_if_source(
-                &mut status.realtime,
-                &[
-                    "last-24h-verification",
-                    "full-watched-set-recheck",
-                    "recovery",
-                    "stream",
-                ],
-            );
+        if next_state == "healthy" {
+            if mode == ReconcileMode::Full {
+                clear_actionable_issue_if_source(
+                    &mut status.realtime,
+                    &[
+                        "last-24h-verification",
+                        "full-watched-set-recheck",
+                        "full-watched-set-freshness",
+                        "recovery",
+                        "stream",
+                        "polling",
+                    ],
+                );
+            } else {
+                clear_actionable_issue_if_source(
+                    &mut status.realtime,
+                    &[
+                        "last-24h-verification",
+                        "full-watched-set-recheck",
+                        "recovery",
+                        "stream",
+                        "polling",
+                    ],
+                );
+            }
+        } else if matches!(next_state.as_str(), "unhealthy" | "blocked") {
+            restore_persistent_issue(status, completed_at);
         }
     } else if latest_persistent_issue_blocks_stream_healthy(&status.realtime)
         && matches!(status.realtime.state.as_str(), "" | "unknown" | "healthy")
@@ -1891,16 +2872,27 @@ fn apply_reconciliation_completed_status(
     status.last_notice_at = Some(completed_at);
 }
 
+fn is_persistent_live_failure_outcome(outcome: &SuppressionOutcomeSnapshot) -> bool {
+    outcome.mode == RevDelMode::Live.label()
+        && matches!(
+            outcome.outcome.as_str(),
+            "failed" | "retrying" | "throttled" | "unresolved" | "blocked"
+        )
+}
+
+fn should_replace_latest_outcome(
+    current: Option<&SuppressionOutcomeSnapshot>,
+    next: &SuppressionOutcomeSnapshot,
+) -> bool {
+    next.mode == RevDelMode::Live.label()
+        || !current.is_some_and(is_persistent_live_failure_outcome)
+}
+
 fn latest_live_outcome_is_degraded(status: &crate::state::RealtimeRuntimeStatus) -> bool {
-    matches!(
-        status.latest_outcome.as_ref(),
-        Some(outcome)
-            if outcome.mode == RevDelMode::Live.label()
-                && matches!(
-                    outcome.outcome.as_str(),
-                    "failed" | "retrying" | "throttled" | "unresolved" | "blocked"
-                )
-    )
+    status
+        .latest_outcome
+        .as_ref()
+        .is_some_and(is_persistent_live_failure_outcome)
 }
 
 fn latest_recovery_summary_is_degraded(status: &crate::state::RealtimeRuntimeStatus) -> bool {
@@ -1951,8 +2943,79 @@ fn latest_persistent_issue_blocks_stream_healthy(
 fn actionable_issue_blocks_stream_healthy(issue: &ActionableIssueSnapshot) -> bool {
     matches!(
         issue.source.as_str(),
-        "full-watched-set-freshness" | "launch-path" | "pid-file" | "runtime-status"
+        "full-watched-set-freshness"
+            | "live-hide"
+            | "launch-path"
+            | "polling"
+            | "pid-file"
+            | "runtime-status"
+            | "state-persistence"
     )
+}
+
+fn reconciliation_preflight_stop_reason(
+    status: &crate::state::RealtimeRuntimeStatus,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    if status.live_lane.queue_depth > 0 || status.live_lane.in_flight > 0 {
+        return Some("yielding-to-live".to_string());
+    }
+    if status
+        .latest_actionable_issue
+        .as_ref()
+        .is_some_and(|issue| issue.source == "live-hide")
+        || latest_live_outcome_is_degraded(status)
+    {
+        return Some("live-hide-unresolved".to_string());
+    }
+    if active_runtime_backoff_until(status, now).is_some() {
+        return Some("api-backoff-active".to_string());
+    }
+    None
+}
+
+fn polling_signal_is_fresh(
+    status: &crate::state::RealtimeRuntimeStatus,
+    now: DateTime<Utc>,
+) -> bool {
+    status.last_freshness_probe_source.as_deref() == Some("polling")
+        && status.last_freshness_probe_at.is_some_and(|fresh_at| {
+            (now - fresh_at).num_seconds() <= status.stale_threshold_seconds as i64
+        })
+}
+
+fn converged_realtime_state_after_primary_poll(
+    status: &crate::state::RealtimeRuntimeStatus,
+    now: DateTime<Utc>,
+) -> String {
+    if status.catchup_active || active_runtime_backoff_until(status, now).is_some() {
+        return "catching-up".to_string();
+    }
+    if matches!(status.state.as_str(), "blocked")
+        || matches!(
+            status.latest_outcome.as_ref(),
+            Some(outcome)
+                if outcome.mode == RevDelMode::Live.label() && outcome.outcome == "blocked"
+        )
+    {
+        return "blocked".to_string();
+    }
+    if latest_live_outcome_is_degraded(status) {
+        return "unhealthy".to_string();
+    }
+    if latest_recovery_summary_is_degraded(status)
+        || has_scheduled_verification_failure(status)
+        || latest_persistent_issue_blocks_stream_healthy(status)
+    {
+        return "unhealthy".to_string();
+    }
+    if !polling_signal_is_fresh(status, now) {
+        if status.last_freshness_probe_source.as_deref() == Some("polling") {
+            return "stale".to_string();
+        }
+        return "starting".to_string();
+    }
+    "healthy".to_string()
 }
 
 fn clear_actionable_issue_if_source(
@@ -1965,6 +3028,63 @@ fn clear_actionable_issue_if_source(
         .is_some_and(|issue| clearable_sources.contains(&issue.source.as_str()))
     {
         status.latest_actionable_issue = None;
+    }
+}
+
+fn actionable_issue_source_for_mode(mode: &str) -> &'static str {
+    match mode {
+        "live" => "live-hide",
+        "catchup" => "recovery",
+        "coverage" => "coverage",
+        "reconciliation" => "reconciliation",
+        "manual" => "manual",
+        _ => "live-hide",
+    }
+}
+
+fn blocked_actionable_issue_for_mode(
+    mode: &str,
+    revid: u64,
+    detected_at: DateTime<Utc>,
+) -> ActionableIssueSnapshot {
+    let (source, summary, next_action) = match mode {
+        "live" => (
+            "live-hide",
+            format!("cannot hide revid {} because protection is blocked", revid),
+            "run check-auth and verify wiki-side rights immediately".to_string(),
+        ),
+        "catchup" => (
+            "recovery",
+            format!("recovery hide blocked for revid {}", revid),
+            "check auth and wiki-side rights, then rerun recovery".to_string(),
+        ),
+        "coverage" => (
+            "coverage",
+            format!("coverage hide blocked for revid {}", revid),
+            "check auth and wiki-side rights before rerunning coverage".to_string(),
+        ),
+        "reconciliation" => (
+            "reconciliation",
+            format!("reconciliation hide blocked for revid {}", revid),
+            "check auth and wiki-side rights before rerunning scheduled verification".to_string(),
+        ),
+        "manual" => (
+            "manual",
+            format!("manual hide blocked for revid {}", revid),
+            "check auth and wiki-side rights before retrying the operator action".to_string(),
+        ),
+        _ => (
+            "live-hide",
+            format!("cannot hide revid {} because protection is blocked", revid),
+            "check auth and wiki-side rights immediately".to_string(),
+        ),
+    };
+    ActionableIssueSnapshot {
+        source: source.to_string(),
+        severity: "error".to_string(),
+        summary,
+        next_action,
+        detected_at: Some(detected_at),
     }
 }
 
@@ -2052,6 +3172,50 @@ fn verification_failure_issue_for_mode(
         summary: format!("{label} {}", result),
         next_action: next_action.to_string(),
         detected_at: Some(detected_at),
+    }
+}
+
+fn reconciliation_stopped_early_issue(
+    mode: ReconcileMode,
+    reason: &str,
+    detected_at: DateTime<Utc>,
+    backoff_until: Option<DateTime<Utc>>,
+) -> ActionableIssueSnapshot {
+    let (source, label) = match mode {
+        ReconcileMode::CurrentDay => ("last-24h-verification", "Last 24 hours verification"),
+        ReconcileMode::Full => ("full-watched-set-recheck", "Full watched-set recheck"),
+    };
+    let next_action = if reason == "auth-session" {
+        "re-authenticate the daemon session and rerun scheduled verification".to_string()
+    } else if reason == "permission-blocked" {
+        "verify bot rights or page-level revisiondelete permissions before rerunning scheduled verification".to_string()
+    } else if let Some(until) = backoff_until {
+        format!(
+            "wait until {} and rerun scheduled verification",
+            render_runtime_time(&until)
+        )
+    } else {
+        "inspect background verification failures and rerun scheduled verification".to_string()
+    };
+    ActionableIssueSnapshot {
+        source: source.to_string(),
+        severity: "warning".to_string(),
+        summary: format!("{label} stopped early: {reason}"),
+        next_action,
+        detected_at: Some(detected_at),
+    }
+}
+
+fn api_failure_next_action(snapshot: &ApiFailureSnapshot) -> String {
+    if let Some(seconds) = snapshot.retry_after_seconds {
+        return format!("wait {seconds}s for backoff, then recheck");
+    }
+    match snapshot.class.as_str() {
+        "auth-session" => "re-authenticate the daemon session and verify the next hide".to_string(),
+        "permission" => {
+            "verify bot rights or page-level revisiondelete permissions before retrying".to_string()
+        }
+        _ => "inspect auth, API, or network state".to_string(),
     }
 }
 
@@ -2184,6 +3348,8 @@ mod tests {
 
     use chrono::{TimeDelta, TimeZone};
     use tempfile::tempdir;
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
 
     use super::*;
     use crate::auth::AuthState;
@@ -2194,7 +3360,9 @@ mod tests {
         MatchingConfig, MetricsConfig, NightlySweepConfig, QueueConfig, RealtimeConfig,
         RetryConfig, RevDelConfig, StateConfig, SuppressionListConfig, WikiConfig,
     };
-    use crate::metrics::snapshot_runtime_latency_metrics;
+    use crate::metrics::{
+        reset_runtime_latency_metrics_for_tests, snapshot_runtime_latency_metrics,
+    };
     use crate::state::RuntimeStatus;
 
     fn test_config() -> AppConfig {
@@ -2294,6 +3462,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unreadable_previous_runtime_status_seed_does_not_block_startup() {
+        let temp = tempdir().unwrap();
+        let status_path = temp.path().join("runtime_status.json");
+        std::fs::write(&status_path, "{not valid json").unwrap();
+
+        let status = load_runtime_status_seed(&status_path);
+
+        assert_eq!(status.daemon_state, "");
+        assert_eq!(status.realtime.state, "unknown");
+    }
+
     fn build_test_runtime(
         temp: &tempfile::TempDir,
         runtime_status_surface_mode: RuntimeStatusSurfaceMode,
@@ -2312,16 +3492,16 @@ mod tests {
         let (work_tx, mut work_rx) = mpsc::channel(1);
         let temp = tempdir().unwrap();
         let runtime_status = Arc::new(tokio::sync::Mutex::new(RuntimeStatus::default()));
-        let dispatcher = ActionDispatcher::new(
-            "be.wikipedia.org".to_string(),
+        let dispatcher = ActionDispatcher::new(ActionDispatcherInit {
+            wiki_server_name: "be.wikipedia.org".to_string(),
             revision_locks,
             processed,
-            queue_depth.clone(),
+            queue_depth: queue_depth.clone(),
             work_tx,
-            Arc::clone(&runtime_status),
-            temp.path().join("status.json"),
-            RuntimeStatusSurfaceMode::DaemonOwned,
-        );
+            runtime_status: Arc::clone(&runtime_status),
+            runtime_status_file: temp.path().join("status.json"),
+            runtime_status_surface_mode: RuntimeStatusSurfaceMode::DaemonOwned,
+        });
 
         dispatcher
             .dispatch_action_batch(
@@ -2353,16 +3533,16 @@ mod tests {
         let temp = tempdir().unwrap();
         let status_path = temp.path().join("status.json");
         let runtime_status = Arc::new(tokio::sync::Mutex::new(RuntimeStatus::default()));
-        let dispatcher = ActionDispatcher::new(
-            "be.wikipedia.org".to_string(),
+        let dispatcher = ActionDispatcher::new(ActionDispatcherInit {
+            wiki_server_name: "be.wikipedia.org".to_string(),
             revision_locks,
             processed,
             queue_depth,
             work_tx,
             runtime_status,
-            status_path.clone(),
-            RuntimeStatusSurfaceMode::DetachedCommand,
-        );
+            runtime_status_file: status_path.clone(),
+            runtime_status_surface_mode: RuntimeStatusSurfaceMode::DetachedCommand,
+        });
 
         dispatcher
             .dispatch_action_batch(
@@ -2526,6 +3706,248 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_lane_processes_while_background_lane_is_not_drained() {
+        reset_runtime_latency_metrics_for_tests();
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let runtime = Arc::clone(&harness.runtime);
+        let worker = tokio::spawn(crate::worker::run_worker_for_lane(
+            Arc::clone(&runtime),
+            ExecutionLaneKind::Live,
+            harness.work_rx,
+        ));
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let observed_at = Utc::now() - TimeDelta::milliseconds(25);
+
+        runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Background Fixture".to_string(),
+                revids: vec![900],
+                event_id: None,
+                user: None,
+                comment: None,
+                mode: RevDelMode::Reconciliation,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: Some("blocked-background-fixture".to_string()),
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![901],
+                event_id: Some("evt-901".to_string()),
+                user: Some("SyntheticOperator".to_string()),
+                comment: Some("synthetic edit".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(observed_at),
+                recovery_trigger: None,
+                completion_tx: Some(completion_tx),
+            })
+            .await
+            .unwrap();
+
+        let completion = timeout(Duration::from_secs(1), completion_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(completion.is_ok());
+        let background_action = harness.background_work_rx.try_recv().unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+        let latency = snapshot_runtime_latency_metrics();
+
+        assert_eq!(background_action.mode, RevDelMode::Reconciliation);
+        assert_eq!(status.realtime.live_lane.queue_depth, 0);
+        assert_eq!(status.realtime.background_lane.queue_depth, 1);
+        assert_eq!(
+            status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .and_then(|outcome| outcome.lane.as_deref()),
+            Some("live")
+        );
+        assert!(latency.observed_to_queue.sample_count >= 1);
+        assert!(latency.queue_to_submit.sample_count >= 1);
+        assert!(latency.submit_to_complete.sample_count >= 1);
+        assert!(latency.observed_to_hidden.sample_count >= 1);
+
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn live_lane_saturation_records_degraded_status_without_waiting() {
+        let processed = Arc::new(RwLock::new(ProcessedRevidsState::default()));
+        let revision_locks = Arc::new(KeyLockSet::new());
+        let queue_depth = Arc::new(AtomicUsize::new(0));
+        let (work_tx, mut work_rx) = mpsc::channel(1);
+        let temp = tempdir().unwrap();
+        let runtime_status = Arc::new(tokio::sync::Mutex::new(RuntimeStatus::default()));
+        let dispatcher = ActionDispatcher::new(ActionDispatcherInit {
+            wiki_server_name: "be.wikipedia.org".to_string(),
+            revision_locks,
+            processed,
+            queue_depth: queue_depth.clone(),
+            work_tx,
+            runtime_status: Arc::clone(&runtime_status),
+            runtime_status_file: temp.path().join("status.json"),
+            runtime_status_surface_mode: RuntimeStatusSurfaceMode::DetachedCommand,
+        });
+
+        dispatcher
+            .dispatch_action_batch(
+                "Foo".to_string(),
+                vec![1],
+                None,
+                None,
+                None,
+                RevDelMode::Live,
+            )
+            .await
+            .unwrap();
+        dispatcher
+            .dispatch_action_batch(
+                "Bar".to_string(),
+                vec![2],
+                None,
+                None,
+                None,
+                RevDelMode::Live,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(work_rx.try_recv().is_ok());
+        assert!(work_rx.try_recv().is_err());
+        assert_eq!(queue_depth.load(Ordering::SeqCst), 1);
+        let status = runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .live_lane
+                .latest_saturation_reason
+                .as_deref(),
+            Some("live-queue-full")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .and_then(|outcome| outcome.reason_code.as_deref()),
+            Some("live-queue-full")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_dispatch_sets_deadline_and_lane_status() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Foo".to_string(),
+                revids: vec![902],
+                event_id: Some("evt-902".to_string()),
+                user: Some("SyntheticOperator".to_string()),
+                comment: Some("synthetic edit".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+
+        let action = harness.work_rx.try_recv().unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+        let outcome = status.realtime.latest_outcome.as_ref().unwrap();
+
+        assert_eq!(action.lane, ExecutionLaneKind::Live);
+        assert!(action.deadline_at.is_some());
+        assert_eq!(status.realtime.live_lane.queue_capacity, 100);
+        assert_eq!(status.realtime.live_lane.queue_depth, 1);
+        assert_eq!(status.realtime.background_lane.queue_depth, 0);
+        assert_eq!(outcome.lane.as_deref(), Some("live"));
+        assert!(outcome.deadline_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn live_burst_records_bounded_latency_percentiles_and_duplicate_skip() {
+        reset_runtime_latency_metrics_for_tests();
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let runtime = Arc::clone(&harness.runtime);
+        let mut completions = Vec::new();
+
+        for offset in 0..10_u64 {
+            let (completion_tx, completion_rx) = oneshot::channel();
+            completions.push(completion_rx);
+            runtime
+                .dispatch_action(RevDelDispatch {
+                    title: format!("Synthetic Sensitive Page {offset}"),
+                    revids: vec![1_000 + offset],
+                    event_id: Some(format!("evt-{offset}")),
+                    user: Some("SyntheticOperator".to_string()),
+                    comment: Some("synthetic edit".to_string()),
+                    mode: RevDelMode::Live,
+                    observed_at: Some(Utc::now() - TimeDelta::milliseconds(10 + offset as i64)),
+                    recovery_trigger: None,
+                    completion_tx: Some(completion_tx),
+                })
+                .await
+                .unwrap();
+        }
+        runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Synthetic Sensitive Page duplicate".to_string(),
+                revids: vec![1_000],
+                event_id: Some("evt-duplicate".to_string()),
+                user: Some("SyntheticOperator".to_string()),
+                comment: Some("synthetic duplicate".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(runtime.queue_depth.load(Ordering::SeqCst), 10);
+        let worker = tokio::spawn(crate::worker::run_worker_for_lane(
+            Arc::clone(&runtime),
+            ExecutionLaneKind::Live,
+            harness.work_rx,
+        ));
+
+        for completion_rx in completions {
+            let completion = timeout(Duration::from_secs(1), completion_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(completion.is_ok());
+        }
+
+        let status = harness.runtime_status.lock().await.clone();
+        let latency = snapshot_runtime_latency_metrics();
+        assert_eq!(status.realtime.live_lane.queue_depth, 0);
+        assert_eq!(status.realtime.live_lane.in_flight, 0);
+        assert!(latency.observed_to_queue.sample_count >= 10);
+        assert!(latency.submit_to_complete.sample_count >= 10);
+        assert!(latency.observed_to_hidden.sample_count >= 10);
+        assert!(latency.observed_to_hidden.p50_ms.is_some());
+        assert!(latency.observed_to_hidden.p95_ms.is_some());
+        assert!(latency.observed_to_hidden.p99_ms.is_some());
+
+        worker.abort();
+    }
+
+    #[tokio::test]
     async fn record_action_completed_surfaces_blocked_and_retrying_live_outcomes() {
         let temp = tempdir().unwrap();
         let mut harness =
@@ -2587,6 +4009,184 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn background_actions_do_not_mask_live_failure_outcome() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Live".to_string(),
+                revids: vec![101],
+                event_id: Some("evt-101".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        let live_action = harness.work_rx.try_recv().unwrap();
+        harness
+            .runtime
+            .record_action_completed(
+                &live_action,
+                "retrying",
+                Some("rate-limited".to_string()),
+                1,
+            )
+            .await;
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Catchup".to_string(),
+                revids: vec![202],
+                event_id: None,
+                user: None,
+                comment: None,
+                mode: RevDelMode::Catchup,
+                observed_at: Some(Utc::now()),
+                recovery_trigger: Some("startup".to_string()),
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        let background_action = harness.background_work_rx.try_recv().unwrap();
+        harness
+            .runtime
+            .record_action_completed(&background_action, "hidden", None, 1)
+            .await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert_eq!(
+            status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .map(|outcome| outcome.mode.as_str()),
+            Some(RevDelMode::Live.label())
+        );
+        assert_eq!(
+            status
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .map(|outcome| outcome.outcome.as_str()),
+            Some("retrying")
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_background_hide_keeps_recovery_anchor_on_revision_time() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let older_revision = Utc::now() - TimeDelta::minutes(10);
+        let newer_missed_live_edit = Utc::now() - TimeDelta::minutes(1);
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Live".to_string(),
+                revids: vec![101],
+                event_id: Some("evt-101".to_string()),
+                user: Some("User".to_string()),
+                comment: Some("Comment".to_string()),
+                mode: RevDelMode::Live,
+                observed_at: Some(newer_missed_live_edit),
+                recovery_trigger: None,
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        let live_action = harness.work_rx.try_recv().unwrap();
+        harness
+            .runtime
+            .record_action_completed(
+                &live_action,
+                "retrying",
+                Some("rate-limited".to_string()),
+                1,
+            )
+            .await;
+
+        harness
+            .runtime
+            .dispatch_action(RevDelDispatch {
+                title: "Catchup".to_string(),
+                revids: vec![202],
+                event_id: None,
+                user: None,
+                comment: None,
+                mode: RevDelMode::Catchup,
+                observed_at: Some(older_revision),
+                recovery_trigger: Some("startup".to_string()),
+                completion_tx: None,
+            })
+            .await
+            .unwrap();
+        let background_action = harness.background_work_rx.try_recv().unwrap();
+        harness
+            .runtime
+            .record_action_completed(&background_action, "hidden", None, 1)
+            .await;
+
+        let end = Utc::now();
+        let window = harness.runtime.default_recovery_window(end).await;
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(
+            status.realtime.last_successful_hide_at,
+            Some(older_revision)
+        );
+        assert_eq!(window.start, older_revision);
+        assert!(window.start < newer_missed_live_edit);
+    }
+
+    #[tokio::test]
+    async fn mark_recovery_started_preserves_polling_issue() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .mark_recentchanges_poll_failed(
+                ApiFailureSnapshot {
+                    class: "transport".to_string(),
+                    api_code: Some("transport".to_string()),
+                    retryable: true,
+                    operation: "recentchanges-poll".to_string(),
+                    message: "timeout".to_string(),
+                    occurred_at: Some(Utc::now()),
+                    ..ApiFailureSnapshot::default()
+                },
+                "recentchanges polling failed: timeout".to_string(),
+            )
+            .await;
+
+        runtime
+            .mark_recovery_started(
+                "startup".to_string(),
+                "since last successful hide".to_string(),
+                Utc::now() - TimeDelta::minutes(5),
+                Utc::now(),
+            )
+            .await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("polling")
+        );
+    }
+
     #[test]
     fn reconciliation_status_updates_preserve_active_live_hide_task() {
         let started_at = Utc.with_ymd_and_hms(2026, 4, 30, 9, 0, 0).unwrap();
@@ -2629,6 +4229,8 @@ mod tests {
             daytime_window_start,
             "completed".to_string(),
             "Last 24 hours verification completed".to_string(),
+            None,
+            None,
         );
 
         assert!(!status.reconciliation.active);
@@ -2743,16 +4345,16 @@ mod tests {
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let (work_tx, _work_rx) = mpsc::channel(config.queue.capacity);
         let runtime_status_for_actions = Arc::clone(&runtime_status);
-        let actions = Arc::new(ActionDispatcher::new(
-            config.wiki.server_name.clone(),
+        let actions = Arc::new(ActionDispatcher::new(ActionDispatcherInit {
+            wiki_server_name: config.wiki.server_name.clone(),
             revision_locks,
-            Arc::new(RwLock::new(ProcessedRevidsState::default())),
+            processed: Arc::new(RwLock::new(ProcessedRevidsState::default())),
             queue_depth,
             work_tx,
-            runtime_status_for_actions,
-            temp.path().join("status.json"),
-            RuntimeStatusSurfaceMode::DaemonOwned,
-        ));
+            runtime_status: runtime_status_for_actions,
+            runtime_status_file: temp.path().join("status.json"),
+            runtime_status_surface_mode: RuntimeStatusSurfaceMode::DaemonOwned,
+        }));
         let runtime = Arc::new(ReconciliationRuntime::new(ReconciliationRuntimeInit {
             config: config.clone(),
             client,
@@ -3189,6 +4791,12 @@ mod tests {
                     });
             })
             .await;
+        runtime
+            .mark_recentchanges_poll_succeeded(
+                Some(Utc::now() - TimeDelta::milliseconds(250)),
+                "recentchanges poll completed".to_string(),
+            )
+            .await;
         let summary = CoverageSummary {
             scope_label: Some("since last successful hide".to_string()),
             started_at: Some(Utc::now() - TimeDelta::minutes(5)),
@@ -3213,6 +4821,35 @@ mod tests {
             Some("idle")
         );
         assert_eq!(status.realtime.latest_recovery_summary, Some(summary));
+    }
+
+    #[tokio::test]
+    async fn mark_recovery_completed_without_fresh_poll_does_not_claim_healthy() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .update_runtime_status(|status| {
+                status.realtime.state = "stale".to_string();
+                status.realtime.catchup_active = true;
+            })
+            .await;
+        let summary = CoverageSummary {
+            scope_label: Some("since last successful hide".to_string()),
+            started_at: Some(Utc::now() - TimeDelta::minutes(3)),
+            ended_at: Some(Utc::now()),
+            requested_by: "startup".to_string(),
+            edits_checked: 3,
+            ..CoverageSummary::default()
+        };
+
+        runtime.mark_recovery_completed(summary).await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_ne!(status.realtime.state, "healthy");
+        assert!(matches!(
+            status.realtime.state.as_str(),
+            "starting" | "stale"
+        ));
     }
 
     #[tokio::test]
@@ -3251,6 +4888,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mark_recovery_completed_preserves_persistent_live_issue_until_live_or_recovery_success()
+     {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .update_runtime_status(|status| {
+                status.realtime.catchup_active = true;
+                status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
+                    title: "Foo".to_string(),
+                    revid: 77,
+                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/77".to_string()),
+                    outcome: "retrying".to_string(),
+                    mode: RevDelMode::Live.label().to_string(),
+                    source_label: RevDelMode::Live.source_label().to_string(),
+                    ..SuppressionOutcomeSnapshot::default()
+                });
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
+                    severity: "error".to_string(),
+                    summary: "live hide failed for revid 77".to_string(),
+                    next_action: "watch the recovery window".to_string(),
+                    detected_at: Some(Utc::now()),
+                });
+            })
+            .await;
+        runtime
+            .mark_recentchanges_poll_succeeded(
+                Some(Utc::now() - TimeDelta::milliseconds(250)),
+                "recentchanges poll completed".to_string(),
+            )
+            .await;
+
+        runtime
+            .mark_recovery_completed(CoverageSummary {
+                scope_label: Some("since last successful hide".to_string()),
+                started_at: Some(Utc::now() - TimeDelta::minutes(2)),
+                ended_at: Some(Utc::now()),
+                requested_by: "startup".to_string(),
+                edits_checked: 1,
+                ..CoverageSummary::default()
+            })
+            .await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("live-hide")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_failure_recovery_success_clears_persistent_live_issue() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .update_runtime_status(|status| {
+                status.realtime.catchup_active = true;
+                status.realtime.latest_outcome = Some(SuppressionOutcomeSnapshot {
+                    title: "Foo".to_string(),
+                    revid: 77,
+                    revision_url: Some("https://be.wikipedia.org/wiki/Special:Diff/77".to_string()),
+                    outcome: "retrying".to_string(),
+                    mode: RevDelMode::Live.label().to_string(),
+                    source_label: RevDelMode::Live.source_label().to_string(),
+                    ..SuppressionOutcomeSnapshot::default()
+                });
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
+                    severity: "error".to_string(),
+                    summary: "live hide failed for revid 77".to_string(),
+                    next_action: "watch the recovery window".to_string(),
+                    detected_at: Some(Utc::now()),
+                });
+            })
+            .await;
+        runtime
+            .mark_recentchanges_poll_succeeded(
+                Some(Utc::now() - TimeDelta::milliseconds(250)),
+                "recentchanges poll completed".to_string(),
+            )
+            .await;
+
+        runtime
+            .mark_recovery_completed(CoverageSummary {
+                scope_label: Some("since last successful hide".to_string()),
+                started_at: Some(Utc::now() - TimeDelta::minutes(2)),
+                ended_at: Some(Utc::now()),
+                requested_by: "live-failure".to_string(),
+                edits_checked: 1,
+                hidden_count: 1,
+                ..CoverageSummary::default()
+            })
+            .await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "healthy");
+        assert!(status.realtime.latest_outcome.is_none());
+        assert!(status.realtime.latest_actionable_issue.is_none());
+    }
+
+    #[tokio::test]
     async fn freshness_probe_updates_precise_lag_and_source() {
         let temp = tempdir().unwrap();
         let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -3277,6 +5020,156 @@ mod tests {
                 .is_some_and(|millis| millis >= 400)
         );
         assert!(status.realtime.last_freshness_probe_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn recentchanges_poll_success_restores_healthy_truth() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .mark_recentchanges_poll_failed(
+                ApiFailureSnapshot {
+                    class: "transport".to_string(),
+                    api_code: Some("transport".to_string()),
+                    retryable: true,
+                    operation: "recentchanges-poll".to_string(),
+                    message: "network timeout".to_string(),
+                    occurred_at: Some(Utc::now()),
+                    ..ApiFailureSnapshot::default()
+                },
+                "recentchanges polling failed: network timeout".to_string(),
+            )
+            .await;
+
+        runtime
+            .mark_recentchanges_poll_succeeded(
+                Some(Utc::now() - TimeDelta::milliseconds(300)),
+                "recentchanges poll completed".to_string(),
+            )
+            .await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "healthy");
+        assert_eq!(
+            status.realtime.last_freshness_probe_source.as_deref(),
+            Some("polling")
+        );
+        assert!(status.realtime.latest_actionable_issue.is_none());
+        assert!(status.realtime.latest_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn recentchanges_poll_success_does_not_clear_unresolved_live_hide_issue() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        runtime
+            .update_runtime_status(|status| {
+                status.realtime.state = "starting".to_string();
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
+                    severity: "error".to_string(),
+                    summary: "cannot hide synthetic revid because protection is blocked"
+                        .to_string(),
+                    next_action: "run check-auth and verify wiki-side rights immediately"
+                        .to_string(),
+                    detected_at: Some(Utc::now()),
+                });
+            })
+            .await;
+
+        runtime
+            .mark_recentchanges_poll_succeeded(
+                Some(Utc::now() - TimeDelta::milliseconds(300)),
+                "recentchanges poll completed".to_string(),
+            )
+            .await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("live-hide")
+        );
+    }
+
+    #[tokio::test]
+    async fn full_recheck_stops_before_work_when_live_hide_is_unresolved() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        harness
+            .runtime
+            .update_runtime_status(|status| {
+                status.realtime.state = "blocked".to_string();
+                status.realtime.latest_actionable_issue = Some(ActionableIssueSnapshot {
+                    source: "live-hide".to_string(),
+                    severity: "error".to_string(),
+                    summary: "cannot hide synthetic revid because protection is blocked"
+                        .to_string(),
+                    next_action: "run check-auth and verify wiki-side rights immediately"
+                        .to_string(),
+                    detected_at: Some(Utc::now()),
+                });
+            })
+            .await;
+
+        let result = harness
+            .runtime
+            .run_reconciliation_pass(ReconcileMode::Full)
+            .await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert!(result.is_err());
+        assert!(!status.reconciliation.active);
+        assert_eq!(status.realtime.state, "blocked");
+        assert_eq!(
+            status.reconciliation.stopped_early_reason.as_deref(),
+            Some("live-hide-unresolved")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("live-hide")
+        );
+    }
+
+    #[tokio::test]
+    async fn recentchanges_poll_success_resets_lag_to_current_poll_head() {
+        let temp = tempdir().unwrap();
+        let runtime = build_test_runtime(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let older_event = Utc::now() - TimeDelta::hours(2);
+        runtime
+            .update_runtime_status(move |status| {
+                status.realtime.last_event_observed_at = Some(older_event);
+            })
+            .await;
+
+        runtime
+            .mark_recentchanges_poll_succeeded(
+                Some(Utc::now() - TimeDelta::seconds(4)),
+                "recentchanges poll completed".to_string(),
+            )
+            .await;
+
+        let status = runtime.reconcile.runtime_status.lock().await.clone();
+        assert_eq!(status.realtime.current_lag_seconds, Some(0));
+        assert_eq!(status.realtime.current_lag_millis, Some(0));
+        assert_eq!(
+            status.realtime.current_lag_source.as_deref(),
+            Some("polling")
+        );
+        assert!(
+            status
+                .realtime
+                .last_event_observed_at
+                .is_some_and(|value| value > older_event)
+        );
     }
 
     #[tokio::test]

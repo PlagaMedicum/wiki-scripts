@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+#![allow(dead_code)]
+
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use futures_util::StreamExt;
 use metrics::{counter, histogram};
 use reqwest_eventsource::{Event, EventSource};
@@ -18,6 +20,214 @@ use crate::mw_api::classify_api_failure;
 use crate::recentchange::{LiveRevisionCandidate, PageChangeTrigger};
 use crate::runtime::{AppRuntime, RevDelDispatch, RevDelMode};
 use crate::state::{SourceListRefresh, load_text, save_text_atomic};
+
+const LIVE_POLL_INTERVAL_SECONDS: u64 = 1;
+const LIVE_POLL_OVERLAP_SECONDS: i64 = 5;
+const LIVE_POLL_DEDUP_TTL_SECONDS: i64 = 60;
+const LIVE_POLL_MAX_CHANGES: usize = 500;
+const SOURCE_REFRESH_TIMEOUT_MIN_SECONDS: u64 = 20;
+const SOURCE_REFRESH_TIMEOUT_MAX_SECONDS: u64 = 60;
+const POLL_TASK_RESTART_INITIAL_SECONDS: u64 = 1;
+const POLL_TASK_RESTART_MAX_SECONDS: u64 = 30;
+
+#[derive(Default)]
+struct RecentChangePollDeduper {
+    revids: HashSet<u64>,
+    order: VecDeque<(chrono::DateTime<Utc>, u64)>,
+}
+
+impl RecentChangePollDeduper {
+    fn is_new(&mut self, revid: u64, keep_since: chrono::DateTime<Utc>) -> bool {
+        self.prune(keep_since);
+        !self.revids.contains(&revid)
+    }
+
+    fn remember(
+        &mut self,
+        revid: u64,
+        observed_at: chrono::DateTime<Utc>,
+        keep_since: chrono::DateTime<Utc>,
+    ) {
+        self.prune(keep_since);
+        if self.revids.insert(revid) {
+            self.order.push_back((observed_at, revid));
+        }
+    }
+
+    fn prune(&mut self, keep_since: chrono::DateTime<Utc>) {
+        while let Some((observed_at, revid)) = self.order.front().copied() {
+            if observed_at >= keep_since {
+                break;
+            }
+            self.order.pop_front();
+            self.revids.remove(&revid);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PollDispatchSummary {
+    total_changes: usize,
+    watched_matches: usize,
+    source_refreshes: usize,
+    request_refreshes: usize,
+}
+
+pub fn spawn_recentchanges_poll_loop(runtime: Arc<AppRuntime>) {
+    tokio::spawn(async move {
+        let mut restart_delay = Duration::from_secs(POLL_TASK_RESTART_INITIAL_SECONDS);
+        loop {
+            let child_runtime = Arc::clone(&runtime);
+            let handle = tokio::spawn(async move { recentchanges_poll_loop(child_runtime).await });
+            let failure = match handle.await {
+                Ok(Ok(())) => "recentchanges poll loop stopped unexpectedly".to_string(),
+                Ok(Err(error)) => format!("recentchanges poll loop failed: {error:#}"),
+                Err(error) => format!("recentchanges poll task ended: {error}"),
+            };
+            tracing::error!(
+                restart_in_seconds = restart_delay.as_secs(),
+                failure = %failure,
+                "recentchanges poll supervisor restarting live detector"
+            );
+            runtime
+                .mark_recentchanges_poll_failed(
+                    crate::state::ApiFailureSnapshot {
+                        class: "poll-task-restart".to_string(),
+                        api_code: Some("poll-task-restart".to_string()),
+                        retryable: true,
+                        operation: "recentchanges-poll".to_string(),
+                        message: failure.clone(),
+                        occurred_at: Some(Utc::now()),
+                        ..crate::state::ApiFailureSnapshot::default()
+                    },
+                    format!(
+                        "{failure}; restarting live detector in {}s",
+                        restart_delay.as_secs()
+                    ),
+                )
+                .await;
+            tokio::time::sleep(restart_delay).await;
+            restart_delay = poll_restart_delay(restart_delay);
+        }
+    });
+}
+
+fn poll_restart_delay(current: Duration) -> Duration {
+    Duration::from_secs(current.as_secs().saturating_mul(2).clamp(
+        POLL_TASK_RESTART_INITIAL_SECONDS,
+        POLL_TASK_RESTART_MAX_SECONDS,
+    ))
+}
+
+async fn recentchanges_poll_loop(runtime: Arc<AppRuntime>) -> Result<()> {
+    let mut startup_catchup_pending = true;
+    let mut deduper = RecentChangePollDeduper::default();
+    let mut last_successful_window_end: Option<chrono::DateTime<Utc>> = None;
+    let poll_interval = Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS);
+
+    loop {
+        if startup_catchup_pending {
+            startup_catchup_pending = false;
+            spawn_bounded_catchup_if_needed(Arc::clone(&runtime), "startup".to_string()).await;
+        }
+
+        let window_end = Utc::now();
+        let window_start = recentchanges_poll_window_start(last_successful_window_end, window_end);
+        let window = match runtime
+            .client
+            .fetch_recent_changes_in_window(window_start, window_end, LIVE_POLL_MAX_CHANGES)
+            .await
+        {
+            Ok(window) => window,
+            Err(error) => {
+                runtime
+                    .mark_recentchanges_poll_failed(
+                        classify_api_failure(&error, "recentchanges-poll", None, None),
+                        format!("recentchanges polling failed: {error}"),
+                    )
+                    .await;
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
+        };
+
+        let total_changes = window.changes.len();
+        let latest_event_at = window.changes.iter().map(|change| change.timestamp).max();
+        let truncated = window.truncated;
+        let changes = window.changes;
+        let keep_since = window_end - TimeDelta::seconds(LIVE_POLL_DEDUP_TTL_SECONDS);
+        let summary = match dispatch_polled_recentchanges_window(
+            &runtime,
+            changes,
+            &mut deduper,
+            keep_since,
+        )
+        .await
+        {
+            Ok(summary) => summary,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    window_start = %window_start,
+                    window_end = %window_end,
+                    "recentchanges poll dispatch failed; preserving the previous poll window for retry"
+                );
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
+        };
+        last_successful_window_end = Some(window_end);
+        debug!(
+            total_changes = summary.total_changes,
+            watched_matches = summary.watched_matches,
+            source_refreshes = summary.source_refreshes,
+            request_refreshes = summary.request_refreshes,
+            "recentchanges poll dispatched overlap window"
+        );
+
+        if truncated {
+            runtime
+                .mark_recentchanges_poll_failed(
+                    crate::state::ApiFailureSnapshot {
+                        class: "poll-window-truncated".to_string(),
+                        api_code: Some("poll-window-truncated".to_string()),
+                        retryable: false,
+                        operation: "recentchanges-poll".to_string(),
+                        message: format!(
+                            "recentchanges polling hit the {}-change limit",
+                            LIVE_POLL_MAX_CHANGES
+                        ),
+                        occurred_at: Some(Utc::now()),
+                        ..crate::state::ApiFailureSnapshot::default()
+                    },
+                    format!(
+                        "recentchanges polling hit the {}-change limit; starting bounded catch-up",
+                        LIVE_POLL_MAX_CHANGES
+                    ),
+                )
+                .await;
+            spawn_bounded_catchup_if_needed(
+                Arc::clone(&runtime),
+                "poll-window-truncated".to_string(),
+            )
+            .await;
+        } else {
+            let success_notice = if total_changes == 0 {
+                "recentchanges poll completed; no new edits in overlap window".to_string()
+            } else {
+                format!(
+                    "recentchanges poll completed changes={} overlap={}s",
+                    total_changes, LIVE_POLL_OVERLAP_SECONDS
+                )
+            };
+            runtime
+                .mark_recentchanges_poll_succeeded(latest_event_at, success_notice)
+                .await;
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
 
 pub fn spawn_stream_loop(runtime: Arc<AppRuntime>) {
     tokio::spawn(async move {
@@ -182,10 +392,11 @@ pub async fn stream_loop(runtime: Arc<AppRuntime>) -> Result<()> {
                     if let Some(event_id) =
                         handle_recentchange_event(&runtime, event, Some(&message.id)).await?
                     {
-                        last_event_id = Some(event_id.clone());
-                        if !runtime.dry_run {
-                            save_text_atomic(&runtime.paths.last_event_id_file, &event_id)?;
+                        if !runtime.dry_run && !persist_last_event_id(&runtime, &event_id).await {
+                            use_since_recovery = true;
+                            break;
                         }
+                        last_event_id = Some(event_id);
                     }
                 }
                 Err(error) => {
@@ -238,6 +449,27 @@ async fn spawn_bounded_catchup_if_needed(runtime: Arc<AppRuntime>, trigger: Stri
     spawn_bounded_catchup(runtime, trigger);
 }
 
+async fn persist_last_event_id(runtime: &Arc<AppRuntime>, event_id: &str) -> bool {
+    match save_text_atomic(&runtime.paths.last_event_id_file, event_id) {
+        Ok(()) => true,
+        Err(error) => {
+            warn!(
+                path = %runtime.paths.last_event_id_file.display(),
+                error = %error,
+                "failed to persist stream cursor; reopening recentchange stream"
+            );
+            runtime
+                .record_state_persistence_failure(
+                    "last_event_id".to_string(),
+                    runtime.paths.last_event_id_file.display().to_string(),
+                    error.to_string(),
+                )
+                .await;
+            false
+        }
+    }
+}
+
 fn spawn_bounded_catchup(runtime: Arc<AppRuntime>, trigger: String) {
     tokio::spawn(async move {
         if let Err(error) = crate::catchup::run_default_catchup(&runtime, trigger.clone()).await {
@@ -256,6 +488,16 @@ fn spawn_bounded_catchup(runtime: Arc<AppRuntime>, trigger: String) {
 struct FreshnessProbeOutcome {
     requires_catchup: bool,
     reason: String,
+}
+
+fn recentchanges_poll_window_start(
+    previous_window_end: Option<chrono::DateTime<Utc>>,
+    window_end: chrono::DateTime<Utc>,
+) -> chrono::DateTime<Utc> {
+    let overlap = TimeDelta::seconds(LIVE_POLL_OVERLAP_SECONDS);
+    previous_window_end
+        .map(|previous_end| previous_end.min(window_end) - overlap)
+        .unwrap_or(window_end - overlap)
 }
 
 async fn probe_recentchange_freshness(
@@ -329,6 +571,28 @@ fn spawn_title_scope_catchup(runtime: Arc<AppRuntime>, trigger: String, titles: 
     });
 }
 
+fn spawn_title_scope_catchup_if_needed(
+    runtime: Arc<AppRuntime>,
+    trigger: String,
+    titles: Vec<String>,
+) {
+    tokio::spawn(async move {
+        if !runtime.should_start_recovery(&trigger).await {
+            return;
+        }
+        if let Err(error) = run_title_scoped_catchup(&runtime, trigger.clone(), titles).await {
+            warn!(error = %error, trigger = %trigger, "title-scoped catch-up failed");
+            runtime
+                .mark_recovery_failed(
+                    trigger,
+                    "catchup-failed".to_string(),
+                    format!("title-scoped catch-up failed: {error}"),
+                )
+                .await;
+        }
+    });
+}
+
 fn source_refresh_catchup_trigger(trigger_kind: SourceRefreshTriggerKind) -> &'static str {
     match trigger_kind {
         SourceRefreshTriggerKind::SuppressionList => "source-list-refresh",
@@ -336,17 +600,40 @@ fn source_refresh_catchup_trigger(trigger_kind: SourceRefreshTriggerKind) -> &'s
     }
 }
 
-fn plan_source_refresh(
-    before: &SuppressionListCache,
-    after: &SuppressionListCache,
+struct SourceRefreshActiveGuard {
+    runtime: Arc<AppRuntime>,
+}
+
+impl Drop for SourceRefreshActiveGuard {
+    fn drop(&mut self) {
+        self.runtime.finish_source_refresh();
+    }
+}
+
+struct SourceRefreshPlanInput<'a> {
+    before: &'a SuppressionListCache,
+    after: &'a SuppressionListCache,
     refreshed: bool,
-    trigger_title: &str,
+    trigger_title: &'a str,
     trigger_revid: Option<u64>,
-    catchup_plan: &SourceRefreshCatchupPlan,
+    catchup_plan: &'a SourceRefreshCatchupPlan,
     started_at: chrono::DateTime<Utc>,
     completed_at: chrono::DateTime<Utc>,
     deferred_until: Option<chrono::DateTime<Utc>>,
-) -> SourceListRefresh {
+}
+
+fn plan_source_refresh(input: SourceRefreshPlanInput<'_>) -> SourceListRefresh {
+    let SourceRefreshPlanInput {
+        before,
+        after,
+        refreshed,
+        trigger_title,
+        trigger_revid,
+        catchup_plan,
+        started_at,
+        completed_at,
+        deferred_until,
+    } = input;
     let catchup_requested = catchup_plan.catchup_requested();
     let catchup_triggered = catchup_requested && deferred_until.is_none();
     let outcome = if deferred_until.is_some() {
@@ -382,20 +669,16 @@ fn spawn_source_refresh_catchup(
     trigger_kind: SourceRefreshTriggerKind,
     catchup_plan: SourceRefreshCatchupPlan,
 ) {
+    let trigger = source_refresh_catchup_trigger(trigger_kind).to_string();
     match catchup_plan.followup {
         SourceRefreshFollowup::None => {}
         SourceRefreshFollowup::TitleScoped { titles, .. } => {
-            spawn_title_scope_catchup(
-                runtime,
-                source_refresh_catchup_trigger(trigger_kind).to_string(),
-                titles,
-            );
+            spawn_title_scope_catchup_if_needed(runtime, trigger, titles);
         }
         SourceRefreshFollowup::RecentWindow { .. } => {
-            spawn_bounded_catchup(
-                runtime,
-                source_refresh_catchup_trigger(trigger_kind).to_string(),
-            );
+            tokio::spawn(async move {
+                spawn_bounded_catchup_if_needed(runtime, trigger).await;
+            });
         }
     }
 }
@@ -438,6 +721,121 @@ fn dispatch_recentchange_event(
     } else {
         RecentChangeDispatch::IgnoredLiveRevision(candidate)
     }
+}
+
+fn dispatch_polled_recentchange_record(
+    change: &crate::mw_api::RecentChangeRecord,
+    context: &RecentChangeDispatchContext<'_>,
+) -> RecentChangeDispatch {
+    let normalized_title = crate::titles::normalize_title(&change.title);
+    if normalized_title == context.source_title_normalized {
+        return RecentChangeDispatch::SourceListRefresh(PageChangeTrigger {
+            title: change.title.clone(),
+            normalized_title,
+            trigger_revid: Some(change.revid),
+        });
+    }
+    if is_request_page_trigger(&normalized_title, context.request_pages) {
+        return RecentChangeDispatch::RequestPageRefresh(PageChangeTrigger {
+            title: change.title.clone(),
+            normalized_title,
+            trigger_revid: Some(change.revid),
+        });
+    }
+    let candidate = LiveRevisionCandidate {
+        title: change.title.clone(),
+        normalized_title,
+        revid: change.revid,
+        old_revid: None,
+        user: None,
+        comment: None,
+        event_id: None,
+    };
+    if context.watched_set.contains(&candidate.normalized_title) {
+        RecentChangeDispatch::LiveWatchedRevision(candidate)
+    } else {
+        RecentChangeDispatch::IgnoredLiveRevision(candidate)
+    }
+}
+
+async fn dispatch_polled_recentchanges_window(
+    runtime: &Arc<AppRuntime>,
+    mut changes: Vec<crate::mw_api::RecentChangeRecord>,
+    deduper: &mut RecentChangePollDeduper,
+    keep_since: chrono::DateTime<Utc>,
+) -> Result<PollDispatchSummary> {
+    changes.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.revid.cmp(&right.revid))
+    });
+    let mut summary = PollDispatchSummary {
+        total_changes: 0,
+        watched_matches: 0,
+        source_refreshes: 0,
+        request_refreshes: 0,
+    };
+    let (source_title_normalized, watched_set) = {
+        let cache = runtime.cache.read().await;
+        (
+            cache.source_title_normalized.clone(),
+            cache.watched_set.clone(),
+        )
+    };
+    let request_pages = runtime.config.suppression_list.request_pages.clone();
+    let context = RecentChangeDispatchContext {
+        source_title_normalized: &source_title_normalized,
+        request_pages: &request_pages,
+        watched_set: &watched_set,
+    };
+
+    for change in changes {
+        if !deduper.is_new(change.revid, keep_since) {
+            continue;
+        }
+        match dispatch_polled_recentchange_record(&change, &context) {
+            RecentChangeDispatch::Ignore | RecentChangeDispatch::IgnoredLiveRevision(_) => {
+                deduper.remember(change.revid, change.timestamp, keep_since);
+                summary.total_changes += 1;
+            }
+            RecentChangeDispatch::SourceListRefresh(trigger) => {
+                deduper.remember(change.revid, change.timestamp, keep_since);
+                summary.total_changes += 1;
+                summary.source_refreshes += 1;
+                handle_source_list_change(runtime, &trigger.title, trigger.trigger_revid).await;
+            }
+            RecentChangeDispatch::RequestPageRefresh(trigger) => {
+                deduper.remember(change.revid, change.timestamp, keep_since);
+                summary.total_changes += 1;
+                summary.request_refreshes += 1;
+                handle_request_page_change(runtime, &trigger.title, trigger.trigger_revid).await;
+            }
+            RecentChangeDispatch::LiveWatchedRevision(candidate) => {
+                summary.total_changes += 1;
+                summary.watched_matches += 1;
+                info!(
+                    title = %candidate.title,
+                    revid = candidate.revid,
+                    "matched polled watched revision"
+                );
+                runtime
+                    .mark_realtime_match(
+                        candidate.title.clone(),
+                        candidate.revid,
+                        crate::mw_api::revision_url(
+                            &runtime.config.wiki.server_name,
+                            candidate.revid,
+                        ),
+                        Some(change.timestamp),
+                    )
+                    .await;
+                handle_live_candidate(runtime, candidate, Some(change.timestamp)).await?;
+                deduper.remember(change.revid, change.timestamp, keep_since);
+            }
+        }
+    }
+
+    Ok(summary)
 }
 
 pub async fn handle_recentchange_event(
@@ -544,13 +942,125 @@ async fn handle_source_refresh_trigger(
     trigger_revid: Option<u64>,
     trigger_kind: SourceRefreshTriggerKind,
 ) {
+    spawn_source_refresh_trigger_with_timeout(
+        runtime,
+        title,
+        trigger_revid,
+        trigger_kind,
+        source_refresh_timeout(runtime),
+    )
+    .await;
+}
+
+async fn spawn_source_refresh_trigger_with_timeout(
+    runtime: &Arc<AppRuntime>,
+    title: &str,
+    trigger_revid: Option<u64>,
+    trigger_kind: SourceRefreshTriggerKind,
+    timeout: Duration,
+) {
+    if !runtime.try_begin_source_refresh() {
+        runtime
+            .record_notice(format!(
+                "source refresh already active; coalesced trigger for {title}"
+            ))
+            .await;
+        return;
+    }
+    let runtime = Arc::clone(runtime);
+    let title = title.to_string();
+    tokio::spawn(async move {
+        let _active_guard = SourceRefreshActiveGuard {
+            runtime: Arc::clone(&runtime),
+        };
+        let started_at = Utc::now();
+        let before = runtime.cache.read().await.snapshot.clone();
+        let result = tokio::time::timeout(
+            timeout,
+            run_source_refresh_trigger(
+                &runtime,
+                title.clone(),
+                trigger_revid,
+                trigger_kind,
+                started_at,
+                before.clone(),
+            ),
+        )
+        .await;
+        if result.is_err() {
+            warn!(
+                title = %title,
+                trigger_kind = ?trigger_kind,
+                timeout_seconds = timeout.as_secs(),
+                "source refresh timed out"
+            );
+            runtime
+                .record_source_refresh(SourceListRefresh {
+                    trigger_title: title,
+                    trigger_revid,
+                    started_at: Some(started_at),
+                    completed_at: Some(Utc::now()),
+                    old_source_revid: before.source_lastrevid,
+                    new_source_revid: before.source_lastrevid,
+                    outcome: "refresh-timeout".to_string(),
+                    error: Some(source_refresh_timeout_failure(
+                        trigger_kind,
+                        timeout,
+                        trigger_revid,
+                    )),
+                    ..SourceListRefresh::default()
+                })
+                .await;
+        }
+    });
+}
+
+fn source_refresh_timeout(runtime: &AppRuntime) -> Duration {
+    Duration::from_secs(
+        runtime
+            .config
+            .realtime
+            .stream_read_timeout_seconds
+            .saturating_mul(2)
+            .clamp(
+                SOURCE_REFRESH_TIMEOUT_MIN_SECONDS,
+                SOURCE_REFRESH_TIMEOUT_MAX_SECONDS,
+            ),
+    )
+}
+
+fn source_refresh_timeout_failure(
+    trigger_kind: SourceRefreshTriggerKind,
+    timeout: Duration,
+    trigger_revid: Option<u64>,
+) -> crate::state::ApiFailureSnapshot {
+    crate::state::ApiFailureSnapshot {
+        class: "timeout".to_string(),
+        retryable: true,
+        operation: "source-refresh".to_string(),
+        sample_revid: trigger_revid,
+        message: format!(
+            "{trigger_kind:?} source refresh exceeded {}s",
+            timeout.as_secs()
+        ),
+        occurred_at: Some(Utc::now()),
+        ..crate::state::ApiFailureSnapshot::default()
+    }
+}
+
+async fn run_source_refresh_trigger(
+    runtime: &Arc<AppRuntime>,
+    title: String,
+    trigger_revid: Option<u64>,
+    trigger_kind: SourceRefreshTriggerKind,
+    started_at: chrono::DateTime<Utc>,
+    before: SuppressionListCache,
+) {
     info!(
         title = %title,
         trigger_kind = ?trigger_kind,
         "source-adjacent page changed; refreshing cache and planning follow-up"
     );
-    let started_at = Utc::now();
-    let before = runtime.cache.read().await.snapshot.clone();
     let persistence = if runtime.dry_run {
         CachePersistence::Ephemeral
     } else {
@@ -588,17 +1098,17 @@ async fn handle_source_refresh_trigger(
             } else {
                 None
             };
-            let refresh = plan_source_refresh(
-                &before,
-                &after,
+            let refresh = plan_source_refresh(SourceRefreshPlanInput {
+                before: &before,
+                after: &after,
                 refreshed,
-                title,
+                trigger_title: &title,
                 trigger_revid,
-                &catchup_plan,
+                catchup_plan: &catchup_plan,
                 started_at,
-                Utc::now(),
+                completed_at: Utc::now(),
                 deferred_until,
-            );
+            });
             runtime.record_source_refresh(refresh.clone()).await;
             if refresh.catchup_triggered {
                 spawn_source_refresh_catchup(Arc::clone(runtime), trigger_kind, catchup_plan);
@@ -606,7 +1116,7 @@ async fn handle_source_refresh_trigger(
         }
         Err(error) => {
             let failure =
-                classify_api_failure(&error, "source-refresh", Some(title), trigger_revid);
+                classify_api_failure(&error, "source-refresh", Some(&title), trigger_revid);
             warn!(title = %title, error = %error, "source suppression list refresh failed");
             runtime
                 .record_source_refresh(SourceListRefresh {
@@ -715,6 +1225,7 @@ mod tests {
         plan_source_refresh_catchup,
     };
     use crate::config::EnvConfig;
+    use crate::mw_api::RecentChangeRecord;
     use crate::recentchange::test_fixtures::SyntheticRecentChange;
     use crate::runtime::{
         RuntimeStatusSurfaceMode, build_test_runtime_harness, build_test_runtime_harness_with_env,
@@ -748,6 +1259,31 @@ mod tests {
 
         assert_eq!(take_startup_catchup_trigger(&mut pending), Some("startup"));
         assert_eq!(take_startup_catchup_trigger(&mut pending), None);
+    }
+
+    #[test]
+    fn recentchanges_poll_window_reuses_previous_successful_head_after_outage() {
+        let previous_window_end = Utc.with_ymd_and_hms(2026, 5, 14, 18, 0, 0).unwrap();
+        let resumed_at = previous_window_end + TimeDelta::seconds(30);
+
+        let window_start = recentchanges_poll_window_start(Some(previous_window_end), resumed_at);
+
+        assert_eq!(
+            window_start,
+            previous_window_end - TimeDelta::seconds(LIVE_POLL_OVERLAP_SECONDS)
+        );
+    }
+
+    #[test]
+    fn poll_restart_delay_doubles_to_cap() {
+        assert_eq!(
+            poll_restart_delay(Duration::from_secs(1)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            poll_restart_delay(Duration::from_secs(30)),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]
@@ -947,6 +1483,43 @@ mod tests {
         assert!(status.realtime.last_offline_recovered_at.is_some());
     }
 
+    #[tokio::test]
+    async fn cursor_persistence_failure_records_state_issue_and_keeps_retry_path() {
+        let temp = tempdir().unwrap();
+        let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        std::fs::create_dir_all(&harness.runtime.paths.last_event_id_file).unwrap();
+
+        let persisted = persist_last_event_id(&harness.runtime, "evt-state-failure").await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert!(!persisted);
+        assert_eq!(status.realtime.state, "unhealthy");
+        assert_eq!(
+            status
+                .realtime
+                .latest_error
+                .as_ref()
+                .map(|error| error.class.as_str()),
+            Some("state-persistence")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("state-persistence")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.task_kind.as_str()),
+            Some("state-persistence")
+        );
+    }
+
     #[test]
     fn source_page_edit_routes_to_source_refresh_dispatch() {
         let event = SyntheticRecentChange::default()
@@ -1124,6 +1697,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_source_refresh_does_not_block_live_dispatch() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_raw(r#"{}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let mut harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+
+        spawn_source_refresh_trigger_with_timeout(
+            &harness.runtime,
+            "Удзельнік:Wizardist/SuppressionList",
+            Some(44),
+            SourceRefreshTriggerKind::SuppressionList,
+            Duration::from_millis(200),
+        )
+        .await;
+        assert!(harness.runtime.source_refresh_is_active());
+
+        let event = SyntheticRecentChange::default()
+            .with_title("Foo")
+            .with_revision_ids(Some(76), Some(77))
+            .parse();
+        handle_recentchange_event(&harness.runtime, event, Some("stream-77"))
+            .await
+            .unwrap();
+
+        let action = harness.work_rx.try_recv().unwrap();
+        assert_eq!(action.title, "Foo");
+        assert_eq!(action.revids, vec![77]);
+        assert_eq!(action.mode.label(), RevDelMode::Live.label());
+    }
+
+    #[tokio::test]
+    async fn source_refresh_timeout_records_status_and_releases_gate() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_raw(r#"{}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+
+        spawn_source_refresh_trigger_with_timeout(
+            &harness.runtime,
+            "Удзельнік:Wizardist/SuppressionList",
+            Some(44),
+            SourceRefreshTriggerKind::SuppressionList,
+            Duration::from_millis(10),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        let refresh = status.realtime.last_source_refresh.as_ref().unwrap();
+        assert!(!harness.runtime.source_refresh_is_active());
+        assert_eq!(refresh.outcome, "refresh-timeout");
+        assert_eq!(refresh.old_source_revid, Some(2));
+        assert_eq!(refresh.new_source_revid, Some(2));
+        assert_eq!(
+            refresh.error.as_ref().map(|error| error.class.as_str()),
+            Some("timeout")
+        );
+        assert_eq!(
+            status
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.source.as_str()),
+            Some("source-refresh")
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_source_refresh_trigger_is_coalesced() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(200))
+                    .set_body_raw(r#"{}"#, "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+
+        spawn_source_refresh_trigger_with_timeout(
+            &harness.runtime,
+            "Удзельнік:Wizardist/SuppressionList",
+            Some(44),
+            SourceRefreshTriggerKind::SuppressionList,
+            Duration::from_millis(200),
+        )
+        .await;
+        spawn_source_refresh_trigger_with_timeout(
+            &harness.runtime,
+            "Удзельнік:Wizardist/SuppressionList",
+            Some(45),
+            SourceRefreshTriggerKind::SuppressionList,
+            Duration::from_millis(200),
+        )
+        .await;
+
+        let status = harness.runtime_status.lock().await.clone();
+        assert!(harness.runtime.source_refresh_is_active());
+        assert!(
+            status
+                .last_notice
+                .as_deref()
+                .unwrap_or_default()
+                .contains("coalesced trigger")
+        );
+    }
+
+    #[tokio::test]
     async fn operator_account_watched_revision_event_is_queued_for_live_hiding() {
         let temp = tempdir().unwrap();
         let mut harness =
@@ -1212,6 +1930,142 @@ mod tests {
         assert_eq!(status.realtime.last_matching_revid, None);
     }
 
+    #[tokio::test]
+    async fn polled_watched_revision_is_queued_for_live_hiding_once_across_overlap() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let mut deduper = RecentChangePollDeduper::default();
+        let observed_at = Utc.with_ymd_and_hms(2026, 5, 14, 18, 0, 10).unwrap();
+        let keep_since = observed_at - TimeDelta::seconds(LIVE_POLL_DEDUP_TTL_SECONDS);
+        let changes = vec![RecentChangeRecord {
+            title: "Foo".to_string(),
+            timestamp: observed_at,
+            revid: 5141510,
+        }];
+
+        let summary = dispatch_polled_recentchanges_window(
+            &harness.runtime,
+            changes.clone(),
+            &mut deduper,
+            keep_since,
+        )
+        .await
+        .unwrap();
+        let action = harness.work_rx.try_recv().unwrap();
+        let status = harness.runtime_status.lock().await.clone();
+
+        assert_eq!(summary.total_changes, 1);
+        assert_eq!(summary.watched_matches, 1);
+        assert_eq!(action.title, "Foo");
+        assert_eq!(action.revids, vec![5141510]);
+        assert_eq!(status.realtime.last_matching_title.as_deref(), Some("Foo"));
+        assert_eq!(status.realtime.last_matching_revid, Some(5141510));
+
+        let repeat = dispatch_polled_recentchanges_window(
+            &harness.runtime,
+            changes,
+            &mut deduper,
+            keep_since,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(repeat.total_changes, 0);
+        assert!(harness.work_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn polled_watched_revision_retries_after_live_dispatch_failure() {
+        let temp = tempdir().unwrap();
+        let mut harness =
+            build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
+        let mut deduper = RecentChangePollDeduper::default();
+        let observed_at = Utc.with_ymd_and_hms(2026, 5, 14, 18, 0, 10).unwrap();
+        let keep_since = observed_at - TimeDelta::seconds(LIVE_POLL_DEDUP_TTL_SECONDS);
+        for offset in 0..harness.runtime.config.queue.capacity {
+            harness
+                .runtime
+                .dispatch_action_batch(
+                    format!("Queue filler {offset}"),
+                    vec![900_000 + offset as u64],
+                    None,
+                    None,
+                    None,
+                    RevDelMode::Live,
+                )
+                .await
+                .unwrap();
+        }
+        let changes = vec![RecentChangeRecord {
+            title: "Foo".to_string(),
+            timestamp: observed_at,
+            revid: 5141511,
+        }];
+
+        let error = dispatch_polled_recentchanges_window(
+            &harness.runtime,
+            changes.clone(),
+            &mut deduper,
+            keep_since,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("live queue is full"));
+
+        let _ = harness.work_rx.try_recv().unwrap();
+
+        let retry = dispatch_polled_recentchanges_window(
+            &harness.runtime,
+            changes,
+            &mut deduper,
+            keep_since,
+        )
+        .await
+        .unwrap();
+
+        let mut saw_retried_revid = false;
+        for _ in 0..harness.runtime.config.queue.capacity {
+            let action = harness.work_rx.try_recv().unwrap();
+            if action.revids == vec![5141511] {
+                saw_retried_revid = true;
+                break;
+            }
+        }
+
+        assert_eq!(retry.total_changes, 1);
+        assert_eq!(retry.watched_matches, 1);
+        assert!(saw_retried_revid);
+    }
+
+    #[test]
+    fn polled_request_page_change_routes_to_refresh_dispatch() {
+        let request_pages = vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()];
+        let watched = HashSet::from(["Foo".to_string()]);
+        let change = RecentChangeRecord {
+            title: "Вікіпедыя:Запыты да схавальнікаў".to_string(),
+            timestamp: Utc.with_ymd_and_hms(2026, 5, 14, 18, 1, 0).unwrap(),
+            revid: 6001,
+        };
+
+        let dispatch = dispatch_polled_recentchange_record(
+            &change,
+            &RecentChangeDispatchContext {
+                source_title_normalized: "Удзельнік:Wizardist/SuppressionList",
+                request_pages: &request_pages,
+                watched_set: &watched,
+            },
+        );
+
+        match dispatch {
+            RecentChangeDispatch::RequestPageRefresh(trigger) => {
+                assert_eq!(trigger.title, "Вікіпедыя:Запыты да схавальнікаў");
+                assert_eq!(trigger.trigger_revid, Some(6001));
+            }
+            _ => panic!("expected request page refresh dispatch"),
+        }
+    }
+
     fn test_snapshot(
         source_revid: u64,
         listed: &[&str],
@@ -1243,17 +2097,17 @@ mod tests {
             SourceRefreshTriggerKind::SuppressionList,
             10,
         );
-        let refresh = plan_source_refresh(
-            &before,
-            &after,
-            true,
-            "Удзельнік:Wizardist/SuppressionList",
-            Some(11),
-            &catchup_plan,
+        let refresh = plan_source_refresh(SourceRefreshPlanInput {
+            before: &before,
+            after: &after,
+            refreshed: true,
+            trigger_title: "Удзельнік:Wizardist/SuppressionList",
+            trigger_revid: Some(11),
+            catchup_plan: &catchup_plan,
             started_at,
             completed_at,
-            None,
-        );
+            deferred_until: None,
+        });
 
         assert_eq!(refresh.trigger_revid, Some(11));
         assert_eq!(refresh.old_source_revid, Some(10));
@@ -1285,17 +2139,17 @@ mod tests {
             SourceRefreshTriggerKind::SuppressionList,
             1,
         );
-        let refresh = plan_source_refresh(
-            &before,
-            &after,
-            false,
-            "Удзельнік:Wizardist/SuppressionList",
-            Some(11),
-            &catchup_plan,
+        let refresh = plan_source_refresh(SourceRefreshPlanInput {
+            before: &before,
+            after: &after,
+            refreshed: false,
+            trigger_title: "Удзельнік:Wizardist/SuppressionList",
+            trigger_revid: Some(11),
+            catchup_plan: &catchup_plan,
             started_at,
             completed_at,
-            Some(deferred_until),
-        );
+            deferred_until: Some(deferred_until),
+        });
 
         assert!(!refresh.catchup_triggered);
         assert_eq!(
@@ -1321,17 +2175,17 @@ mod tests {
         let completed_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 5, 1).unwrap();
         let catchup_plan =
             plan_source_refresh_catchup(&before, &after, SourceRefreshTriggerKind::RequestPage, 10);
-        let refresh = plan_source_refresh(
-            &before,
-            &after,
-            true,
-            "Вікіпедыя:Запыты да схавальнікаў",
-            Some(55),
-            &catchup_plan,
+        let refresh = plan_source_refresh(SourceRefreshPlanInput {
+            before: &before,
+            after: &after,
+            refreshed: true,
+            trigger_title: "Вікіпедыя:Запыты да схавальнікаў",
+            trigger_revid: Some(55),
+            catchup_plan: &catchup_plan,
             started_at,
             completed_at,
-            None,
-        );
+            deferred_until: None,
+        });
 
         assert!(refresh.catchup_triggered);
         assert_eq!(
@@ -1352,17 +2206,17 @@ mod tests {
         let completed_at = Utc.with_ymd_and_hms(2026, 4, 29, 10, 5, 1).unwrap();
         let catchup_plan =
             plan_source_refresh_catchup(&before, &after, SourceRefreshTriggerKind::RequestPage, 10);
-        let refresh = plan_source_refresh(
-            &before,
-            &after,
-            true,
-            "Вікіпедыя:Запыты да схавальнікаў",
-            Some(55),
-            &catchup_plan,
+        let refresh = plan_source_refresh(SourceRefreshPlanInput {
+            before: &before,
+            after: &after,
+            refreshed: true,
+            trigger_title: "Вікіпедыя:Запыты да схавальнікаў",
+            trigger_revid: Some(55),
+            catchup_plan: &catchup_plan,
             started_at,
             completed_at,
-            None,
-        );
+            deferred_until: None,
+        });
 
         assert!(refresh.catchup_triggered);
         assert_eq!(refresh.catchup_title_scope.as_deref(), Some("new-titles"));

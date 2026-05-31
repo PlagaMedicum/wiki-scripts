@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::config::RuntimePaths;
-use crate::state::{CommandReportSurface, CompatibilityNotice, WarningSummary};
+use crate::state::{CommandReportSurface, CompatibilityNotice, CoverageSummary, WarningSummary};
 use crate::tui::{ControlApp, FocusPane, UiAction};
 use crate::tui_status::StatusSnapshot;
 
@@ -196,6 +196,11 @@ fn build_status_lines(paths: &RuntimePaths, status: &StatusSnapshot) -> Vec<Line
                 runtime_status.realtime.latest_recovery_warnings.len(),
             )));
         }
+        if let Some(summary) = runtime_status.realtime.latest_recovery_summary.as_ref()
+            && summary.candidate_source.is_some()
+        {
+            lines.push(Line::from(render_recovery_candidate_line(summary)));
+        }
         if let Some(refresh) = runtime_status.realtime.last_source_refresh.as_ref() {
             lines.push(Line::from(format!(
                 "Watched-page reload: {} new={} removed={} deferred_until={}",
@@ -330,8 +335,17 @@ fn render_lag(status: &crate::state::RealtimeRuntimeStatus) -> String {
     } else {
         "unknown".to_string()
     };
-    let source = status.current_lag_source.as_deref().unwrap_or("stream");
-    format!("{lag} [{source}], queue {}", status.queue_depth)
+    let source = status.current_lag_source.as_deref().unwrap_or("unknown");
+    format!(
+        "{lag} [{source}], live {}/{}/{} bg {}/{}/{} p95 {}ms",
+        status.live_lane.queue_depth,
+        status.live_lane.in_flight,
+        status.live_lane.queue_capacity,
+        status.background_lane.queue_depth,
+        status.background_lane.in_flight,
+        status.background_lane.queue_capacity,
+        status.latency.observed_to_hidden.p95_ms.unwrap_or(0)
+    )
 }
 
 fn render_last_successful_hide(status: &crate::state::RealtimeRuntimeStatus) -> String {
@@ -496,6 +510,26 @@ fn render_recovery_warning_line(warning: &WarningSummary, warning_count: usize) 
         "Recovery warnings: ".to_string()
     };
     format!("{prefix}{}", details.join(" "))
+}
+
+fn render_recovery_candidate_line(summary: &CoverageSummary) -> String {
+    let source = summary.candidate_source.as_deref().unwrap_or("unknown");
+    let elapsed = summary
+        .candidate_discovery_elapsed_ms
+        .map(|value| format!("{value}ms"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut line = format!(
+        "Recovery candidates: source={} candidates={} watched={} chunks={} elapsed={}",
+        source,
+        summary.candidate_count,
+        summary.watched_candidate_count,
+        summary.candidate_chunk_count,
+        elapsed
+    );
+    if let Some(reason) = summary.fallback_reason.as_deref() {
+        line.push_str(&format!(" fallback={reason}"));
+    }
+    line
 }
 
 fn render_short_timestamp(value: &chrono::DateTime<Utc>) -> String {

@@ -16,6 +16,7 @@ pub mod runtime;
 mod scheduler;
 mod signal_control;
 pub mod signals;
+mod simple_daemon;
 pub mod state;
 mod stream;
 pub mod titles;

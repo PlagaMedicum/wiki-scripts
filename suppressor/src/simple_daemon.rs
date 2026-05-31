@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::signal::unix::{SignalKind, signal as unix_signal};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -15,6 +16,7 @@ use crate::cache::{
 use crate::config::{AppConfig, EnvConfig, RuntimePaths, init_logging, load_env};
 use crate::mw_api::{MediaWikiClient, RecentChangeRecord, classify_api_failure, revision_url};
 use crate::runtime::{daemon_should_write_pid, launch_path_snapshot_from_paths};
+use crate::signals;
 use crate::state::{
     ActionableIssueSnapshot, ApiFailureSnapshot, CoverageSummary, CurrentTaskSnapshot,
     ExecutionLaneSnapshot, LaunchPathSnapshot, ProcessedRevidsState, RealtimeRuntimeStatus,
@@ -29,6 +31,7 @@ const LIVE_OVERLAP_SECONDS: i64 = 15;
 const PENDING_RETRY_SECONDS: i64 = 30;
 const PROCESSED_CAPACITY: usize = 10_000;
 const MAX_PENDING_ITEMS: usize = 5_000;
+const MAX_QUARANTINED_ITEMS: usize = 5_000;
 const SMOKE_TEST_PAGE: &str = "Удзельнік:Plaga_med_Bot/suppressor/tests";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +45,7 @@ struct SimpleDaemonState {
     last_successful_hide_source_label: Option<String>,
     latest_error: Option<ApiFailureSnapshot>,
     pending: Vec<PendingHide>,
+    quarantined: Vec<PendingHide>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +88,13 @@ impl PendingHide {
         self.last_error
             .as_ref()
             .map(is_blocking_failure)
+            .unwrap_or(false)
+    }
+
+    fn has_terminal_failure(&self) -> bool {
+        self.last_error
+            .as_ref()
+            .map(is_terminal_hide_failure)
             .unwrap_or(false)
     }
 }
@@ -160,7 +171,8 @@ impl SimpleDaemon {
         let env = load_env(&paths.config_path)?;
         let client = MediaWikiClient::new_with_retry(&env, &config.retry)?;
         let state_file = paths.state_dir.join(STATE_FILE_NAME);
-        let state = load_json(&state_file)?.unwrap_or_default();
+        let mut state: SimpleDaemonState = load_json(&state_file)?.unwrap_or_default();
+        migrate_terminal_pending_to_quarantine(&mut state);
         let processed = load_processed_revids(&paths.processed_revids_file)?;
         let launch_path = launch_path_snapshot_from_paths(&paths, Utc::now());
 
@@ -245,23 +257,46 @@ impl SimpleDaemon {
             Some(idle_task_snapshot()),
         )?;
 
+        // Legacy operator commands use Unix signals. The daemon must install
+        // handlers before entering the steady loop so SIGHUP/SIGUSR1 are
+        // commands, not fatal default actions.
+        let mut reload_signal = signals::install_reload_listener().await?;
+        let mut manual_sweep_signal = signals::install_manual_sweep_listener().await?;
+        let mut terminate_signal =
+            unix_signal(SignalKind::terminate()).context("failed to install SIGTERM listener")?;
+
         loop {
             tokio::select! {
                 signal = tokio::signal::ctrl_c() => {
                     signal.context("failed to wait for Ctrl-C")?;
-                    self.write_status("stopping", "minimal daemon stopping", None, None)?;
-                    if write_pid {
-                        remove_file_if_exists(&self.paths.pid_file)?;
-                    }
-                    self.write_status("stopped", "minimal daemon stopped", None, None)?;
-                    info!("minimal daemon stopped");
+                    self.stop_gracefully(write_pid, "minimal daemon stopping after Ctrl-C")?;
                     return Ok(());
+                }
+                Some(()) = terminate_signal.recv() => {
+                    self.stop_gracefully(write_pid, "minimal daemon stopping after SIGTERM")?;
+                    return Ok(());
+                }
+                Some(()) = reload_signal.recv() => {
+                    self.handle_reload_signal().await;
+                }
+                Some(()) = manual_sweep_signal.recv() => {
+                    self.handle_manual_sweep_signal().await;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS)) => {
                     self.tick().await;
                 }
             }
         }
+    }
+
+    fn stop_gracefully(&mut self, write_pid: bool, notice: &str) -> Result<()> {
+        self.write_status("stopping", notice, None, None)?;
+        if write_pid {
+            remove_file_if_exists(&self.paths.pid_file)?;
+        }
+        self.write_status("stopped", "minimal daemon stopped", None, None)?;
+        info!(notice, "minimal daemon stopped");
+        Ok(())
     }
 
     async fn startup_catchup(&mut self) {
@@ -299,6 +334,78 @@ impl SimpleDaemon {
             Err(error) => {
                 self.record_poll_error(error, "live-poll", start, end);
             }
+        }
+    }
+
+    async fn handle_reload_signal(&mut self) {
+        info!("received watched-page reload signal");
+        let started_at = Utc::now();
+        if let Err(error) = self.write_status(
+            "healthy",
+            "operator requested watched-page cache reload",
+            None,
+            Some(CurrentTaskSnapshot {
+                task_kind: "source-refresh".to_string(),
+                label: "reloading watched-page cache".to_string(),
+                started_at: Some(started_at),
+                ..CurrentTaskSnapshot::default()
+            }),
+        ) {
+            error!(error = %error, "failed to publish reload signal status");
+        }
+        self.next_cache_refresh_at = Utc::now()
+            + TimeDelta::seconds(self.config.suppression_list.metadata_recheck_seconds as i64);
+        match refresh_cache(
+            &self.cache,
+            &self.client,
+            &self.config,
+            &self.paths,
+            CacheRefreshMode::Forced,
+            persistence_for(self.dry_run),
+        )
+        .await
+        {
+            Ok(changed) => {
+                let watched_count = self.cache.read().await.watched_titles().len();
+                info!(
+                    changed,
+                    watched_count, "operator watched-page cache reload completed"
+                );
+                if let Err(error) = self.write_status(
+                    "healthy",
+                    "watched-page cache reload completed",
+                    None,
+                    Some(idle_task_snapshot()),
+                ) {
+                    error!(error = %error, "failed to publish reload completion status");
+                }
+            }
+            Err(error) => self.record_error(error, "source-refresh", None, None),
+        }
+    }
+
+    async fn handle_manual_sweep_signal(&mut self) {
+        info!("received bounded manual recovery signal");
+        let end = Utc::now();
+        let start = self.startup_catchup_start(end);
+        if let Err(error) = self
+            .process_window(start, end, "manual-recovery", true)
+            .await
+        {
+            self.record_poll_error(error, "manual-recovery", start, end);
+            return;
+        }
+        if let Err(error) = self.retry_pending(true).await {
+            self.record_error(error, "pending-retry", None, None);
+            return;
+        }
+        if let Err(error) = self.write_status(
+            "healthy",
+            "bounded manual recovery completed",
+            None,
+            Some(idle_task_snapshot()),
+        ) {
+            error!(error = %error, "failed to publish manual recovery completion status");
         }
     }
 
@@ -439,19 +546,24 @@ impl SimpleDaemon {
                 Ok(())
             }
             Err(error) => {
-                self.record_hide_failure(&target, &error)?;
+                self.record_hide_failure(&target, &error).await?;
                 Ok(())
             }
         }
     }
 
     async fn retry_pending_due(&mut self) -> Result<()> {
+        self.retry_pending(false).await
+    }
+
+    async fn retry_pending(&mut self, force: bool) -> Result<()> {
+        migrate_terminal_pending_to_quarantine(&mut self.state);
         let now = Utc::now();
         let due = self
             .state
             .pending
             .iter()
-            .filter(|item| item.retry_due(now))
+            .filter(|item| force || item.retry_due(now))
             .cloned()
             .collect::<Vec<_>>();
         for item in due {
@@ -463,7 +575,7 @@ impl SimpleDaemon {
             };
             match self.hide_revision(target.clone()).await {
                 Ok(()) => self.record_hide_success(&target, "hidden-after-retry")?,
-                Err(error) => self.record_hide_failure(&target, &error)?,
+                Err(error) => self.record_hide_failure(&target, &error).await?,
             }
         }
         Ok(())
@@ -535,6 +647,9 @@ impl SimpleDaemon {
         let now = Utc::now();
         self.processed.insert(target.revid);
         self.state.pending.retain(|item| item.revid != target.revid);
+        self.state
+            .quarantined
+            .retain(|item| item.revid != target.revid);
         self.state.last_successful_hide_at = Some(now);
         self.state.last_successful_hide_title = Some(target.title.clone());
         self.state.last_successful_hide_revid = Some(target.revid);
@@ -550,13 +665,55 @@ impl SimpleDaemon {
         Ok(())
     }
 
-    fn record_hide_failure(&mut self, target: &HideTarget, error: &anyhow::Error) -> Result<()> {
+    async fn record_hide_failure(
+        &mut self,
+        target: &HideTarget,
+        error: &anyhow::Error,
+    ) -> Result<()> {
         let failure = classify_api_failure(
             error,
             "revisiondelete",
             Some(&target.title),
             Some(target.revid),
         );
+        if is_terminal_hide_failure(&failure) {
+            if self.verify_terminal_failure_already_hidden(target).await {
+                self.record_hide_success(target, "already-hidden-after-terminal-failure")?;
+                return Ok(());
+            }
+            warn!(
+                title = %target.title,
+                revid = target.revid,
+                class = %failure.class,
+                api_code = ?failure.api_code,
+                http_status = ?failure.http_status,
+                retryable = failure.retryable,
+                message = %failure.message,
+                "revisiondelete returned terminal failure; quarantining item instead of retrying forever"
+            );
+            upsert_quarantined(&mut self.state, target, failure.clone());
+            self.processed.insert(target.revid);
+            self.state.latest_error = Some(failure.clone());
+            self.persist_state()?;
+            self.write_status(
+                "degraded",
+                &format!(
+                    "revisiondelete terminal failure quarantined for revision {}",
+                    target.revid
+                ),
+                Some(failure),
+                Some(CurrentTaskSnapshot {
+                    task_kind: "quarantined".to_string(),
+                    label: format!(
+                        "{} non-retryable revisiondelete failure(s) need review",
+                        self.state.quarantined.len()
+                    ),
+                    started_at: Some(Utc::now()),
+                    ..CurrentTaskSnapshot::default()
+                }),
+            )?;
+            return Ok(());
+        }
         warn!(
             title = %target.title,
             revid = target.revid,
@@ -590,6 +747,31 @@ impl SimpleDaemon {
             }),
         )?;
         Ok(())
+    }
+
+    async fn verify_terminal_failure_already_hidden(&self, target: &HideTarget) -> bool {
+        let since = target
+            .observed_at
+            .map(|observed| observed - TimeDelta::seconds(60))
+            .unwrap_or_else(|| Utc::now() - TimeDelta::hours(24));
+        match self
+            .client
+            .fetch_revisions(&target.title, Some(since))
+            .await
+        {
+            Ok(revisions) => revisions.into_iter().any(|revision| {
+                revision.revid == target.revid && revision.user_hidden && revision.comment_hidden
+            }),
+            Err(error) => {
+                warn!(
+                    title = %target.title,
+                    revid = target.revid,
+                    error = %error,
+                    "could not verify hidden state after terminal revisiondelete failure"
+                );
+                false
+            }
+        }
     }
 
     fn record_poll_error(
@@ -651,10 +833,16 @@ impl SimpleDaemon {
     }
 
     fn persist_state(&mut self) -> Result<()> {
+        migrate_terminal_pending_to_quarantine(&mut self.state);
         self.state.pending.sort_by_key(|item| item.revid);
+        self.state.quarantined.sort_by_key(|item| item.revid);
         if self.state.pending.len() > MAX_PENDING_ITEMS {
             let remove_count = self.state.pending.len() - MAX_PENDING_ITEMS;
             self.state.pending.drain(0..remove_count);
+        }
+        if self.state.quarantined.len() > MAX_QUARANTINED_ITEMS {
+            let remove_count = self.state.quarantined.len() - MAX_QUARANTINED_ITEMS;
+            self.state.quarantined.drain(0..remove_count);
         }
         self.processed.capacity = PROCESSED_CAPACITY;
         save_json_atomic(&self.state_file, &self.state)?;
@@ -670,28 +858,20 @@ impl SimpleDaemon {
         current_task: Option<CurrentTaskSnapshot>,
     ) -> Result<()> {
         let now = Utc::now();
+        let effective_error = latest_error
+            .clone()
+            .or_else(|| self.state.latest_error.clone())
+            .or_else(|| latest_quarantined_error(&self.state));
         let realtime_state = effective_realtime_state(
             requested_state,
             &self.state,
-            latest_error.as_ref(),
+            effective_error.as_ref(),
             now,
             self.config.realtime.stale_threshold_seconds,
         );
-        let latest_issue = latest_error.as_ref().map(|failure| ActionableIssueSnapshot {
-            source: failure.operation.clone(),
-            severity: if is_blocking_failure(failure) {
-                "error".to_string()
-            } else {
-                "warning".to_string()
-            },
-            summary: failure.message.clone(),
-            next_action: if is_blocking_failure(failure) {
-                "inspect exact API code/status/content-type and verify deployed credentials/session on webtop".to_string()
-            } else {
-                "daemon will retry automatically; inspect network/API health if this persists".to_string()
-            },
-            detected_at: Some(now),
-        });
+        let latest_issue = effective_error
+            .as_ref()
+            .map(|failure| actionable_issue_for_failure(failure, now));
         let latest_outcome =
             self.state
                 .last_successful_hide_revid
@@ -746,9 +926,9 @@ impl SimpleDaemon {
                         .max(0)
                 }),
                 current_lag_source: Some("recentchanges-polling".to_string()),
-                queue_depth: self.state.pending.len(),
+                queue_depth: unresolved_count(&self.state),
                 live_lane: ExecutionLaneSnapshot {
-                    queue_depth: self.state.pending.len(),
+                    queue_depth: unresolved_count(&self.state),
                     queue_capacity: self.config.queue.capacity,
                     concurrency_limit: 1,
                     ..ExecutionLaneSnapshot::default()
@@ -759,11 +939,15 @@ impl SimpleDaemon {
                     ..ExecutionLaneSnapshot::default()
                 },
                 daemon_started_at: self.launch_path.started_at,
-                latest_error_code: latest_error
+                latest_error_code: effective_error
                     .as_ref()
                     .and_then(|failure| failure.api_code.clone())
-                    .or_else(|| latest_error.as_ref().map(|failure| failure.class.clone())),
-                latest_error: latest_error.or_else(|| self.state.latest_error.clone()),
+                    .or_else(|| {
+                        effective_error
+                            .as_ref()
+                            .map(|failure| failure.class.clone())
+                    }),
+                latest_error: effective_error,
                 latest_actionable_issue: latest_issue,
                 latest_notice: Some(notice.to_string()),
                 latest_outcome,
@@ -778,30 +962,31 @@ impl SimpleDaemon {
     }
 
     fn coverage_summary(&self) -> CoverageSummary {
+        let mut unresolved_items = self
+            .state
+            .pending
+            .iter()
+            .map(|item| {
+                unresolved_item_from_pending(
+                    item,
+                    &self.config.wiki.server_name,
+                    "daemon will retry automatically",
+                )
+            })
+            .collect::<Vec<_>>();
+        unresolved_items.extend(self.state.quarantined.iter().map(|item| {
+            unresolved_item_from_pending(
+                item,
+                &self.config.wiki.server_name,
+                "manual review required; daemon will not retry this non-retryable API failure automatically",
+            )
+        }));
+        unresolved_items.truncate(self.config.catchup.unresolved_sample_limit);
         CoverageSummary {
             scope_label: Some("minimal daemon pending queue".to_string()),
             requested_by: "minimal-daemon".to_string(),
-            unresolved_count: self.state.pending.len(),
-            unresolved_items: self
-                .state
-                .pending
-                .iter()
-                .take(self.config.catchup.unresolved_sample_limit)
-                .map(|item| UnresolvedExposureItem {
-                    title: item.title.clone(),
-                    revid: item.revid,
-                    revision_url: Some(revision_url(&self.config.wiki.server_name, item.revid)),
-                    age_seconds: item
-                        .observed_at
-                        .map(|observed| Utc::now().signed_duration_since(observed).num_seconds()),
-                    reason: item
-                        .last_error
-                        .as_ref()
-                        .map(|failure| failure.message.clone())
-                        .unwrap_or_else(|| "pending retry".to_string()),
-                    next_action: "daemon will retry automatically".to_string(),
-                })
-                .collect(),
+            unresolved_count: unresolved_count(&self.state),
+            unresolved_items,
             ..CoverageSummary::default()
         }
     }
@@ -838,8 +1023,122 @@ fn upsert_pending(state: &mut SimpleDaemonState, target: &HideTarget, failure: A
     });
 }
 
+fn upsert_quarantined(
+    state: &mut SimpleDaemonState,
+    target: &HideTarget,
+    failure: ApiFailureSnapshot,
+) {
+    state.pending.retain(|item| item.revid != target.revid);
+    let now = Utc::now();
+    if let Some(existing) = state
+        .quarantined
+        .iter_mut()
+        .find(|item| item.revid == target.revid)
+    {
+        existing.last_failed_at = now;
+        existing.attempt_count = existing.attempt_count.saturating_add(1);
+        existing.last_error = Some(failure);
+        return;
+    }
+    state.quarantined.push(PendingHide {
+        title: target.title.clone(),
+        revid: target.revid,
+        observed_at: target.observed_at,
+        first_failed_at: now,
+        last_failed_at: now,
+        attempt_count: 1,
+        last_error: Some(failure),
+    });
+}
+
+fn upsert_quarantined_item(state: &mut SimpleDaemonState, mut item: PendingHide) {
+    if let Some(existing) = state
+        .quarantined
+        .iter_mut()
+        .find(|existing| existing.revid == item.revid)
+    {
+        if item.last_failed_at >= existing.last_failed_at {
+            *existing = item;
+        }
+        return;
+    }
+    if item.attempt_count == 0 {
+        item.attempt_count = 1;
+    }
+    state.quarantined.push(item);
+}
+
+fn migrate_terminal_pending_to_quarantine(state: &mut SimpleDaemonState) {
+    let mut retained = Vec::with_capacity(state.pending.len());
+    for item in std::mem::take(&mut state.pending) {
+        if item.has_terminal_failure() {
+            upsert_quarantined_item(state, item);
+        } else {
+            retained.push(item);
+        }
+    }
+    state.pending = retained;
+}
+
 fn next_pending_retry_at(pending: &[PendingHide]) -> Option<DateTime<Utc>> {
     pending.iter().map(PendingHide::retry_due_at).min()
+}
+
+fn unresolved_count(state: &SimpleDaemonState) -> usize {
+    state.pending.len() + state.quarantined.len()
+}
+
+fn latest_quarantined_error(state: &SimpleDaemonState) -> Option<ApiFailureSnapshot> {
+    state
+        .quarantined
+        .iter()
+        .max_by_key(|item| item.last_failed_at)
+        .and_then(|item| item.last_error.clone())
+}
+
+fn unresolved_item_from_pending(
+    item: &PendingHide,
+    server_name: &str,
+    next_action: &str,
+) -> UnresolvedExposureItem {
+    UnresolvedExposureItem {
+        title: item.title.clone(),
+        revid: item.revid,
+        revision_url: Some(revision_url(server_name, item.revid)),
+        age_seconds: item
+            .observed_at
+            .map(|observed| Utc::now().signed_duration_since(observed).num_seconds()),
+        reason: item
+            .last_error
+            .as_ref()
+            .map(|failure| failure.message.clone())
+            .unwrap_or_else(|| "pending retry".to_string()),
+        next_action: next_action.to_string(),
+    }
+}
+
+fn actionable_issue_for_failure(
+    failure: &ApiFailureSnapshot,
+    detected_at: DateTime<Utc>,
+) -> ActionableIssueSnapshot {
+    ActionableIssueSnapshot {
+        source: failure.operation.clone(),
+        severity: if is_blocking_failure(failure) {
+            "error".to_string()
+        } else {
+            "warning".to_string()
+        },
+        summary: failure.message.clone(),
+        next_action: if is_blocking_failure(failure) {
+            "inspect exact API code/status/content-type and verify deployed credentials/session on webtop".to_string()
+        } else if is_terminal_hide_failure(failure) {
+            "manual review required for this revision; daemon will not retry this non-retryable API failure automatically".to_string()
+        } else {
+            "daemon will retry automatically; inspect network/API health if this persists"
+                .to_string()
+        },
+        detected_at: Some(detected_at),
+    }
 }
 
 fn effective_realtime_state(
@@ -860,7 +1159,7 @@ fn effective_realtime_state(
     {
         return "blocked".to_string();
     }
-    if latest_error.is_some() || !state.pending.is_empty() {
+    if latest_error.is_some() || !state.pending.is_empty() || !state.quarantined.is_empty() {
         return "degraded".to_string();
     }
     let poll_is_fresh = state
@@ -877,7 +1176,14 @@ fn effective_realtime_state(
 }
 
 fn is_blocking_failure(failure: &ApiFailureSnapshot) -> bool {
-    matches!(failure.class.as_str(), "permission" | "auth-session")
+    matches!(failure.class.as_str(), "auth-session")
+}
+
+fn is_terminal_hide_failure(failure: &ApiFailureSnapshot) -> bool {
+    matches!(
+        failure.api_code.as_deref(),
+        Some("permissiondenied" | "cantdelete")
+    ) || failure.class == "permission"
 }
 
 fn daemon_state_for(requested_state: &str, dry_run: bool) -> String {
@@ -932,6 +1238,14 @@ mod tests {
         }
     }
 
+    fn api_failure_with_code(class: &str, code: &str) -> ApiFailureSnapshot {
+        ApiFailureSnapshot {
+            api_code: Some(code.to_string()),
+            retryable: false,
+            ..api_failure(class)
+        }
+    }
+
     #[test]
     fn startup_catchup_uses_recent_window_without_cursor() {
         let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
@@ -946,13 +1260,32 @@ mod tests {
     }
 
     #[test]
-    fn permission_pending_blocks_health() {
+    fn permission_quarantine_degrades_health() {
+        let now = Utc::now();
+        let state = SimpleDaemonState {
+            last_successful_poll_at: Some(now),
+            quarantined: vec![PendingHide {
+                revid: 1,
+                last_error: Some(api_failure_with_code("permission", "permissiondenied")),
+                ..PendingHide::default()
+            }],
+            ..SimpleDaemonState::default()
+        };
+
+        assert_eq!(
+            effective_realtime_state("healthy", &state, None, now, 10),
+            "degraded"
+        );
+    }
+
+    #[test]
+    fn auth_session_pending_blocks_health() {
         let now = Utc::now();
         let state = SimpleDaemonState {
             last_successful_poll_at: Some(now),
             pending: vec![PendingHide {
                 revid: 1,
-                last_error: Some(api_failure("permission")),
+                last_error: Some(api_failure("auth-session")),
                 ..PendingHide::default()
             }],
             ..SimpleDaemonState::default()
@@ -1026,5 +1359,47 @@ mod tests {
 
         assert_eq!(state.pending.len(), 1);
         assert_eq!(state.pending[0].attempt_count, 2);
+    }
+
+    #[test]
+    fn terminal_pending_migrates_to_quarantine() {
+        let mut state = SimpleDaemonState {
+            pending: vec![PendingHide {
+                revid: 42,
+                last_error: Some(api_failure_with_code("permission", "permissiondenied")),
+                attempt_count: 255,
+                ..PendingHide::default()
+            }],
+            ..SimpleDaemonState::default()
+        };
+
+        migrate_terminal_pending_to_quarantine(&mut state);
+
+        assert!(state.pending.is_empty());
+        assert_eq!(state.quarantined.len(), 1);
+        assert_eq!(state.quarantined[0].revid, 42);
+        assert_eq!(state.quarantined[0].attempt_count, 255);
+    }
+
+    #[test]
+    fn quarantine_summary_does_not_claim_auto_retry() {
+        let item = PendingHide {
+            title: "Title".to_string(),
+            revid: 42,
+            last_error: Some(api_failure_with_code("permission", "permissiondenied")),
+            ..PendingHide::default()
+        };
+
+        let unresolved = unresolved_item_from_pending(
+            &item,
+            "be.wikipedia.org",
+            "manual review required; daemon will not retry this non-retryable API failure automatically",
+        );
+
+        assert!(unresolved.next_action.contains("will not retry"));
+        assert_eq!(
+            unresolved.revision_url.as_deref(),
+            Some("https://be.wikipedia.org/wiki/Special:Diff/42")
+        );
     }
 }

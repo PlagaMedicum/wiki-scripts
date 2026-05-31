@@ -74,7 +74,7 @@ impl UiAction {
             UiAction::ReloadCache => "Reload watched pages",
             UiAction::EmergencyCatchup => "Emergency catch-up",
             UiAction::CoverageReport => "Coverage: Last 24 hours",
-            UiAction::SweepNow => "Run full watched-set recheck",
+            UiAction::SweepNow => "Run bounded recovery",
             UiAction::RefreshStatus => "Reread local status",
             UiAction::Quit => "Quit",
         }
@@ -97,7 +97,7 @@ impl UiAction {
                 "Reports the rolling Last 24 hours window without hiding so unresolved exposure is visible."
             }
             UiAction::SweepNow => {
-                "Queues the full watched-set fallback recheck used by the randomized nightly job."
+                "Asks the running daemon to rescan its bounded recovery window and retry transient pending hides."
             }
             UiAction::RefreshStatus => {
                 "Rereads daemon-owned status and command-report files. It does not repair protection."
@@ -451,23 +451,23 @@ impl ControlApp {
 
     fn post_reload_signal(&mut self) {
         match signals::send_reload(&self.paths.pid_file) {
-            Ok(()) => self.push_control_log(
-                "Requested watched-page reload. Wait for the status panel to show the refresh result.",
-            ),
-            Err(error) => self.push_control_log(format!(
-                "Failed to request watched-page reload: {error:#}"
-            )),
+            Ok(()) => {
+                self.push_control_log("Requested watched-page reload from the running daemon.")
+            }
+            Err(error) => {
+                self.push_control_log(format!("Failed to request watched-page reload: {error:#}"))
+            }
         }
         self.refresh_status();
     }
 
     fn post_sweep_signal(&mut self) {
         match signals::send_manual_sweep(&self.paths.pid_file) {
-            Ok(()) => self.push_control_log(
-                "Requested full watched-set recheck. Progress will appear in Current work.",
-            ),
+            Ok(()) => {
+                self.push_control_log("Requested bounded manual recovery from the running daemon.")
+            }
             Err(error) => self.push_control_log(format!(
-                "Failed to request full watched-set recheck: {error:#}"
+                "Failed to request bounded manual recovery: {error:#}"
             )),
         }
         self.refresh_status();

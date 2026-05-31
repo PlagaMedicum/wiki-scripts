@@ -324,7 +324,9 @@ fn populate_runtime_derivatives(
 
     populate_lane_defaults(status);
     populate_live_outcome_derivatives(status);
-    populate_recheck_freshness_derivatives(status, checkpoint_progress, watched_titles, now);
+    if !minimal_polling_daemon_status(status) {
+        populate_recheck_freshness_derivatives(status, checkpoint_progress, watched_titles, now);
+    }
 
     if should_surface_live_queue_snapshot(&status.realtime)
         && let Some(outcome) = status.realtime.latest_outcome.as_ref()
@@ -389,6 +391,18 @@ fn populate_runtime_derivatives(
             expected_resume_at: active_backoff_until,
         });
     }
+}
+
+fn minimal_polling_daemon_status(status: &RuntimeStatus) -> bool {
+    status.realtime.current_lag_source.as_deref() == Some("recentchanges-polling")
+        && status
+            .realtime
+            .latest_recovery_summary
+            .as_ref()
+            .is_some_and(|summary| {
+                summary.requested_by == "minimal-daemon"
+                    || summary.scope_label.as_deref() == Some("minimal daemon pending queue")
+            })
 }
 
 fn populate_lane_defaults(status: &mut RuntimeStatus) {
@@ -682,9 +696,10 @@ mod tests {
     use super::*;
     use crate::config::{AppConfig, RuntimePaths};
     use crate::state::{
-        CommandReportCounts, CommandReportSurface, CommandReportWindow, CurrentTaskSnapshot,
-        LaunchPathSnapshot, PageCheckpoint, RealtimeRuntimeStatus, ReconciliationRuntimeStatus,
-        RuntimeStatus, SuppressionOutcomeSnapshot, save_json_atomic, save_text_atomic,
+        CommandReportCounts, CommandReportSurface, CommandReportWindow, CoverageSummary,
+        CurrentTaskSnapshot, LaunchPathSnapshot, PageCheckpoint, RealtimeRuntimeStatus,
+        ReconciliationRuntimeStatus, RuntimeStatus, SuppressionOutcomeSnapshot, save_json_atomic,
+        save_text_atomic,
     };
 
     #[test]
@@ -1313,6 +1328,39 @@ mod tests {
                 .map(|issue| issue.source.as_str()),
             Some("full-watched-set-freshness")
         );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_ignores_legacy_checkpoints_for_minimal_daemon() {
+        let now = Utc::now();
+        let stale_checkpoint = NightlySweepProgress {
+            pages: BTreeMap::from([(
+                "Old page".to_string(),
+                PageCheckpoint {
+                    last_full_check_at: Some(now - chrono::TimeDelta::days(2)),
+                    ..PageCheckpoint::default()
+                },
+            )]),
+        };
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                state: "healthy".to_string(),
+                current_lag_source: Some("recentchanges-polling".to_string()),
+                latest_recovery_summary: Some(CoverageSummary {
+                    requested_by: "minimal-daemon".to_string(),
+                    scope_label: Some("minimal daemon pending queue".to_string()),
+                    ..CoverageSummary::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status, Some(&stale_checkpoint), 2);
+
+        assert_eq!(status.realtime.state, "healthy");
+        assert!(status.reconciliation.freshness.is_none());
+        assert!(status.realtime.latest_actionable_issue.is_none());
     }
 
     #[test]

@@ -102,10 +102,12 @@ not a promise that every other wiki is already supported.
 The daemon persists a realtime section in `runtime_status.json`. Process state and protection state
 are separate so "running" is not treated as "hiding". Important states are:
 
-- `healthy`: the stream is fresh and no catch-up is active
+- `healthy`: recentchanges polling is fresh and no catch-up is active
 - `catching-up`: bounded recovery is checking recent watched-page edits
 - `degraded`: polling or hiding has failed but the daemon is alive and retrying
-- `blocked`: rights, session, or wiki-side failures prevent hiding
+- `degraded` with a quarantined unresolved item: RevDel returned a non-retryable per-revision
+  denial; the daemon keeps protecting new edits and does not hammer the API on that revision
+- `blocked`: auth/session failures prevent hiding
 
 Recovery starts from the persisted recentchanges poll cursor when that anchor exists; otherwise it
 uses the bounded recent emergency window. Manual cache reload, TUI, reconciliation, and one-shot

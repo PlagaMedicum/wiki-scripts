@@ -1112,12 +1112,22 @@ pub async fn run_coverage_report(
 
 pub fn run_reload_cache(config_path: PathBuf) -> Result<()> {
     let command = CommandContext::load(&config_path)?;
-    signals::send_reload(&command.paths.pid_file)
+    signals::send_reload(&command.paths.pid_file)?;
+    println!(
+        "reload-cache.requested signal=SIGHUP pid_file={}",
+        command.paths.pid_file.display()
+    );
+    Ok(())
 }
 
 pub fn run_manual_sweep(config_path: PathBuf) -> Result<()> {
     let command = CommandContext::load(&config_path)?;
-    signals::send_manual_sweep(&command.paths.pid_file)
+    signals::send_manual_sweep(&command.paths.pid_file)?;
+    println!(
+        "nightly-sweep-now.requested signal=SIGUSR1 pid_file={}",
+        command.paths.pid_file.display()
+    );
+    Ok(())
 }
 
 pub fn run_print_effective_config(config_path: PathBuf, verbose: bool) -> Result<()> {

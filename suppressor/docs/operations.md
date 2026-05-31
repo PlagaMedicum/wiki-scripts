@@ -77,10 +77,28 @@ Keep these manual operator tools available:
 
 - `Emergency catch-up`
 - `Coverage: Last 24 hours`
-- `Run full watched-set recheck`
+- `Run bounded recovery`
 
 Those commands are bounded operator actions. They do not prove the daemon is currently protecting
 live edits, and they must not be used to excuse a failing live path.
+
+## 2026-05-31 Signal And RevDel Retry Lesson
+
+The minimal daemon must install handlers for the operator signals before entering its main loop:
+
+- `reload-cache` sends `SIGHUP` and means "force a watched-page cache reload"
+- `nightly-sweep-now` sends `SIGUSR1` and now means "run bounded manual recovery"
+- `SIGTERM` means graceful stop
+
+Do not remove these handlers while the CLI and TUI still use signal delivery. The Unix default for
+`SIGHUP` and `SIGUSR1` is process termination, so an unhandled operator command can look like a
+random crash followed by supervisor restart.
+
+Per-revision RevDel denials such as `permissiondenied` or `cantdelete` are terminal for that target.
+The daemon quarantines them in `simple_daemon_state.json`, reports degraded status with a manual
+review next action, and keeps hiding new watched edits. It must not retry those responses forever:
+that wastes API budget, triggers rate limiting, and can delay live polling. Transient transport,
+decode, rate-limit, and server errors remain retryable through the pending queue.
 
 ## Auth Contract
 

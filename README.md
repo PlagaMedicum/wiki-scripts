@@ -16,6 +16,9 @@ Most of the repo has been developed with heavy LLM assistance, currently centere
 repo-local Spec Kit workflow. That speeds iteration, but it also means mistakes, overclaims, and
 workflow drift are still possible. The repo therefore relies on reviewed docs, explicit governance,
 and deterministic checks so important assumptions do not stay buried in generated prose or chat.
+Human intent comes first: non-trivial work must restate the concrete goal and clarify ambiguity
+before design choices harden. KISS is mandatory; prefer small direct code, clear ownership, named
+constants, bounded work, and measured behavior over speculative abstractions or broad rewrites.
 
 ## Current Projects
 
@@ -51,6 +54,9 @@ Safety-, reliability-, or performance-sensitive changes must state resource goal
 concurrency bounded, avoid unnecessary services or dependencies, and verify that economy does not
 come at the cost of correctness, performance, recovery, operator-visible status, or durable
 documentation.
+Agent-written code must be reduced to the clearest working shape before production trust. Large
+modules, repeated logic, and secondary polish are not acceptable substitutes for the user's primary
+goal working quickly and measurably.
 Changes that can delete work, invalidate previous setups, break schemas or operator surfaces, or
 otherwise disrupt established workflows must be called out explicitly, planned through Spec Kit,
 and approved by the human owner before the disruptive step runs.

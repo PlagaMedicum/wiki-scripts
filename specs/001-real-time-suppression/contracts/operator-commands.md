@@ -8,6 +8,8 @@ docmeta:
   - speckit-plan stabilization update on 2026-05-05
   - speckit-plan config-stability update on 2026-05-06
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
+  - speckit-plan KISS/catch-up simplification update on 2026-05-10
+  - speckit-plan rsynced old-command deployment evidence update on 2026-05-14
 ---
 
 # Contract: Operator Commands
@@ -137,10 +139,15 @@ Default scope:
 - If the daemon has an active or recent recovery anchor derived from `last_successful_hide_at`, use
   that anchor through `now`.
 - Otherwise use a bounded recent emergency window defined by config.
+- Discover candidate revisions for the selected window first, filter them by the watched-title
+  cache, and verify or hide only matching candidates.
+- Use a full watched-set scan only when candidate discovery is unavailable, incomplete for the
+  selected window, or explicitly requested as full verification; report the fallback reason.
 
 Required output:
 
 - Exact covered window and its label.
+- Candidate source, candidate counts, watched-candidate counts, and fallback reason when applicable.
 - Counts for checked, hidden, already hidden, skipped, failed, and unresolved.
 - Bounded unresolved item list with revision links.
 - Backoff or stopped-early reason when throttled.
@@ -301,6 +308,8 @@ Target server assumptions:
 Required behavior:
 
 - Resolve and validate the same config path used by `run`.
+- Resolve the exact binary path that will be spawned and capture a safe artifact identity tuple for
+  the receipt, such as resolved path plus size/mtime or another reviewed non-secret fingerprint.
 - Create required runtime directories and parent directories for PID, status, cache, and log files.
 - Validate that auth inputs are available from the process environment or `.env`, but never print or
   persist their values.
@@ -316,8 +325,11 @@ Required behavior:
   so SSH logout does not kill it.
 - Wait for the child PID, PID file, and daemon-owned `runtime_status.json` to agree or fail within
   the startup timeout.
-- Print a compact receipt containing mode, PID, config path, PID file, runtime status path, log
-  path, and the launch path label `server-start`.
+- Print a compact receipt containing mode, PID, binary path, artifact identity, config path, PID
+  file, runtime status path, log path, and the launch path label `server-start`.
+- When the receipt is later used as T052 preflight evidence, the same run must also produce a
+  `runtime_status.json` with current `live_lane`, `background_lane`, and `latency` fields before
+  smoke trust is granted.
 
 Failure behavior:
 
@@ -338,6 +350,8 @@ Compatibility:
   PID-file, runtime-status, and detached-log facts tie it to the deployed binary and the same
   `server-start` run. Otherwise the operator must capture the mismatch, avoid stopping a possibly
   protective process solely for evidence, and choose safe fresh `server-start` or rollback.
+- A successful receipt without same-run current-status fields is still only partial evidence: treat
+  it as launch alignment, not as proof the rebuilt lane-aware crash-resilient binary is active.
 
 ## TUI Action Presentation
 

@@ -13,6 +13,9 @@ docmeta:
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
   - speckit-plan live-priority parallel execution update on 2026-05-09
   - speckit-plan live-latency clarification update on 2026-05-09
+  - speckit-plan KISS/catch-up simplification update on 2026-05-10
+  - speckit-plan rsynced crash evidence update on 2026-05-13
+  - speckit-plan rsynced old-command deployment evidence update on 2026-05-14
 ---
 
 # Implementation Plan: Real-Time Suppression Recovery
@@ -22,29 +25,32 @@ docmeta:
 
 Restore `suppressor` as a trustworthy real-time protection daemon for be.wikipedia.org sensitive
 pages. The remaining work is not only faster hiding; it is also truthful recovery and truthful
-operator evidence. Recovery must anchor on the last recorded successful hide, daytime verification
-must recheck a rolling last 24 hours window at randomized intervals, nightly fallback must perform
-a randomized full watched-set recheck, and the operator surface must clearly show whether
-protection is working now, what recovery or verification is active, what the last meaningful hide
-was, what problem requires action, and whether full watched-set coverage is becoming stale. A
-failed scheduled verification or an overdue full watched-set checkpoint map must not disappear
-behind a later healthy stream reopen. The implementation should preserve the current single local
-daemon plus TUI deployment, keep status and command surfaces backward-compatible where practical,
-and emit explicit migration or fallback guidance when compatibility cannot be preserved.
+operator evidence. Recovery must anchor on the last recorded successful hide, and the operator
+surface must clearly show whether protection is working now, what recovery or verification is
+active, what the last meaningful hide was, and what problem requires action. During the current
+emergency live-only production phase, automatic daytime and nightly verification are not part of
+the target-host trust gate: production runs with `daytime_verification.enabled=false` and
+`nightly_sweep.enabled=false` until live-hide soak passes. Manual `Last 24 hours`, full recheck,
+and emergency catch-up commands remain available as bounded operator tools. The implementation
+should preserve the current single local daemon plus TUI deployment, keep status and command
+surfaces backward-compatible where practical, and emit explicit migration or fallback guidance when
+compatibility cannot be preserved.
 
-Constitution v1.9.0 puts this feature under an active human-safety freeze, makes config surfaces
-human-reviewed operator contracts, and forbids tracked real sensitive-edit incident identifiers. The
-current plan is
-therefore a stabilization reset: defer unrelated work, broad refactors, cosmetic TUI polish, new
-services, and nonessential optimization until the minimal server-runnable daemon MVP is proven. The
-critical path is automatic live hiding, automatic recovery/reconciliation, nightly fallback, shared
-throttle/backoff safety, truthful non-healthy status, actual-launch-path verification, a repeatable
-aarch64 Linux musl release build ready for `rsync` to the server, and a one-command detached
-server-start path from the deployed binary. Config churn is not part of this MVP path: any config
-file, schema, default, environment-variable, loading-semantic, or deployment-required-section change
-must be motivated, explicitly human-reviewed, compatibility-tested, and rollback-safe before it can
-support production trust. Human review needed for the active target-host config gate must be visible
-in feature-local `questions.md` and `review-queue.md`; chat-only approval or scattered release
+Constitution v1.10.0 puts this feature under an active human-safety freeze, makes config surfaces
+human-reviewed operator contracts, forbids tracked real sensitive-edit incident identifiers, and
+adds a mandatory KISS/intent-first gate. The concrete human intent is now: make the existing
+suppressor fast, simple, and trustworthy for recent live edits, without hiding slow behavior behind
+more status text or broad architecture. The current plan is therefore a simplification reset: defer
+unrelated work, broad refactors, cosmetic TUI polish, new services, and nonessential optimization
+until the minimal server-runnable daemon MVP is proven. The critical path is automatic live hiding,
+fast candidate-first recovery, bounded reconciliation/nightly fallback, shared throttle/backoff
+safety, truthful compact non-healthy status, actual-launch-path verification, a repeatable aarch64
+Linux musl release build ready for `rsync` to the server, and a one-command detached server-start
+path from the deployed binary. Config churn is not part of this MVP path: any config file, schema,
+default, environment-variable, loading-semantic, or deployment-required-section change must be
+motivated, explicitly human-reviewed, compatibility-tested, and rollback-safe before it can support
+production trust. Human review needed for the active target-host config gate must be visible in
+feature-local `questions.md` and `review-queue.md`; chat-only approval or scattered release
 evidence is not sufficient to unblock T040.
 
 The operator-provided screenshot is fresh failed T041 evidence: a watched sensitive page still
@@ -69,6 +75,20 @@ protecting any exposed edit and avoiding duplicate-daemon risk, or fall back to 
 launch workflow. T052 live or dry-run smoke and T042 resource sampling remain blocked until this
 launch-path mismatch is resolved or explicitly accepted as a human go/no-go exception.
 
+The 2026-05-13 rsynced server bundle changes the server diagnosis. The target-host config now has
+the reviewed `[realtime]` section, and reconstructed `server-start` PID/status/log evidence points
+to one running daemon, so the earlier missing-config failure is not the active crash signature and
+T040 can be treated as mostly aligned once logout-survival evidence is confirmed. The active server
+state is still not release-ready: runtime status is `unhealthy`, the deployed binary lacks the
+current live/background lane and latency fields, and the logs show two remaining MVP crash modes.
+A live RevDel permission failure was classified and then followed by a deliberate process exit; an
+earlier realtime stream task stopped after failing to persist the stream cursor state. Those two
+crash signatures are now fixed locally and covered by targeted tests, but the 2026-05-14 rsynced
+bundle collected after updating the binary and relaunching with the old command still lacks the
+current lane, latency, and candidate-first recovery evidence. Treat the active blocker as
+target-host deployment identity: before T052, the daemon started on the server must be tied to the
+exact rebuilt artifact and must write the current status shape from that same run.
+
 The 2026-05-09 latency refinement makes live work isolation concrete: reconciliation, catch-up,
 scheduled verification, and one-shot command work must no longer share a single FIFO execution path
 that can sit in front of newly observed live edits. Keep one daemon process, but split the internal
@@ -81,6 +101,68 @@ clarification sets no fixed internal millisecond handoff SLA for the MVP: live h
 fast as practical, and reconciliation or nightly work may slow it only if recent edits still react
 instead of waiting for background drain. Background lanes may use bounded concurrency, but their
 transactions must not hold live queue, status, or processed-revision locks across network calls.
+
+The 2026-05-10 local run exposed the next concrete overcomplication: startup catch-up used the
+last successful hide as a multi-day anchor, then scanned the whole watched set serially even though
+only a small number of edits in the window needed action and all were already covered. That is not
+acceptable for a 1.4k-title watch set. The next implementation plan must make recovery
+candidate-first: query recent changes or another narrow candidate source for the selected window,
+filter candidates by the watched-title cache, then verify or hide only those revisions. A full
+watched-set pass remains valid only for explicit nightly/full recheck, a verified fallback when
+candidate discovery is unavailable, or an operator-requested full check. Startup may report
+background full verification as slower work, but it must not keep recent live edits waiting and it
+must not flood the primary TUI with internal scan details.
+
+2026-05-14 local hotfix implementation note: the active source tree now uses MediaWiki
+`recentchanges` polling as the authoritative live detector for the MVP daemon. Retained
+EventStreams code is no longer the healthy-state truth path in the running daemon and may remain
+only as dormant observer/fallback implementation detail until target-host smoke proves the rebuilt
+binary.
+
+## Active Emergency Scope And Guardrails
+
+This active feature is intentionally narrower than the historical implementation record below.
+Treat the current `001` scope as:
+
+- fast automatic hiding of new watched sensitive-page edits
+- bounded catch-up from the last trusted hide anchor after downtime or failure
+- randomized daytime last-24-hours rechecks and nightly full rechecks
+- truthful degraded or blocked runtime status
+- exact deployment proof for the running target-host binary
+
+The following are explicitly out of scope until target-host smoke passes on the rebuilt daemon:
+
+- TUI polish beyond truthful protection state
+- broad reporting or diagnostic-surface growth
+- repo-wide Spec Kit template or docs-workflow repair
+- inactive-feature work such as `002-fix-git-commit`
+- speculative architecture changes not needed for live protection
+
+Authoritative truth order for this feature:
+
+1. `spec.md`
+2. `plan.md`
+3. `tasks.md`
+4. operator docs in `quickstart.md` and `suppressor/docs/operations.md`
+
+`review-queue.md` and `questions.md` are operator decision logs, not a second plan. Historical
+phase detail remains below as evidence for why particular tasks exist, but it must not be used to
+re-expand the current scope without explicit user approval.
+
+## Current Trust Gate
+
+The current emergency gate is small and hard:
+
+1. prove the exact binary that is running on the target host
+2. prove the same PID owns fresh daemon status after logout survival
+3. prove the daemon is current or within bounded lag under active edits
+4. prove a new watched edit hides quickly
+5. prove blocked, throttled, auth-session, and persistence failures remain visible without daemon
+   exit
+
+A stale replayed hide while the daemon remains hours behind is a failed smoke result, not partial
+success. The remaining active trust path is T040, T041, and T052. T042 resource sampling is
+follow-up evidence only after those gates pass on the current binary.
 
 ## Technical Context
 
@@ -111,7 +193,10 @@ Phase 2, US1, and US2 have changed daemon-critical paths before their checkmarks
 MVP gate evidence. The next implementation test slice must include a regression for a synthetic
 watched sensitive page edited by a synthetic operator-account actor, proving that operator-account
 eligible edits are not filtered, not silently marked processed, and either queue a live RevDel
-action or record an explicit failed live-hide outcome.
+action or record an explicit failed live-hide outcome. It must also include regressions for a
+synthetic RevDel permission/auth failure that records blocked protection without exiting the
+process, and for a stream cursor/state write failure that leaves an actionable degraded status and
+restarts or retries stream monitoring instead of permanently losing the realtime task.
 **Target Platform**: Linux local host running one daemon plus the local supervisor TUI for
 be.wikipedia.org; deployment artifact target is
 `target/aarch64-unknown-linux-musl/release/suppressor` built with
@@ -164,7 +249,11 @@ workflow, launch path, or machine-readable surface cannot remain compatible, the
 an explicit approval point, migration steps, and fallback or rollback path to the last trusted
 workflow before it is treated as production-ready. Add the server build path additively to
 `suppressor/Makefile`; the existing `build` and `release` targets remain unchanged, and the new
-target prints the rsync-ready artifact path.
+target prints the rsync-ready artifact path. A target-host runtime status file that lacks the
+additive live/background lane and latency fields is compatible enough to parse, but it is evidence
+that the deployed binary is older than the current MVP design; it cannot satisfy lane-readiness,
+T052 smoke readiness, or release trust until the rebuilt binary is rsynced, launched, and tied to a
+safe artifact identity tuple for that run.
 **Config Change Review**: The tracked `suppressor/config.toml`, config schema, defaults,
 environment variable names, config loading behavior, and deployment-required config sections are
 stable operator contracts. This plan does not authorize unreviewed config churn, ad-hoc server
@@ -186,7 +275,9 @@ actionable; render safe revision identifiers as clickable URLs or equivalent bro
 targets; report lag truthfully with sub-second detail when the value is under one second; detached
 server start must not log secrets, must not fabricate config or auth material, must not leave a
 child attached to the operator's terminal, and must not report success until PID and runtime-status
-evidence are trustworthy
+evidence are trustworthy; classified RevDel auth or permission failures must not terminate the
+daemon process; retained observer cursor and local state persistence failures must surface a
+non-healthy actionable issue and retry or reconnect without silently losing live monitoring
 **Sensitive Evidence Handling**: Use synthetic watched titles, synthetic actor names, synthetic
 revision IDs, synthetic URLs, redacted placeholders, aggregate counts, and outcome classes in
 tracked docs, tests, contracts, examples, fixtures, and code comments. Real page titles, actor
@@ -202,21 +293,31 @@ daemon-owned runtime status surface. The internal execution model must have expl
 background lanes rather than one shared FIFO for all RevDel work; background lane concurrency must
 be semaphore-bounded and live lane actions must be admitted or rejected with a visible degraded
 state before they can wait behind reconciliation batches.
-**Minimalism Constraints**: Prefer additive changes to existing modules and state files. Avoid new
-dependencies, new always-on background loops, new persistent artifacts, or large refactors unless
-they directly improve correctness, compatibility, observability, or bounded resource behavior for
-this incident
+**Intent Restatement**: The operator wants a small, clean, fast suppressor that reacts to recent
+watched edits immediately, keeps slower reconciliation in the background, and shows only the status
+needed to trust protection now. Out of scope: a new service, a generic moderation framework, a
+database migration, broad UI polish, or another layer of status text that does not reduce delay.
+**Minimalism Constraints**: Prefer the smallest direct code path that removes delay. Reuse existing
+MediaWiki API transport, runtime status, and JSON state; add named constants and narrow helper
+types only when they remove duplication or clarify ownership. Avoid new dependencies, new always-on
+background loops, new persistent artifacts, generic frameworks, and large refactors. Existing large
+modules may be split only around real responsibilities needed for this fix: candidate discovery,
+lane dispatch, state transactions, and compact status rendering.
 **Scale/Scope**: Approximately 1.4k watched titles, one live recentchange stream, one local
 operator, one daemon process, bursty recentchange input, and no new public network service
 **Review/Approval Workflow**: Active feature-scoped human answers and review actions live in
 `specs/001-real-time-suppression/questions.md` and
 `specs/001-real-time-suppression/review-queue.md`. Q001 was answered on 2026-05-07: approve path 1,
 target-host config migration to the reviewed tracked baseline. That approval remains valid and does
-not need to be reopened for a code-only live-hide fix. The server-running screenshot shows T040 is
-still blocked by launch-path evidence mismatch, not by config policy. The next implementation pass
-should resolve that mismatch with minimal non-secret server facts, then prove T052 through a
-controlled watched-edit live or dry-run smoke. Full resource evidence can follow after the trusted
-launch path and live hiding are proven.
+not need to be reopened for code-only crash-resilience or live-hide fixes. The rsynced
+2026-05-13 server evidence mostly resolves the earlier T040 launch-path mismatch: config has
+`[realtime]`, the daemon was started through `server-start`, and PID/status/log evidence points to
+one running process. T040 still needs logout-survival confirmation and concise non-secret evidence
+recording. T052 remains blocked because the running daemon is unhealthy and the latest rsynced
+bundle still does not prove the rebuilt crash-resilient binary is the one writing runtime status:
+the target-host status lacks current lane/latency fields and still shows legacy recovery shape. Full
+resource evidence can follow after the rebuilt lane-aware binary is deployed, its identity is
+recorded safely, and live hiding is proven.
 
 ## Constitution Check
 
@@ -253,6 +354,11 @@ launch path and live hiding are proven.
 - Public-Repo Privacy For Sensitive Edit Evidence: PASS. The plan treats the screenshot as
   redacted operator evidence and forbids real page, actor, revision, diff, comment, screenshot, or
   log identifiers in tracked docs, tests, contracts, examples, fixtures, and code comments.
+- KISS, Intent First, And Small Code: PASS with required follow-through. The plan restates the
+  operator's intent, rejects new services/databases/frameworks, and directs implementation to the
+  smallest measurable fixes: candidate-first recovery, live/background lane isolation, short state
+  transactions, and compact primary TUI rendering. Any broad refactor must be justified in
+  Complexity Tracking before implementation continues.
 
 **Document impact**:
 
@@ -284,11 +390,12 @@ launch path and live hiding are proven.
 - Add `questions.md` and `review-queue.md` in this feature so the human owner has one convenient
   place to see and answer the approval question that blocks T040.
 - No change is currently expected for `.specify/doc-registry.json` for feature-local queue files;
-  constitution v1.8.0 and `specs/000-repo-governance/` already record the human-reviewed
+  the constitution and `specs/000-repo-governance/` already record the human-reviewed
   config-stability rule that this plan applies to the active suppressor MVP.
-- Constitution v1.9.0 adds a public-repo privacy rule for sensitive-edit evidence. This feature's
+- Constitution v1.10.0 adds public-repo privacy plus KISS/intent-first rules. This feature's
   tracked docs, tests, contracts, examples, fixtures, and code comments must keep using synthetic or
-  redacted incident identifiers.
+  redacted incident identifiers, and further implementation must keep the smallest working design
+  ahead of secondary polish.
 - If the compatibility or migration-warning pattern produces reusable repo-wide guidance beyond
   `suppressor`, capture that generalized lesson in
   [specs/000-repo-governance/research.md](../000-repo-governance/research.md)
@@ -387,13 +494,16 @@ share ambiguous state.
 
 ### Internal Service Boundaries
 
-- `stream.rs`: EventStreams ingestion, reconnect handling, resume cursor handling, stream-freshness
+- `stream.rs`: recentchanges polling, overlap dedupe, retained observer compatibility, freshness
   evidence, and handoff of candidate watched-page edits.
 - `cache.rs` and `cache/`: suppression-list fetch, parse, redirect expansion, cache diff, and
   source-triggered watched-title delta identification.
-- `catchup.rs`: gap recovery, rolling last-24h verification, accident-window coverage, bounded
-  unresolved sampling, and recovery summary aggregation. Catch-up dispatches through the background
-  lane and must not hold live locks while waiting for page scans or worker completion.
+- `catchup.rs`: candidate-first gap recovery, rolling last-24h verification, accident-window
+  coverage, bounded unresolved sampling, and recovery summary aggregation. Catch-up first discovers
+  candidate revisions for the selected window, filters them against the watched-title cache, and
+  dispatches only matching work through the background lane. It must not perform a serial
+  full-watched-set scan on ordinary startup when candidate discovery can prove the relevant set, and
+  it must not hold live locks while waiting for page scans or worker completion.
 - `scheduler.rs` and `reconcile.rs`: randomized daytime rolling-24h verification scheduling,
   randomized nightly full recheck scheduling, and full watched-set reconciliation control.
   Reconciliation runs in a bounded background lane with explicit queue depth, in-flight count, and
@@ -421,11 +531,14 @@ share ambiguous state.
 
 > **Fill ONLY if Constitution Check has violations that must be justified**
 
-No constitution violations identified.
+No new constitution violations are accepted. Existing oversized runtime/status/catch-up modules are
+recognized implementation debt for this feature, but the approved remediation is narrow: split or
+extract only where it directly supports candidate discovery, live/background lane dispatch, short
+state transactions, or compact primary status rendering.
 
 ## Implementation Phases
 
-### Phase -1 - MVP Stabilization Reset
+### Phase -1 - KISS Stabilization Reset
 
 - Treat the operator-provided screenshot as an active live-hide incident. If an exposed revision ID is
   available, the operator should hide it manually or run emergency catch-up before waiting for a code
@@ -434,7 +547,11 @@ No constitution violations identified.
 - Treat the current checked-off task list as provisional until the daemon is verified through the
   actual launch path. A checked task is not release evidence by itself.
 - Stop broad TUI/layout polish and unrelated docs/workflow work. Only keep UI changes that make
-  daemon health, latest hide, backoff, reconciliation, or nightly fallback truth visible.
+  daemon health, latest hide, active background work, backoff, reconciliation, or nightly fallback
+  truth visible in a smaller primary view.
+- Treat the 2026-05-10 local catch-up delay as a design bug, not an operator configuration problem:
+  a multi-day startup anchor must not automatically become a serial full-watched-set scan when a
+  narrow candidate query can identify the relevant edits.
 - Add a `suppressor/Makefile` server build target for
   `cargo zigbuild --release --target aarch64-unknown-linux-musl`, printing
   `target/aarch64-unknown-linux-musl/release/suppressor` for rsync/deploy.
@@ -450,6 +567,13 @@ No constitution violations identified.
   healthy while protection is blocked.
 - Revalidate automatic reconciliation and nightly fallback with exact scope labels and bounded work:
   rolling last 24 hours during the day, full watched-set recheck at night.
+- Revalidate startup catch-up with aggregate timing evidence: recent candidate discovery must
+  complete quickly for ordinary windows, live edits must stay responsive while full verification
+  continues in the background, and any fallback full scan must state why candidate discovery was not
+  sufficient.
+- Fix the rsynced crash signatures before target-host smoke: classified RevDel permission/auth
+  failures must block or degrade protection without exiting, and stream cursor/state persistence
+  failures must not permanently stop the realtime stream task.
 - Run the shortest meaningful test gate first, then the actual server build and launch-path smoke
   check. Full benchmarks and broad docs close-out remain after the daemon MVP is stable.
 - Treat any T037/T038 evidence recorded before later Phase 2, US1, or US2 daemon-critical edits as
@@ -468,10 +592,11 @@ No constitution violations identified.
   or docs work: tracked config file, schema sections, defaults, environment variable names, loading
   aliases, deployment-required sections, and any target-host divergence. The target-host
   `missing field realtime` failure is evidence of divergence. T039 records that block; Q001 now
-  approves path 1. The next observed server-running state is still not trusted: the TUI reports a
-  live process but also a launch-path/PID/runtime evidence mismatch. Treat that as blocked T040
-  evidence until the current process is tied to the deployed binary, a valid `server-start` receipt,
-  and fresh daemon-owned status, or until a safe fresh `server-start` or rollback is performed.
+  approves path 1. The 2026-05-13 rsynced server bundle shows the target config has the reviewed
+  `[realtime]` section and that the live daemon is tied to `server-start` PID/status/log evidence.
+  Treat this as mostly aligned T040 launch evidence, pending logout-survival confirmation and concise
+  non-secret recording. Do not treat it as T052 readiness because the status is unhealthy and the
+  deployed binary lacks current lane/latency fields.
 - Refuse ad-hoc server config edits as a workaround. A server config migration is allowed only when
   the evidence names the motivation, reviewer, exact changed fields, backup/rollback path, and
   post-change `server-start` verification.
@@ -480,10 +605,17 @@ No constitution violations identified.
   `answer_needed` so `python3 tools/doc_workflow.py status` still shows the pending human action.
 - Confirm how runtime truth is cross-checked against the live process and launched binary so a
   stale PID file or stale `runtime_status.json` cannot masquerade as current protection evidence.
+- Before T052, record a safe artifact identity tuple for the binary launched by `server-start`
+  (resolved path plus size/mtime or another reviewed non-secret fingerprint) and tie it to the same
+  PID, receipt, and `runtime_status.json` writer.
 - When a live process exists but launch path, PID file, runtime status, and detached log evidence do
   not agree, status MUST remain non-healthy or migration-required. Such a process may be left
   running while it protects edits, but it cannot satisfy T040, T052, resource sampling, or release
   trust by implication.
+- When launch evidence does agree but the runtime status lacks current lane/latency fields or shows
+  `unhealthy`, treat launch trust and smoke readiness separately: T040 may be close to complete, but
+  T052 and release trust remain blocked until the rebuilt binary runs, the current status shape is
+  visible, and the crash-resilience fixes are verified on the target host.
 - For the active live-hide incident, capture only non-secret server facts needed to classify the
   boundary: running PID/binary, current `runtime_status.json` freshness, last observed event,
   last matching title/revision, latest outcome, latest actionable issue, queue depth, processed-ring
@@ -501,6 +633,17 @@ No constitution violations identified.
 - Replace bounded recent-window recovery as the primary automatic recovery anchor with
   `last_successful_hide_at`, while preserving a documented older trusted fallback if that timestamp
   is absent or unreadable.
+- Add a candidate-discovery step before per-title revision scans for startup, polling-gap or
+  retained-observer-gap recovery, manual
+  emergency, and ordinary anchor-based recovery. The preferred path is one bounded recentchanges
+  window query, filtered by normalized watched titles, followed by per-revision verification/hide
+  only for candidate watched revisions.
+- Bound large recovery windows by chunking candidate queries and recording progress. Large windows
+  may run slower in the background, but the daemon must open the live lane first and must keep live
+  recent edits independent from the recovery scan.
+- Fall back to per-title watched-set scanning only when candidate discovery is unavailable,
+  incomplete for the selected window, or explicitly requested as full verification. The fallback
+  reason must be visible in runtime status and tests.
 - Keep repeated reconnect noise from triggering full startup recovery. Full watched-set recovery
   remains reserved for true daemon bootstrap, verified gap recovery, explicit operator action, or
   randomized nightly full recheck.
@@ -522,6 +665,13 @@ No constitution violations identified.
   reconciliation freshness evidence.
 - Remove raw resume cursors, internal counters, and bookkeeping rows from the primary TUI status
   view. They may remain available as secondary diagnostics or machine-readable fields.
+- Make the primary TUI deliberately small. The first screen should fit the compact operator answer:
+  protection state, current work, lag, last successful hide, latest issue, and full-check freshness
+  only when it affects trust. Internal counters, raw checkpoint counts, and command-report details
+  belong in diagnostics or command output.
+- Make the log pane honest. It may follow the newest in-memory session output, but it must label
+  that scope clearly and must not imply that it is a persistent daemon log tail unless it actually
+  reads the detached/current daemon log file.
 - Distinguish stream freshness from live hide effectiveness so fresh recentchange input cannot mask
   a failed or unresolved live suppression path.
 - Keep failed scheduled verification and stale full watched-set coverage visible as actionable
@@ -564,6 +714,26 @@ No constitution violations identified.
   implementation should use constants or existing config values for lane capacities where possible
   and surface any non-compatible config need as a separate Q/RQ item before relying on it.
 
+### Phase 2b - Crash-Resilient Runtime Policy
+
+- Replace process exit on classified RevDel auth or permission failure with a blocked or unhealthy
+  protection state. The failed action should record a compact non-sensitive actionable issue and
+  stop claiming live-hide success, but the daemon must stay alive to keep status fresh, observe
+  later events, and allow recovery or operator action after rights/session repair.
+- Treat fatality at the action level, not the process level. A permission-denied live action may
+  pause further hide submission or enter shared backoff until operator intervention, but it must not
+  kill the only daemon process or erase evidence needed to diagnose the outage.
+- Make retained observer cursor and local state persistence robust. Create expected parent
+  directories before cursor writes where appropriate; if a write or atomic rename still fails,
+  record a `state-persistence` or retained-observer actionable issue, keep runtime status
+  non-healthy, and retry or reopen the retained observer with bounded backoff instead of letting
+  the spawned compatibility task disappear.
+- Add focused tests for the two server-observed signatures: a synthetic RevDel permission failure
+  leaves the process alive with blocked status, and a synthetic `last_event_id` persistence failure
+  produces degraded status plus a retry/reconnect path.
+- Keep raw target-host logs out of tracked files. Use only aggregate counts, timestamps, and
+  sanitized outcome classes in tests and release evidence.
+
 ### Phase 3 - Command Surface Cleanup And Useful Presets
 
 - Keep command reports separate from daemon realtime truth, with bounded `command_report.json`
@@ -595,6 +765,9 @@ No constitution violations identified.
 - Add live-priority performance tests from Phase 2a to the release gate: background reconciliation
   blocked while live edit proceeds, live action timeout/deferred retry, queue saturation degraded
   status, 10-edit burst timing, and p95/p99 calculation from recent runtime samples.
+- Add crash-resilience tests from Phase 2b to the release gate: no process exit on classified
+  RevDel auth or permission failure, blocked or unhealthy status remains fresh, and stream cursor
+  persistence failure cannot permanently kill realtime monitoring.
 - Run suppressor tests, docs workflow, and controlled benchmark checks. Restart the real deployment
   path in use and verify the TUI plus runtime surfaces reflect the new fields and layout.
 - Build the server artifact with the Makefile wrapper for
@@ -614,7 +787,10 @@ No constitution violations identified.
   server config was updated, non-secret `server-start` receipt, PID/runtime/log paths, daemon-owned
   status freshness, and terminal logout survival. Keep this evidence concise. If the current
   server-running status reports a launch-path or PID mismatch, record it as a T040 blocker and
-  resolve it before T052; do not convert it into launch success by inference.
+  resolve it before T052; do not convert it into launch success by inference. If rsynced evidence
+  shows PID/status/log alignment but the runtime status lacks current lane/latency fields, treat
+  T040 and T052 separately: finish logout-survival evidence for T040, then rebuild, rsync, relaunch,
+  and smoke-test the current binary before T052.
 - Before release trust is claimed for any incompatible surface change, produce explicit evidence of:
   the compatibility verdict, required human approval checkpoint, required operator migration steps,
   and the fallback or rollback path to the last trusted workflow.

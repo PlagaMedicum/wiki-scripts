@@ -13,6 +13,9 @@ docmeta:
 
 - Keep the docs gate, registry-backed frontmatter sync, scoped metadata preview, and no-silent-plan
   overwrite guardrails stable as the baseline workflow.
+- Keep the intent-first and KISS gates active in templates and reviews so future features do not
+  drift into broad systems, speculative abstractions, or secondary polish before the accepted user
+  goal works.
 - When a feature closes, lift durable lessons into maintained docs, code comments, tests, or explicit
   future-work entries, then remove the finished feature directory and rely on git history for the
   detailed archive.

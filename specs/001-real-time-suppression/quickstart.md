@@ -12,6 +12,9 @@ docmeta:
   - server-running launch-path mismatch update on 2026-05-07
   - live-priority parallel execution update on 2026-05-09
   - live-latency clarification update on 2026-05-09
+  - KISS/catch-up simplification update on 2026-05-10
+  - rsynced crash evidence update on 2026-05-13
+  - rsynced old-command deployment evidence update on 2026-05-14
 ---
 
 # Quickstart: Real-Time Suppression Recovery
@@ -23,7 +26,8 @@ Prove that the running suppressor:
 
 - hides eligible watched-page edits automatically in realtime
 - recovers missed coverage from the last successful hide after downtime or failure
-- performs randomized rolling last-24h daytime verification and randomized nightly full rechecks
+- keeps manual verification and manual full recheck available without confusing them with live
+  protection
 - shows truthful operator-first runtime status
 - preserves or explicitly explains compatibility for the actual deployment path in use
 - builds the aarch64 Linux musl server binary through the documented Makefile target before rsync
@@ -34,6 +38,39 @@ Prove that the running suppressor:
 Important architectural limit: the suppressor observes edits after MediaWiki publishes them.
 Verification should minimize and measure publish-to-hide exposure, but it must not claim guaranteed
 zero first-view prevention.
+
+## Active Emergency Gate
+
+Treat the current `001` verification gate as the minimal stable suppressor server only:
+
+1. the target host is running the exact intended binary
+2. the same PID survives logout and owns fresh daemon status
+3. a new watched edit hides quickly
+4. the daemon stays current or within bounded lag under active edits
+5. auth-session, rate-limit, transport, and local-persistence failures stay visible without daemon
+   exit
+
+A stale replayed hide while the daemon remains hours behind is a failed smoke result, not partial
+success. PID evidence, receipt evidence, or checklist completion without current-binary freshness
+proof does not count as realtime protection proof.
+
+For this emergency gate, the checked-in production baseline is live-only on the target host:
+`daytime_verification.enabled=false` and `nightly_sweep.enabled=false`. Keep manual `Last 24
+hours`, full watched-set recheck, and emergency catch-up available, but do not use automatic
+verification as evidence that the live daemon is trustworthy.
+
+## Out Of Scope Until Smoke Passes
+
+Do not spend the active emergency pass on:
+
+- TUI polish beyond truthful protection state
+- broad reporting or diagnostic-surface growth
+- repo-wide Spec Kit template or docs-workflow repair
+- inactive-feature work such as `002-fix-git-commit`
+- speculative architecture work not needed for live protection
+
+Historical evidence sections below are kept to explain how the current gate was derived. They do
+not expand the active scope.
 
 ## Active MVP Critical Path
 
@@ -46,9 +83,48 @@ cosmetic UI work. Verify this path first:
    one-command detached `server-start` path for the rsynced binary.
 4. Live or controlled dry-run hiding path updates `last_successful_hide_at` or the equivalent dry-run
    outcome without waiting for reconciliation.
-5. Recovery/reconciliation and nightly fallback are scheduled or running with truthful non-healthy
-   status when blocked.
-6. Rate-limit/backoff does not starve live hiding and does not show false healthy status.
+5. Manual recovery or manual verification commands stay bounded and truthful, and disabled
+   automatic verification does not mask live protection state.
+6. RevDel auth/permission failure blocks or degrades protection without exiting the daemon.
+7. Stream cursor and local state persistence failures do not permanently stop live monitoring or
+   show false healthy status.
+8. Rate-limit/backoff does not starve live hiding and does not show false healthy status.
+9. The controlled live or dry-run smoke proves current head or bounded lag, not only a stale
+   replayed hide.
+
+## KISS Performance Reset
+
+The current planning intent is deliberately small: make recent live edits react quickly, make
+startup/recovery stop doing unnecessary full watched-set scans, and make the first TUI status pane
+answer whether protection is working now. Do not add a new service, database, dashboard, generic
+moderation framework, or broad refactor before these checks pass.
+
+2026-05-14 local hotfix note: the current local source tree now treats MediaWiki `recentchanges`
+polling as the authoritative live detector. Retained EventStreams code is not the healthy-state
+truth path for this MVP hotfix tree.
+
+The 2026-05-10 local TUI run showed the failure mode in aggregate: startup recovery selected a
+multi-day window, scanned the full watched set of roughly 1.4k pages, found only a small number of
+relevant edits, and took minutes while the operator saw `catching-up`. The fix is candidate-first
+recovery:
+
+1. Select the recovery anchor and window.
+2. Query a bounded global candidate source for changes in that window.
+3. Filter candidates by the normalized watched-title cache.
+4. Verify or hide only watched candidate revisions.
+5. Fall back to a full watched-set scan only with an explicit fallback reason or explicit full
+   verification action.
+6. Keep the live lane open before and during the background recovery scan.
+
+Acceptance for this reset:
+
+- ordinary startup or emergency recovery records candidate source, candidate counts, watched
+  candidate counts, fallback reason when any, and candidate discovery time
+- live synthetic watched edits still queue/submit while candidate recovery or full verification is
+  active
+- a fallback full scan is visible as slower background work, not as a reason for live edits to wait
+- the primary TUI shows compact protection/current-work/lag/last-hide/latest-issue evidence first
+- the log pane labels whether it is current-session output or a real daemon log tail
 
 ## Active Live-Hide Incident With Sensitive Identifiers Redacted
 
@@ -100,6 +176,71 @@ Treat this state as follows:
 
 T052 and T042 remain blocked until the launch-path mismatch is resolved or an explicit human
 go/no-go exception records the risk.
+
+## Rsynced Server Crash Evidence Recorded On 2026-05-13
+
+The operator rsynced a safe diagnostic bundle from the target host. Do not commit raw logs or raw
+runtime files from that bundle: server logs can contain real sensitive page, actor, revision, diff,
+or comment identifiers. Use only sanitized outcome classes, aggregate counts, and non-secret
+runtime facts in tracked evidence.
+
+Safe findings:
+
+- The target-host config now contains the reviewed `[realtime]` section. The old
+  `missing field realtime` failure is no longer the active crash signature.
+- `daemon.pid`, fresh `runtime_status.json`, and detached log metadata point to one
+  `server-start` daemon. Treat T040 as mostly aligned, pending logout-survival confirmation and
+  concise non-secret evidence recording.
+- Runtime status is still `unhealthy`.
+- The deployed server binary is older than the current lane-aware MVP design because its status
+  lacks `live_lane`, `background_lane`, and `latency` fields. Do not use this run for T052 smoke
+  readiness.
+- The server-observed hard crash was a classified RevDel permission failure followed by process
+  exit.
+- An earlier retained-observer compatibility failure stopped live monitoring after a local
+  `last_event_id` state write or atomic replace failure.
+
+Immediate handling:
+
+1. Keep the raw bundle untracked and use only sanitized counts and non-secret runtime facts in
+   tracked evidence.
+2. Treat the crash signatures as the historical reason T067 through T076 were implemented locally;
+   do not treat the local build alone as proof that the server now runs those fixes.
+3. Build the current server artifact, rsync it to the target host, and relaunch from the exact
+   deployed binary with `./suppressor --config ./config.toml server-start`.
+4. Record safe launch identity for that run: binary path plus a non-secret artifact identity tuple,
+   tied to the same PID, receipt, and `runtime_status.json`.
+5. Finish T040 with logout-survival evidence, then run T052 controlled live or dry-run smoke on the
+   rebuilt lane-aware binary.
+
+## Rsynced Target-Host Relaunch Evidence Recorded On 2026-05-14
+
+The operator reported that the binary was updated and the logs were rsynced again after relaunching
+with the old command. Treat this bundle as deployment-evidence refinement, not as smoke success.
+
+Safe findings:
+
+- The latest `runtime_status.json` still lacks `live_lane`, `background_lane`, and `latency`, so
+  the target host is still not proving the current lane-aware binary is writing status.
+- The same bundle still shows legacy recovery shape rather than the newer candidate-first recovery
+  evidence expected from the current local source when that recovery path runs.
+- After the latest daemon start, the rsynced log shows startup/open activity but no new
+  `state-persistence` or blocked-protection evidence from the fixed crash-resilience paths.
+- Therefore the remaining blocker is deployment identity and launch workflow trust, not another
+  unresolved local crash-policy design.
+
+Immediate handling:
+
+1. Launch the target daemon from the exact rebuilt artifact path or verified deployed copy of it,
+   not from an older wrapper, stale shell alias, or older copied binary.
+2. Record a safe artifact identity tuple for that launch, tied to the same `server-start` receipt,
+   PID file, and daemon-owned `runtime_status.json`.
+3. Verify that the same run writes current `live_lane`, `background_lane`, and `latency` fields
+   before treating T052 as unblocked.
+4. If a recovery pass runs on that same launch, verify the recovery summary uses candidate-first
+   fields rather than the older legacy-only shape.
+5. Only after those checks pass should T040 logout-survival recording and T052 live/dry-run smoke
+   be treated as current-binary evidence.
 
 ## Local Evidence Recorded On 2026-05-05
 
@@ -320,18 +461,21 @@ Doc metadata already in sync.
 The blocker is the known inactive `002` metadata issue. It was not fixed during the active
 suppressor freeze because it is outside `001-real-time-suppression`.
 
-## Current MVP Go/No-Go Updated On 2026-05-07
+## Current MVP Go/No-Go Updated On 2026-05-13
 
 Decision: BLOCK target-host deployment trust until the active T041 live-hide incident is fixed and
 T040, T041, T052, and T042 evidence is recorded. T039 records the config-stability block and Q001
-now approves path 1: target-host config migration to the reviewed tracked baseline. The latest
-server-running status keeps T040 blocked because launch-path/PID/runtime evidence does not agree.
+now approves path 1: target-host config migration to the reviewed tracked baseline. The rsynced
+server bundle mostly resolves the earlier launch-path mismatch, but the running daemon is
+`unhealthy`, lacks the current lane/latency status fields, and still demonstrates crash signatures
+that must be fixed before smoke readiness.
 
 Current human-review packet:
 
 - Q001 in [questions.md](questions.md) is answered: approve path 1.
 - Use [review-queue.md](review-queue.md) as the index of pending human and maintainer actions.
-- The urgent next action is RQ002/T040 evidence collection.
+- The urgent next action is the crash-resilience implementation slice, followed by RQ002/T040
+  logout-survival evidence and T052 smoke on the rebuilt binary.
 
 - ACCEPT local test evidence: `rtk cargo test --manifest-path suppressor/Cargo.toml --
   --test-threads=1` passed with `206 passed` for the current local source tree after synthetic
@@ -343,13 +487,18 @@ Current human-review packet:
   command status separation passed targeted tests.
 - ACCEPT reviewed config path decision: Q001 approves path 1, and the human operator reports the
   server config was updated and the daemon was started.
-- BLOCK config-stability launch evidence: non-secret `server-start` receipt, PID/runtime/log paths,
-  daemon-owned status freshness, and terminal logout survival still need to be recorded before T040
-  can be checked.
-- BLOCK current server-running launch evidence: process liveness exists, but the latest status shows
-  launch-path/PID/runtime evidence mismatch, so it is not trusted `server-start` evidence yet.
-- BLOCK detached server-start deployment trust: target-host PID/runtime/log evidence and SSH
-  logout-survival evidence are still missing.
+- ACCEPT partial config-stability launch evidence: the rsynced target config contains `[realtime]`,
+  and PID/runtime/log facts can be tied to a `server-start` daemon.
+- BLOCK final T040 evidence only on the remaining launch-proof gap: SSH logout-survival evidence and
+  concise non-secret recording still need to be captured.
+- BLOCK current deployed-binary trust: the server status lacks current lane/latency fields, so the
+  running binary is older than the current MVP design.
+- ACCEPT local crash-resilience code evidence: classified RevDel auth/permission failure now records
+  blocked protection without process exit, stream cursor persistence failure records
+  `state-persistence` and reconnects, and ordinary no-title-scope catch-up uses recentchanges
+  candidate discovery before full-scan fallback.
+- BLOCK target-host crash-resilience trust: the rebuilt binary with those fixes still needs to be
+  rsynced, launched, and smoked through T040/T052 before deployment trust.
 - BLOCK live-hide deployment trust: no target-host live or controlled dry-run watched-edit smoke
   result is recorded yet, and the operator-provided screenshot is a failed smoke result for a
   watched sensitive page.
@@ -461,11 +610,19 @@ The current server-running screenshot falls into the blocked category when it sh
 but mismatched launch-path PID, PID file, runtime status, or detached log evidence. Record the
 mismatch as negative T040 evidence; do not treat it as launch success.
 
+The 2026-05-13 rsynced bundle supersedes that earlier mismatch diagnosis for launch-path evidence:
+safe metadata shows a reviewed realtime config plus `server-start` PID/status/log alignment. This
+can be recorded as partial T040 launch evidence, but it does not complete logout-survival evidence
+and it does not satisfy T052 because the deployed binary is older than the current lane-aware MVP
+runtime contract.
+
 Acceptable T040 evidence is limited to:
 
 - command line with config path, without environment values
-- receipt fields: mode, PID, config path, PID file, runtime-status path, detached log path, and
-  `launch_path=server-start`
+- receipt fields: mode, PID, binary path, config path, PID file, runtime-status path, detached log
+  path, and `launch_path=server-start`
+- safe artifact identity tuple for the launched binary, such as resolved path plus size/mtime, tied
+  to the same receipt and live PID
 - PID liveness and expected suppressor binary path when available
 - `runtime_status.json` metadata or safe excerpts showing `launch_path=server-start`, PID matching
   the live process, and daemon-owned status freshness
@@ -495,8 +652,9 @@ Partial evidence outcomes:
 - PID alive but stale or unrelated `runtime_status.json`: block T040 and record stale status.
 - Fresh status but `launch_path` is not `server-start`: block T040 for the rsync `server-start`
   path and record the actual launch path separately.
-- Receipt present but missing PID, runtime-status path, log path, or config path: block T040 until
-  the missing field is supplied or a fresh `server-start` receipt is captured.
+- Receipt present but missing PID, binary path, runtime-status path, log path, config path, or
+  safe artifact identity tuple: block T040 until the missing field is supplied or a fresh
+  `server-start` receipt is captured.
 - PID and status pass before logout but reconnect evidence is missing: keep the daemon running if it
   is protecting edits, but keep T040 and MVP deployment trust blocked.
 - Target-host access interruption, duplicate live daemon, stale PID, missing receipt, or stale
@@ -504,22 +662,27 @@ Partial evidence outcomes:
   T042 resource evidence.
 - Live process plus launch-path/PID/runtime mismatch keeps T040 open even when the TUI can read a
   fresh status file. Resolve the mismatch before T052.
+- PID/status/log alignment with missing lane/latency status fields can advance T040 launch
+  evidence, but it blocks T052 until the rebuilt current binary is deployed and verified.
+- A same-run receipt without artifact identity or without the current lane/latency status shape is
+  only partial launch evidence. Do not treat it as rebuilt-binary proof for T052.
 
 If the daemon is currently protecting edits but T040 evidence is incomplete, do not stop it only to
 make documentation cleaner. Preserve protection, record the missing evidence, and keep deployment
 trust blocked until the missing T040 evidence is collected or an explicit human go/no-go decision is
 recorded.
 
-The 2026-05-06 target-host failure `missing field realtime` blocks deployment trust until this gate
-is resolved. Do not add `[realtime]` or any other section to the server config as an unreviewed
-shortcut; either migrate through the reviewed evidence path or run a binary that fails safely with a
-reviewed migration-needed diagnostic.
+The 2026-05-06 target-host failure `missing field realtime` blocked deployment trust until Q001 and
+the reviewed path-1 config migration. The 2026-05-13 rsynced evidence shows that config gate is now
+resolved for the current target host. Do not add `[realtime]` or any other section to the server
+config as an unreviewed shortcut in future runs; either migrate through the reviewed evidence path
+or run a binary that fails safely with a reviewed migration-needed diagnostic.
 
 ## T039 Config-Stability Evidence Recorded On 2026-05-06
 
 Human review evidence: the human owner explicitly required that all config changes be motivated and
-reviewed by a human before they are trusted. This is now a release-blocking rule from constitution
-v1.8.0.
+reviewed by a human before they are trusted. This became release-blocking governance in the
+constitution and remains active in constitution v1.10.0.
 
 Target-host command and diagnostic:
 
@@ -540,15 +703,18 @@ Recorded verdict:
 - Config path: `config.toml` in the target-host deployment directory.
 - Reviewed baseline: the tracked suppressor `config.toml` includes the current `[realtime]`
   timeout section.
-- Documented divergence: the target-host config used by the command does not satisfy the current
-  config schema because `[realtime]` is absent.
+- Documented divergence at the time: the target-host config used by the command did not satisfy the
+  current config schema because `[realtime]` was absent.
 - Compatibility or migration decision: Q001 approved path 1 on 2026-05-07. The human operator
   reports that the server config was updated to the reviewed tracked baseline and the daemon was
-  started. Deployment trust still waits for T040 launch evidence.
+  started. The 2026-05-13 rsynced evidence confirms the target-host config now has `[realtime]`.
+  Deployment trust still waits for crash-resilience fixes, T040 logout evidence, rebuilt-binary
+  smoke, and resource evidence.
 - No-background-edit confirmation: no tracked or target-host config edit is approved or performed
   as part of this evidence pass.
-- Rollback/fallback: keep target-host deployment blocked; use the last trusted binary/config/state
-  workflow if available or manual emergency catch-up while a reviewed fix is prepared.
+- Rollback/fallback: keep target-host deployment trust blocked; use the last trusted
+  binary/config/state workflow if available or manual emergency catch-up while crash-resilience and
+  rebuilt-binary verification are prepared.
 
 Allowed next paths:
 
@@ -765,7 +931,8 @@ configured bot test page
 ```
 
 2. Confirm benchmark edits are bot-marked and test-only.
-3. Measure publish-to-detect, detect-to-queue, queue-to-hide, and publish-to-hidden timings.
+3. Measure publish-to-detect, observed-to-queue, queue-to-submit, submit-to-complete, and
+   publish-to-hidden timings.
 4. While a synthetic or controlled background reconciliation/recovery job is active or intentionally
    delayed, publish or inject a watched live edit and confirm the live lane queues and submits it
    without waiting for the background lane to drain.
@@ -785,7 +952,7 @@ Minimum timing evidence for the live-priority implementation:
 - Live queue saturation or deadline expiry must produce degraded or unhealthy status immediately
   instead of silent waiting.
 - Target-host smoke evidence must still report publish-to-detect and publish-to-hidden because
-  local tests do not include external EventStreams or wiki-side publication delay.
+  local tests do not include target-host polling delay or wiki-side publication delay.
 
 Minimum resource evidence for T042:
 
@@ -833,6 +1000,103 @@ Remaining deployment evidence: T040, T041, T052, and T042 still require target-h
 facts, target-host relaunch or restart, a controlled live or dry-run watched-page smoke result, and
 deployment-host resource sampling. Do not treat the local hotfix evidence as target-host proof.
 
+## Live-Priority Lane Local Evidence Recorded On 2026-05-09
+
+Recorded for T053 through T065 with synthetic fixtures only:
+
+- Runtime model change: recentchange-triggered hides now enter a bounded live lane. Catch-up,
+  reconciliation, verification, and command-driven RevDel work enter a separate bounded background
+  lane. The tracked config shape did not change.
+- Timing model change: runtime metrics now keep bounded samples for observed-to-queue,
+  queue-to-submit, submit-to-complete, and observed-to-hidden. The older observed-to-hide name
+  remains as a compatibility alias for observed-to-hidden.
+- Status model change: `runtime_status.json` now records live/background queue depth, queue cap,
+  in-flight count, concurrency limit, latest saturation metadata, action lane, submitted time,
+  deadline, and p50/p95/p99 live latency snapshots. Older runtime-status JSON still loads with
+  defaults when these fields are absent.
+- Transaction boundary change: dispatch records duplicate/processed checks, queued status, and
+  enqueue without holding runtime-status or processed-state locks across MediaWiki API calls. Worker
+  submission, completion, and processed-revision persistence are separate local transitions.
+- Deadline/degraded behavior: live queue admission is non-blocking. A full live lane records
+  unhealthy/degraded live-hide status with `live-queue-full`; expired or timed-out live actions
+  record retrying `deadline-exceeded` instead of blocking newer live actions behind the same wait.
+- Background isolation evidence: a deterministic test queued synthetic background reconciliation
+  work without draining that lane, then injected a synthetic watched live edit. The live worker
+  completed the live edit while the background lane still had queued work, and recorded
+  observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden samples. The
+  timeout in that test is a hang guard only, not a fixed internal live handoff SLA.
+- Burst evidence: a burst test dispatched 10 synthetic eligible watched edits plus a duplicate. The
+  duplicate did not increase live queue depth, all 10 synthetic revisions reached final dry-run
+  hidden outcomes, and observed-to-hidden p50/p95/p99 snapshots were present.
+- Targeted live-priority result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml live_ -- --nocapture` passed with 25 tests.
+- Targeted deadline result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml worker_defers_expired_live_action_deadline_without_api_wait -- --nocapture`
+  passed with 1 test.
+- Targeted status and latency compatibility results:
+  `runtime_status_round_trips_lane_and_latency_fields`,
+  `runtime_status_accepts_additive_lane_latency_and_outcome_fields`, and
+  `runtime_latency_snapshot_reports_live_path_percentiles` each passed with 1 test.
+- Fresh full serial suppressor result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` passed with 214 tests.
+- Fresh server artifact result: sandboxed `rtk make -C suppressor build-server` was blocked by Zig
+  cache write permissions, then the approved normal-cache rerun completed successfully in 1m 22s
+  and printed `target/aarch64-unknown-linux-musl/release/suppressor`.
+- Verified artifact:
+
+```text
+suppressor/target/aarch64-unknown-linux-musl/release/suppressor
+ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+size: 9.7M
+```
+
+Remaining deployment evidence: this is still local dry-run/unit/build evidence. T040 launch-path
+alignment, T052 controlled target-host live or dry-run smoke with the rebuilt lane-aware binary, and
+T042 deployment-host resource sampling remain blocked until target-host facts are recorded.
+
+## Crash-Resilient Runtime Local Evidence Recorded On 2026-05-13
+
+Recorded for T067 through T076 with synthetic fixtures only:
+
+- RevDel auth/permission policy: a classified permission failure now records a blocked live-hide
+  outcome and `live-hide` actionable issue, returns the worker completion error, and keeps the
+  daemon process alive. The worker no longer contains a `std::process::exit` path.
+- Retained observer cursor policy: `last_event_id` persistence failure now records
+  `state-persistence`, keeps realtime status non-healthy, and breaks back to the existing bounded
+  retained-observer reconnect path instead of letting the spawned compatibility task disappear.
+- State persistence policy: atomic text/JSON state writes create parent directories before writing
+  temp files and renaming them into place; remaining write or rename failures are classified through
+  runtime status rather than hidden by a later healthy stream event.
+- Candidate-first recovery policy: ordinary no-title-scope catch-up queries bounded
+  recentchanges, filters candidates by the watched-title cache, records candidate source, candidate
+  count, watched candidate count, chunk count, discovery elapsed time, and requires
+  `fallback_reason` before the older full watched-set scan is used.
+- Primary TUI evidence: recovery candidate source/count/fallback metadata is rendered as aggregate
+  status, and `state-persistence` remains a blocking issue for healthy realtime status.
+- Targeted crash-resilience and candidate-first results:
+  `worker_blocks_permission_failure_without_exiting_process`,
+  `cursor_persistence_failure_records_state_issue_and_keeps_retry_path`,
+  `ordinary_catchup_uses_recentchanges_candidates_before_full_scan`,
+  `full_scan_fallback_requires_candidate_failure_reason`, and
+  `fetches_recentchanges_window_candidates` each passed with 1 test.
+- Fresh full serial suppressor result:
+  `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1` passed with 219 tests.
+- Fresh server artifact result: sandboxed `rtk make -C suppressor build-server` was blocked by Zig
+  cache write permissions under `~/.cache/zig`, then the approved normal-cache rerun completed
+  successfully in 1m 47s and printed `target/aarch64-unknown-linux-musl/release/suppressor`.
+- Verified artifact:
+
+```text
+suppressor/target/aarch64-unknown-linux-musl/release/suppressor
+ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+size: 9.8M
+```
+
+Remaining deployment evidence: this is local code/test/build evidence only. T040 still needs
+logout-survival evidence for the target-host `server-start` daemon, T052 needs a controlled
+target-host live or dry-run smoke on the rebuilt crash-resilient binary, and T042 still needs
+deployment-host resource sampling.
+
 ## Deployment Go/No-Go And Rollback Gate
 
 Accept the MVP deployment only when the final evidence bundle includes fresh T037 and T038 results,
@@ -860,7 +1124,8 @@ Do not treat the fix as production-ready until all of the following are true:
 
 - live protection checks pass
 - live-priority lane checks pass while reconciliation or recovery is active
-- timing tests report p95/p99 for observed-to-queue, queue-to-submit, and observed-to-hidden
+- timing tests report p95/p99 for observed-to-queue, queue-to-submit, submit-to-complete, and
+  observed-to-hidden
 - recovery-from-last-successful-hide checks pass
 - rolling last-24h daytime verification checks pass
 - randomized nightly full recheck checks pass

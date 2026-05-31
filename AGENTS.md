@@ -24,6 +24,7 @@ docmeta:
 - Document your code and ensure adding documentation and notes about experiences with hard issues, to not repeat mistakes.
 - Always prefer easy, performant, reliable, fast, simple, not greedy on resources, optimizes, compact sollutions.
 - Ensure reusability of your code, do not repeat yourself.
+- Store all common commands and check common commands from Makefiles. If you repeat some commands often, add them into according makefiles.
 
 <!-- SPECKIT START -->
 For repo rules and current structure, read `.specify/memory/constitution.md`
@@ -35,4 +36,12 @@ pointer, use the relevant `specs/NNN-feature-name/` directory directly.
 
 The current active plan is `specs/001-real-time-suppression/plan.md`
 while `.specify/feature.json` points there.
+For `001-real-time-suppression`, read `spec.md` and `plan.md` first. The
+active goal is the minimal stable suppressor server only: fast live hide,
+bounded catch-up after downtime, truthful degraded or blocked status, exact
+deployment proof for the running binary, and an emergency live-only production
+profile until automatic verification is re-approved after soak. Do not widen
+scope from historical checklist, TUI, reporting, template, or inactive-feature
+material unless the user explicitly asks. The authoritative reading order for
+`001` is `spec.md` -> `plan.md` -> `tasks.md` -> operator docs.
 <!-- SPECKIT END -->

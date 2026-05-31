@@ -34,7 +34,8 @@ docmeta:
 **Sensitive Evidence Handling**: [if the feature involves sensitive edits, suppression, moderation, incidents, logs, or public evidence, state the synthetic-fixture/redaction strategy and confirm real editor/page/revision/diff/comment identifiers stay out of tracked files; otherwise explicitly none]
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable, or explicitly unknown]  
 **Architecture Constraints**: [internal service boundaries, process boundaries, dependency limits, or explicitly unknown]
-**Minimalism Constraints**: [what must stay simple, local, bounded, or low-overhead, or explicitly unknown]
+**Intent Restatement**: [human goal in concrete terms, primary success condition, and out-of-scope work]
+**Minimalism Constraints**: [smallest viable design, existing patterns to reuse, abstractions/dependencies to avoid, and what must stay simple, local, bounded, or low-overhead]
 **Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens, or explicitly unknown]
 
 If a direct human answer is still required, write it into `questions.md` or a feature-local review
@@ -87,6 +88,15 @@ Include document impact in this check:
 - whether `make docs` / `python3 tools/doc_workflow.py all` must be run
 - whether the feature needs `questions.md` or `review-queue.md` updates to capture pending human
   input explicitly
+- whether the human owner's intent has been restated in concrete terms, including what is out of
+  scope; if not, stop and clarify before planning design details
+- whether the plan uses the smallest clear design that can satisfy the accepted requirement
+- whether any new abstraction, dependency, service, queue, background job, generated surface, or
+  broad refactor is justified by a current correctness, safety, performance, or verification need
+- whether repeated logic will be handled with named constants, narrow helpers, or explicit data
+  structures instead of copy/paste or speculative frameworks
+- whether lower-value polish or exhaustive secondary details are being deferred until the primary
+  user pain point is working and measured
 
 If the active suppressor MVP freeze applies, the plan MUST minimize scope to the stable
 server-runnable daemon path: automatic live hiding, recovery/reconciliation, nightly fallback,
@@ -167,3 +177,4 @@ directories captured above. In this repo, that often means a project root such a
 |-----------|------------|-------------------------------------|
 | [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
 | [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+| [e.g., new abstraction/service/background lane] | [current correctness/safety/performance need] | [why direct local code or existing pattern is insufficient] |

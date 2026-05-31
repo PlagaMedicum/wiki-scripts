@@ -105,6 +105,12 @@ docmeta:
 - **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
 - **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
 - **FR-005**: System MUST [behavior, e.g., "log all security events"]
+- State the human owner's concrete intent, primary pain point, and out-of-scope work before adding
+  secondary requirements. If the intent is ambiguous enough to change the product, ask directly
+  instead of inventing policy.
+- Prefer requirements that describe the smallest useful behavior. Do not turn a narrow request into
+  a framework, broad rewrite, new service, or general-purpose system unless the human explicitly
+  asks for that or the safety/performance need is proven.
 - If a requirement is still unclear, name the unknown explicitly in assumptions or add a short
   clarification note instead of inventing policy.
 - If a direct human answer or approval is still needed, record it in `questions.md` or another
@@ -161,6 +167,9 @@ docmeta:
   path before production trust"]
 - **SC-009**: [Sensitive-evidence outcome, if applicable: "No tracked docs, tests, contracts,
   examples, fixtures, or code comments contain real sensitive-edit incident identifiers"]
+- **SC-010**: [Simplicity outcome, e.g., "The accepted path is implemented with the smallest clear
+  design, named constants for repeated values, no unjustified new dependency/service/abstraction,
+  and no secondary polish blocking the primary outcome"]
 
 ## Assumptions
 
@@ -172,6 +181,7 @@ docmeta:
 
 - [Assumption about target users, e.g., "Users have stable internet connectivity"]
 - [Assumption about scope boundaries, e.g., "Mobile support is out of scope for v1"]
+- [Assumption about what remains intentionally simple or out of scope]
 - [Assumption about data/environment, e.g., "Existing authentication system will be reused"]
 - [Dependency on existing system/service, e.g., "Requires access to the existing user profile API"]
 - [Open human question tracked in `questions.md`, if applicable]

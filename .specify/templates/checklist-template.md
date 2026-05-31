@@ -41,3 +41,5 @@ docmeta:
 - Add comments or findings inline
 - Link to relevant resources or documentation
 - Items are numbered sequentially for easy reference
+- For non-trivial features, include checks that the human intent is understood, the smallest clear
+  design is being used, and accidental complexity is not displacing the primary goal.

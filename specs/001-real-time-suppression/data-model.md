@@ -10,6 +10,9 @@ docmeta:
   - speckit-plan human-review queue update on 2026-05-06
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
   - speckit-plan live-priority parallel execution update on 2026-05-09
+  - speckit-plan KISS/catch-up simplification update on 2026-05-10
+  - speckit-plan rsynced crash evidence update on 2026-05-13
+  - speckit-plan rsynced old-command deployment evidence update on 2026-05-14
 ---
 
 # Data Model: Real-Time Suppression Recovery
@@ -52,7 +55,8 @@ Fields:
 - `observed_at`: Local observation timestamp.
 - `observation_kind`: `live`, `gap-recovery`, `rolling-last-24h`, `nightly-full`,
   `manual-emergency`, `coverage-report`, or `source-refresh`.
-- `event_cursor`: Optional stream cursor or resume token retained for transport logic only.
+- `event_cursor`: Optional retained observer cursor or resume token kept for transport compatibility
+  only; it is not the primary freshness anchor for MVP trust.
 - `revision_url`: Safe browser-openable revision or diff URL.
 - `eligibility`: `eligible`, `policy-skipped`, `already-processed`, `not-watched`,
   `missing-metadata`, or `unknown`.
@@ -97,11 +101,14 @@ Validation rules:
 
 - A revision is not treated as fully covered until a terminal outcome is recorded.
 - Replayed events must not create conflicting duplicate actions.
-- Fatal auth or permission failures must surface a blocked protection state.
+- Fatal auth or permission failures must surface a blocked protection state without terminating the
+  daemon process.
 - Live-lane actions must not wait behind background-lane actions.
 - Runtime status, processed-revision state, and queue-depth updates for the same action should be
   persisted as a short transaction around each state transition and must not hold locks across API
   calls or retry sleeps.
+- A process-alive daemon with blocked protection is preferable to process exit because it keeps
+  status, logs, and recovery evidence fresh for the operator.
 
 State transitions:
 
@@ -226,6 +233,41 @@ Relationships:
 
 - Used by `VerificationRun` when the run type is gap recovery or emergency catch-up.
 
+## RecoveryCandidateSet
+
+Represents the narrow candidate list discovered for a recovery or catch-up window before any
+per-revision hide or verification work runs.
+
+Fields:
+
+- `window_start`: Start timestamp selected from the recovery anchor.
+- `window_end`: End timestamp selected for this recovery pass.
+- `source`: `recentchanges`, `retained-observer-gap`, `title-scoped-delta`, `operator-specified`, or
+  `full-scan-fallback`.
+- `candidate_count`: Number of candidate changes returned before watched-title filtering.
+- `watched_candidate_count`: Number of candidates that matched the active watched-title cache.
+- `chunk_count`: Number of bounded query chunks used for large windows.
+- `fallback_reason`: Optional reason per-title scanning was required, such as
+  `candidate-source-unavailable`, `candidate-window-too-old`, `api-limit`, or
+  `operator-requested-full-check`.
+- `discovered_at`: Time the candidate set was produced.
+- `elapsed_ms`: Candidate discovery duration for performance evidence.
+
+Validation rules:
+
+- Ordinary startup, polling-stale recovery, retained-observer gap recovery, and emergency recovery
+  should produce a candidate set before a per-title scan is allowed.
+- A full watched-set scan must carry either `source=full-scan-fallback` with `fallback_reason` or a
+  verification run kind that explicitly requires full scope.
+- Candidate discovery must not block the live lane; large windows are chunked as background work.
+- Candidate counts are aggregate evidence and must not commit real sensitive-edit identifiers.
+
+Relationships:
+
+- Uses one `RecoveryAnchor`.
+- Feeds one `VerificationRun`.
+- Produces zero or more `ObservedEdit` candidates.
+
 ## VerificationRun
 
 Represents one bounded recovery or verification job and its operator-visible scope.
@@ -234,7 +276,7 @@ Fields:
 
 - `run_kind`: `gap-recovery`, `rolling-last-24h`, `nightly-full`, `manual-emergency`,
   `coverage-report`, or `source-refresh-catchup`.
-- `trigger`: `daemon-start`, `stream-gap`, `stream-stale`, `reconnect-error`, `operator`,
+- `trigger`: `daemon-start`, `polling-gap`, `polling-stale`, `observer-reconnect`, `operator`,
   `scheduler-daytime`, `scheduler-nightly`, or `source-refresh`.
 - `window_start`: Start timestamp when the run has a time window.
 - `window_end`: End timestamp when the run has a time window.
@@ -364,7 +406,7 @@ Represents the operator-first summary needed by the compact TUI view.
 
 Fields:
 
-- `protection_state`: `healthy`, `recovering`, `degraded`, `blocked`, `stale`, `reconnecting`, or
+- `protection_state`: `healthy`, `catching-up`, `degraded`, `blocked`, `stale`, `reconnecting`, or
   `stopped`.
 - `daemon_pid`: PID when known from the supervisor view.
 - `daemon_started_at`: Time continuous daemon protection began.
@@ -375,7 +417,7 @@ Fields:
 - `latest_actionable_issue`: Optional `ActionableIssue`.
 - `lag_seconds`: Compatibility whole-seconds lag value.
 - `lag_millis`: Additive precise lag value for sub-second operator display.
-- `lag_source`: `stream` or `api-probe`.
+- `lag_source`: `polling`, `api-probe`, or compatibility `stream`.
 - `recent_offline_interval`: Optional `OfflineInterval`.
 - `recheck_freshness`: Optional `RecheckFreshnessSnapshot`.
 - `compatibility_notice`: Optional `CompatibilityNotice`.
@@ -388,6 +430,11 @@ Validation rules:
 - The primary view must not report healthy protection while `recheck_freshness` shows a failed
   scheduled verification or obviously stale full watched-set coverage that still needs operator
   attention.
+- The primary view must not report healthy protection while authoritative polling is stale or while
+  retained cursor or other required local state persistence is failing, even if diagnostic
+  transport evidence still looks active.
+- The primary view should stay compact: show candidate discovery or scan details only when recovery
+  is active, degraded, or falling back to a full scan.
 
 ## OperatorTaskStatus
 
@@ -433,8 +480,8 @@ Represents the single most important problem requiring operator attention now.
 Fields:
 
 - `severity`: `info`, `warning`, `error`, or `blocked`.
-- `kind`: `rate-limit`, `auth`, `permission`, `stream-gap`, `compatibility`, `source-refresh`, or
-  another explicit category.
+- `kind`: `rate-limit`, `auth`, `permission`, `polling`, `retained-observer-gap`, `state-persistence`,
+  `compatibility`, `source-refresh`, or another explicit category.
 - `summary`: Plain-language issue summary.
 - `next_action`: Exact next operator action when one is required.
 - `related_revid`
@@ -555,6 +602,8 @@ Fields:
 
 - `command`: `server-start`.
 - `binary_path`: Path of the binary used to spawn the daemon child.
+- `artifact_identity`: Safe non-secret identity tuple for that binary, such as resolved path plus
+  size/mtime or another reviewed fingerprint captured with the launch receipt.
 - `config_path`: Config path resolved for the daemon.
 - `state_dir`: Runtime state directory created or verified before spawn.
 - `pid_file`: PID file expected to be written by the daemon.
@@ -564,6 +613,8 @@ Fields:
 - `spawned_pid`: PID returned by the detached child process.
 - `started_at`: Time the command spawned the daemon child.
 - `verification_deadline_seconds`: Maximum startup wait before the command fails.
+- `status_shape`: `current-mvp`, `legacy-compatible`, or `unknown`, based on the runtime status
+  written by the same launch run.
 - `verification_result`: `running`, `already-running`, `stale-pid`, `missing-config`,
   `missing-auth`, `status-timeout`, `spawn-failed`, `pid-mismatch`,
   `launch-path-mismatch`, `runtime-status-mismatch`, `already-running-untrusted`, or `unhealthy`.
@@ -577,6 +628,11 @@ Validation rules:
 - A live process whose PID file, launch-path PID, runtime-status writer, or detached log evidence
   cannot be tied to the same `server-start` run is `already-running-untrusted` or a mismatch result,
   not `running`.
+- A `running` result is only launch-path evidence. If runtime status is `unhealthy` or lacks the
+  current MVP lane/latency fields, later smoke and release gates remain blocked until a current
+  rebuilt binary is launched and verified.
+- T052 or release-trust evidence must also record `artifact_identity` and show
+  `status_shape=current-mvp`; a legacy-compatible status from a live process is not enough.
 - Secrets, cookies, tokens, hidden text, and sensitive article content must not appear in the launch
   receipt or detached log path.
 - The detached child must not depend on the invoking terminal after `server-start` exits.

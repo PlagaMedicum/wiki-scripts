@@ -31,6 +31,9 @@ specify check
 3. Create or update a feature directory under `specs/NNN-feature-name/`.
 4. Write `spec.md`, then `plan.md`, then `tasks.md`. If direct human answers or comments are still
    needed, keep them in feature-local files such as `questions.md` or `review-queue.md`.
+   Restate the human owner's concrete intent, primary success condition, and out-of-scope work
+   before choosing a design. If that restatement exposes a material ambiguity, ask a direct question
+   instead of proceeding on assumption.
    If the unresolved point is repo-level governance rather than feature-scoped work, move it into
    `specs/000-repo-governance/research.md`.
    If the change can invalidate previous setups, schemas, configs, state files, machine-readable
@@ -43,6 +46,9 @@ specify check
    For safety-, reliability-, or performance-sensitive work, state resource goals, bounded
    concurrency/state/logging, recovery/status behavior, low-spec verification, and how incident
    lessons will be preserved.
+   Include a simplicity gate for non-trivial work: smallest viable design, existing patterns reused,
+   named constants and narrow helpers where they clarify repeated logic, new abstractions or
+   dependencies justified, and secondary polish deferred until the primary outcome is working.
    If the work involves sensitive edits or suppression incidents, state how tracked docs, tests,
    contracts, examples, and code comments will avoid real editor names, page titles, revision IDs,
    diff URLs, comments, screenshots, and log excerpts.
@@ -97,6 +103,9 @@ python3 tools/doc_workflow.py all
 - Do not trade away correctness, recovery, or operator-visible status for resource economy. Make any
   cost, latency, throughput, safety, robustness, or documentation tradeoff explicit in the active
   spec or plan.
+- Do not turn narrow requests into broad systems. KISS is mandatory: prefer small direct code,
+  obvious ownership, bounded work, and measured behavior over speculative frameworks, extra
+  background jobs, or polish that does not address the accepted goal.
 - Do not execute destructive edits, broad rewrites, setup-breaking refactors, or incompatible
   schema/state/surface changes on assumption. Get explicit human approval and record the migration
   path first.

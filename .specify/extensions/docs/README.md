@@ -25,6 +25,10 @@ For safety-, reliability-, or performance-sensitive work, the docs gate is also 
 resource goals, low-spec verification, recovery/status evidence, and durable incident lessons must
 be present in the affected maintained or project-local docs. Documentation can be concise, but it
 must not drop the performance evidence or operational lessons needed to repeat the decision.
+For non-trivial work, the docs gate must also preserve the human owner's concrete intent, primary
+success condition, out-of-scope work, and simplicity gate. Polished generated prose does not count
+as closure when the accepted goal is still unclear or the chosen design carries unjustified
+complexity.
 For sensitive-edit, suppression, moderation, or incident work, those lessons must be preserved with
 synthetic or redacted evidence only. The docs gate must not pass tracked files that copy real editor
 names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts identifying a

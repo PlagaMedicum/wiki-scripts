@@ -10,38 +10,27 @@ docmeta:
 
 <!--
 Sync Impact Report
-Version change: 1.8.0 -> 1.9.0
+Version change: 1.9.0 -> 1.10.0
 Modified principles:
-- Added IX. Public-Repo Privacy For Sensitive Edit Evidence
-- IV. Deterministic Documentation, Safe Writes, And Honest Status (expanded tracked evidence privacy)
-- Workflow And Quality Gates (added mandatory synthetic-fixture and redaction requirements)
+- Added X. KISS, Intent First, And Small Code
+- II. Explicit Boundaries, Minimal Coupling (expanded with small-module and responsibility limits)
+- VII. Resource Economy, Robustness, And Durable Lessons (expanded with anti-overengineering rules)
+- Workflow And Quality Gates (added intent, simplicity, and value-focus gates)
 Added sections:
-- IX. Public-Repo Privacy For Sensitive Edit Evidence
+- X. KISS, Intent First, And Small Code
 Removed sections:
 - None
 Templates requiring updates:
 - ✅ .specify/templates/plan-template.md
 - ✅ .specify/templates/spec-template.md
 - ✅ .specify/templates/tasks-template.md
+- ✅ .specify/templates/checklist-template.md
 - ✅ README.md
 - ✅ specs/000-repo-governance/spec.md
 - ✅ specs/000-repo-governance/quickstart.md
+- ✅ specs/000-repo-governance/tasks.md
 - ✅ .specify/extensions/docs/README.md
 - ✅ .specify/extensions/docs/commands/speckit.docs.md
-- ✅ specs/001-real-time-suppression/spec.md
-- ✅ specs/001-real-time-suppression/plan.md
-- ✅ specs/001-real-time-suppression/tasks.md
-- ✅ specs/001-real-time-suppression/quickstart.md
-- ✅ specs/001-real-time-suppression/contracts/runtime-status.md
-- ✅ suppressor/src/catchup.rs
-- ✅ suppressor/src/commands.rs
-- ✅ suppressor/src/runtime.rs
-- ✅ suppressor/src/state.rs
-- ✅ suppressor/src/stream.rs
-- ✅ suppressor/src/tui_status.rs
-- ✅ suppressor/src/tui_view.rs
-- ✅ suppressor/src/worker.rs
-- ✅ suppressor/src/mw_api.rs
 - ⚠ `.specify/templates/commands/*.md` is not present in this repo; repo-local command guidance was checked in `.specify/extensions/docs/commands/` instead
 Follow-up TODOs:
 - Docs gate is blocked by unrelated inactive feature metadata:
@@ -66,7 +55,11 @@ Projects MUST keep domain logic, orchestration, and adapters visibly separated. 
 frontends, and backends MUST communicate through explicit interfaces. Shared code is allowed, but
 it SHOULD be isolated deliberately in modules, libraries, or separate tools when that boundary is
 real. "We may reuse this later" is not enough reason to keep unrelated workflows in one runtime or
-one tangled module graph.
+one tangled module graph. A module, service, or command that accumulates multiple responsibilities
+MUST be split or simplified before new behavior is added on top of it, unless the active plan
+records why the temporary concentration is smaller and safer than a split. Boundary work MUST remove
+real coupling or make ownership clearer; renaming files, moving code around, or adding abstraction
+layers without reducing complexity is not valid boundary work.
 
 ### III. Narrow, Risk-Based Scope
 
@@ -136,7 +129,9 @@ coalesced or rate-limited warnings, and idle waits over busy loops or unbounded 
 Economy MUST NOT justify weaker correctness, degraded performance, delayed safety actions, lossy
 recovery, missing observability, or reduced documentation quality; any tradeoff between cost,
 latency, throughput, safety, robustness, and documentation completeness MUST be explicit in the spec
-or plan. Documentation economy means concise durable evidence, not undocumented decisions.
+or plan. Performance-sensitive tools MUST avoid work expansion where a narrower query, incremental
+state, batching, or bounded concurrency can produce the same result more directly. Documentation
+economy means concise durable evidence, not undocumented decisions.
 Microservice architecture in this repo means explicit ownership boundaries first. Additional OS
 processes, public services, or dependencies require evidence that they improve isolation,
 robustness, or operator control more than they increase overhead. Incident lessons MUST be preserved
@@ -173,6 +168,25 @@ public-safe exception before it is written. If an agent discovers real sensitive
 tracked files, it MUST stop expanding that evidence, replace it with synthetic or redacted material,
 and treat the cleanup as safety work before release trust.
 
+### X. KISS, Intent First, And Small Code
+
+Keep it simple, stupid is mandatory project philosophy. Before planning or implementing
+non-trivial work, agents MUST restate the human owner's goal in concrete terms and identify what is
+out of scope. If that intent is ambiguous enough to risk the wrong product, the agent MUST ask a
+direct question and stop the affected decision until it is answered. Implementation MUST prefer the
+smallest clear design that satisfies the accepted requirement, using existing repo patterns before
+new abstractions, dependencies, services, queues, background jobs, generated surfaces, or broad
+refactors. Extra structure is allowed only when it removes real complexity, protects safety, or
+improves measurable operation more than it costs.
+
+Code MUST stay clean, tidy, logical, and small. New behavior SHOULD be expressed through named
+constants, narrow functions, explicit data structures, and modules with one obvious responsibility.
+Repeated logic MUST be shared only when sharing clarifies the code; forced abstractions and generic
+frameworks are prohibited when straightforward local code is clearer. Agents MUST NOT hyperfixate
+on cosmetic, secondary, or speculative improvements while the primary user goal is slow, broken, or
+unclear. When a simple direct fix and a large architectural rewrite could both work, the direct fix
+wins unless the plan proves the rewrite is necessary for correctness, safety, or durable speed.
+
 ## Language And Deployment Policy
 
 - Python is the default language for smaller and faster-turnaround wiki automation.
@@ -193,6 +207,9 @@ and treat the cleanup as safety work before release trust.
   for repo-local workflow state.
 - Spec Kit provides the structure; Codex or other LLM tools may draft, analyze, or implement
   within that structure, but they do not establish product intent on their own.
+- Before non-trivial planning or implementation, restate the human owner's concrete intent, primary
+  success condition, and out-of-scope work. If that restatement exposes a material ambiguity, ask a
+  direct question before choosing the design.
 - Close non-trivial work with `make docs`, `python3 tools/doc_workflow.py all`, or
   `/speckit.docs`.
 - Managed docs MUST be covered by `.specify/doc-registry.json`.
@@ -233,6 +250,15 @@ and treat the cleanup as safety work before release trust.
 - Safety-, reliability-, or performance-sensitive specs and plans MUST include resource goals,
   bounded concurrency/state/logging decisions, recovery/status behavior, and test or benchmark
   evidence scaled to the risk.
+- Plans and task lists MUST include a simplicity check for non-trivial work: smallest viable design,
+  existing patterns reused, new abstractions/dependencies justified, obvious module ownership, and
+  any complexity debt named before implementation continues.
+- Agents MUST prioritize working value and the human's stated pain point over secondary polish,
+  speculative generalization, or exhaustive treatment of low-value details. Hyperfixation on minor
+  surfaces is a process failure when the primary behavior is still unproven or unacceptable.
+- Refactors are valid only when they make current work simpler, safer, faster, or easier to verify.
+  Broad reshuffles, abstraction layers, and "future-proof" structures require explicit plan
+  justification and should be deferred when a small direct change can solve the accepted problem.
 - Task lists SHOULD include compatibility fixtures, migration verification, rollback/fallback
   checks, and setup-preservation checks whenever prior setups or machine-readable surfaces are at
   risk.
@@ -278,4 +304,4 @@ Compliance review expectations:
 - significant reviews SHOULD check constitution compliance
 - if work intentionally violates a principle, the spec and plan MUST justify it explicitly
 
-**Version**: 1.9.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-07
+**Version**: 1.10.0 | **Ratified**: 2026-04-18 | **Last Amended**: 2026-05-10

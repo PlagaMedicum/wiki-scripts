@@ -8,6 +8,10 @@ docmeta:
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
   - speckit-plan live-priority parallel execution update on 2026-05-09
   - speckit-plan live-latency clarification update on 2026-05-09
+  - speckit-plan KISS/catch-up simplification update on 2026-05-10
+  - speckit-plan rsynced crash evidence update on 2026-05-13
+  - speckit-plan rsynced old-command deployment evidence update on 2026-05-14
+  - polling-first MVP hotfix contract alignment on 2026-05-14
 ---
 
 # Contract: Runtime Status
@@ -17,9 +21,11 @@ docmeta:
 
 The daemon persists local runtime status for the TUI and operator diagnostics in
 `runtime_status.json`. This file is daemon-owned realtime truth. One-shot commands may read it but
-must not overwrite it. The contract is compatibility-first: existing fields remain readable where
-practical, new fields are additive, and older shapes must degrade safely into non-healthy or
-migration-needed diagnostics instead of false healthy status.
+must not overwrite it. The current MVP treats recentchanges polling as the authoritative freshness
+path; retained stream fields remain compatibility or diagnostic evidence only. The contract is
+compatibility-first: existing fields remain readable where practical, new fields are additive, and
+older shapes must degrade safely into non-healthy or migration-needed diagnostics instead of false
+healthy status.
 
 The primary TUI status view should not render this file field-for-field. It should derive a compact
 operator-first summary from it and leave raw transport or bookkeeping fields as secondary
@@ -72,7 +78,7 @@ diagnostics.
     "last_successful_hide_url": "https://example.invalid/wiki/Special:Diff/9000001",
     "current_lag_seconds": 0,
     "current_lag_millis": 284,
-    "current_lag_source": "stream",
+    "current_lag_source": "polling",
     "queue_depth": 0,
     "live_lane": {
       "queue_depth": 0,
@@ -143,8 +149,8 @@ diagnostics.
     "last_recovery_started_at": "2026-04-29T08:31:00Z",
     "last_recovery_completed_at": "2026-04-29T08:31:08Z",
     "last_reconnect_reason": null,
-    "last_freshness_probe_at": null,
-    "last_freshness_probe_source": "stream",
+    "last_freshness_probe_at": "2026-04-29T09:10:03Z",
+    "last_freshness_probe_source": "polling",
     "catchup_active": false,
     "backoff_until": null,
     "latest_error_code": null,
@@ -160,7 +166,12 @@ diagnostics.
     },
     "latest_recovery_summary": {
       "scope_label": "since last successful hide",
-      "requested_by": "stream-gap",
+      "candidate_source": "recentchanges",
+      "candidate_count": 7,
+      "watched_candidate_count": 3,
+      "fallback_reason": null,
+      "candidate_discovery_elapsed_ms": 214,
+      "requested_by": "polling-gap",
       "started_at": "2026-04-29T08:31:00Z",
       "ended_at": "2026-04-29T08:31:08Z",
       "pages_checked": 17,
@@ -229,6 +240,11 @@ The primary view should therefore render, in priority order:
    verification result when that evidence affects trust.
 9. `Compatibility` or `migration` notice when present.
 
+The primary view should fit in the normal status pane without depending on wrapped diagnostic
+paragraphs. Candidate discovery counts, fallback reasons, and progress are shown only while
+recovery is active or degraded. Raw page counts, checkpoint internals, and command-report details
+belong in diagnostics or command output.
+
 The primary view should not spend its first rows on:
 
 - raw `last_event_id` JSON
@@ -241,7 +257,7 @@ The primary view should not spend its first rows on:
 ## Required Realtime Semantics
 
 - `state=healthy` means all of the following are true:
-  - live recentchange freshness is within threshold
+  - live recentchange freshness from the authoritative polling path is within threshold
   - no required recovery or verification is currently incomplete
   - no active throttle backoff blocks required recovery
   - scheduled verification evidence is not overdue for the current uninterrupted daemon period
@@ -249,24 +265,36 @@ The primary view should not spend its first rows on:
     visible actionable issue
   - the latest live hide outcome is not failed, unresolved, or blocked without a compensating
     successful retry or recovery result
-- `state=recovering` or `state=catching-up` means an actual recovery, verification, or throttle
-  backoff is active. The state must converge out of this label once work has ended.
+- `state=catching-up` means an actual recovery, verification, or throttle backoff is active. The
+  state must converge out of this label once work has ended.
 - `state=stale` means the daemon is running but freshness exceeded threshold and recovery is needed
   or still being evaluated.
-- `state=degraded` or `state=unhealthy` means the stream may still be fresh, but live protection is
-  not trustworthy because the latest actionable live outcome failed, remained unresolved, is waiting
-  on a recovery path, or because launch-path, PID-file, runtime-status, or detached-log evidence
-  does not agree.
-- `state=blocked` means rights, session, or wiki-side conditions prevent continued hiding.
+- `state=degraded` or `state=unhealthy` means diagnostic transport evidence may still look fresh, but
+  live protection is not trustworthy because the authoritative polling path is stale, the latest
+  actionable live outcome failed, remained unresolved, is waiting on a recovery path, or because
+  launch-path, PID-file, runtime-status, or detached-log evidence does not agree. It also covers
+  required local state persistence failures, such as retained cursor writes or atomic replace
+  failure, until retry or operator action restores trustworthy monitoring.
+- `state=blocked` means rights, session, or wiki-side conditions prevent continued hiding. A
+  blocked state must keep the daemon process alive and status fresh; classified RevDel auth or
+  permission failures are action/process-health evidence, not permission to call `process::exit`.
 
 ## Required Field Semantics
 
-- `last_event_id` remains a transport cursor for resume behavior. It is not a primary operator
-  field, and the TUI should not label it as “last event” for humans.
+- `last_event_id` remains a transport cursor for retained observer resume behavior. It is not a
+  primary operator field, and the TUI should not label it as “last event” for humans.
 - `current_lag_seconds` remains the compatibility whole-seconds lag field.
 - `current_lag_millis` is an additive precise lag field for sub-second operator display.
-- Both lag fields are recalculated from the latest observed target-wiki event or from a bounded API
-  freshness probe when the stream is silent.
+- `current_lag_source` should normally be `polling` for current MVP trust. `stream` remains a
+  compatibility or secondary diagnostic value, and `api-freshness-probe` is acceptable when the
+  runtime must bound freshness without a fresh poll result.
+- When `current_lag_source=polling`, both lag fields represent the age of the last successful
+  authoritative poll cycle rather than the age of the last observed edit. A quiet wiki may
+  therefore show a fresh polling lag even when `last_event_observed_at` is older.
+- When polling cannot advance, lag may instead be derived from the latest observed target-wiki
+  event or from a bounded API freshness probe.
+- `last_stream_opened_at` is a retained observer diagnostic field. It must not by itself clear
+  degraded or unhealthy live protection.
 - `last_matching_revid_url` and `last_successful_hide_url` must be safe browser-openable URLs,
   typically `https://be.wikipedia.org/wiki/Special:Diff/<revid>`.
 - `daemon_started_at` records the start of the current continuous protection session used for TUI
@@ -288,6 +316,18 @@ The primary view should not spend its first rows on:
   `latency.observed_to_hidden` are bounded recent live samples. They support deterministic tests
   and release evidence for SC-001. Missing latency fields are compatible with older status files
   but block new latency-readiness claims.
+- `live_lane` and `background_lane` may be missing from older status files. That remains
+  parse-compatible, but a target-host `server-start` run missing these fields is evidence of an old
+  deployed binary and blocks T052 lane-aware smoke readiness until a rebuilt binary is launched.
+- `latest_recovery_summary.candidate_source` records the candidate-first discovery source for
+  ordinary startup or gap recovery. A full watched-set scan must record `fallback_reason` unless it
+  is an explicit nightly/full verification run.
+- `latest_recovery_summary.candidate_discovery_elapsed_ms` records aggregate discovery time only;
+- If an operator claims a rebuilt current binary was relaunched but the same-run status still lacks
+  the lane/latency fields above, or a same-run recovery summary still lacks the candidate-first
+  fields expected for that recovery path, treat the file as stale or wrong-binary evidence and keep
+  T052 blocked.
+  it must not store real sensitive incident identifiers.
 - `latest_actionable_issue` is preferred over raw error codes for primary rendering. Raw
   `latest_error` remains available as secondary diagnostic detail.
 - `last_daytime_verification_*` and `last_nightly_full_recheck_at` provide operator evidence that
@@ -333,8 +373,13 @@ Rules:
 - Preserve throttle hints such as `retry_after_seconds` when available.
 - The same error model applies to live, recovery, verification, source-refresh, and freshness-probe
   failures.
-- Rate-limit failures may populate `latest_actionable_issue` even if the stream itself remains
-  fresh.
+- Rate-limit failures may populate `latest_actionable_issue` even if retained observer diagnostics
+  still look fresh.
+- Classified RevDel auth or permission failures must populate blocked or unhealthy runtime status
+  and must not terminate the daemon process.
+- Local state persistence failures that affect realtime correctness, including retained cursor
+  writes, must populate `latest_actionable_issue.kind="state-persistence"` or an equivalent compact
+  diagnostic and keep the status non-healthy until retry succeeds.
 
 ## Recovery And Verification Summary Contract
 
@@ -429,6 +474,10 @@ Rules:
 - Older runtime files missing new additive fields must still parse through safe defaults.
 - Missing fields that are required for trustworthy interpretation must degrade into a non-healthy or
   migration-needed diagnostic, not a false healthy state.
+- Missing lane or latency fields on a target-host run are compatible as old-shape status, but they
+  prove only backwards parsing. They do not prove the current lane-aware MVP binary is deployed.
+- When a recovery summary exists on a target-host run, missing candidate-first fields prove only
+  legacy recovery evidence, not current candidate-first deployment readiness.
 - Existing reconciliation fields remain readable.
 - Existing `last_event_id.txt` may remain a resume artifact, but the operator surface should prefer
   the richer daemon-owned runtime contract.

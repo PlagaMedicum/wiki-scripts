@@ -27,6 +27,11 @@ tradeoffs.
 - The repo is not trying to become a generic wiki automation framework today.
 - Most of the repo has been built with heavy LLM assistance, so durable lessons need to be fixed in
   code, tests, governance docs, or explicit comments after review.
+- Human intent is the source of product direction. Agents must restate the concrete goal and ask
+  direct questions when ambiguity could lead to the wrong product.
+- Keep it simple, stupid is mandatory repo philosophy. The smallest clear design that solves the
+  accepted problem is preferred over generic frameworks, speculative abstractions, broad rewrites,
+  new services, or secondary polish.
 - This is a public repository. Sensitive-edit incident evidence must be redacted or synthetic in
   tracked files, including docs, tests, contracts, examples, and code comments.
 - Low-spec local operation is a default constraint for operational tools. Resource economy must
@@ -67,6 +72,9 @@ tradeoffs.
   separate long-running processes, public services, or dependencies.
 - Queues, concurrency, durable state, polling, and log volume should be bounded when unbounded growth
   could affect correctness, latency, recovery, or operator trust.
+- Modules should have one obvious responsibility. Oversized functions, duplicated constants,
+  copy/pasted logic, and abstraction layers that do not reduce current complexity are defects to fix,
+  not acceptable scaffolding for future work.
 
 ### Workflow
 
@@ -92,6 +100,9 @@ tradeoffs.
   docs such as `questions.md` or `review-queue.md` instead of relying only on chat state.
 - Spec Kit provides the structure. Codex or other LLM tools may draft and implement inside that
   structure, but they do not define the client vision by themselves.
+- Before non-trivial planning or implementation, restate the human owner's concrete intent, primary
+  success condition, and out-of-scope work. If the restatement exposes a material ambiguity, ask a
+  direct question before choosing the design.
 - Repo policy belongs in the constitution and this governance stack, not spread across many
   overlapping docs.
 - For long-running work, keep commits reasonably small and descriptive so the feature history stays
@@ -100,6 +111,9 @@ tradeoffs.
   recovery/status behavior, low-spec verification, and durable lessons captured in tests or docs.
 - Resource constraints must not be used to lower performance goals or skip documentation of evidence,
   operational checks, and lessons learned.
+- Plans and tasks should include a simplicity gate for non-trivial work: smallest viable design,
+  existing patterns reused, new abstractions or dependencies justified, obvious module ownership,
+  and complexity debt named before implementation continues.
 - Compatibility and migration checks should be treated as correctness work when machine-readable
   surfaces, stored state, or operator workflows can break across versions.
 - Incident lessons about sensitive edits must be captured without real editor names, IPs, page
@@ -147,6 +161,8 @@ tradeoffs.
   daemon unless a process split is justified.
 - Suppressor work should treat log storms, unbounded queues, needless polling, and oversized durable
   state as correctness risks because they can delay hiding or hide real operational failures.
+- Suppressor work must not hide slow behavior behind complicated reconciliation logic. Recent live
+  edits stay the primary path, and background checks should use direct, bounded, measurable work.
 
 ### Environment Contract
 
@@ -182,6 +198,8 @@ tradeoffs.
   docs and quickstart checks so later maintainers can repeat the evidence.
 - Concise docs are preferred, but undocumented operational decisions are not acceptable for
   safety-sensitive tools.
+- Concise code is preferred for the same reason: generated or agent-written code must be reduced to
+  the clearest working shape before production trust, especially after rapid iteration.
 - When a feature or review produces a durable governance lesson, preserve traceability back to the
   originating feature or decision source when that materially helps later audit or git-history
   lookup.

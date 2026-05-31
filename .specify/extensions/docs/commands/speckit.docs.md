@@ -32,6 +32,9 @@ This command runs the same final gate as `make docs`:
   verification, recovery/status evidence, and incident lessons have been captured before treating
   the docs gate as complete. Concision is fine; missing performance evidence or operational lessons
   is not.
+- Confirm that non-trivial work records the human owner's intent, primary success condition,
+  out-of-scope work, and simplicity gate. The docs gate should not hide unresolved intent or
+  unjustified complexity behind polished generated prose.
 - For sensitive-edit, suppression, moderation, or incident work, confirm tracked docs, tests,
   contracts, examples, fixtures, and comments use synthetic or redacted evidence, not real editor
   names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts identifying a

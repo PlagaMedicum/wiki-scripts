@@ -14,6 +14,36 @@ docmeta:
 
 # Feature Specification: Real-Time Suppression Recovery
 
+## Active Emergency Scope
+
+The active `001` goal is the minimal stable suppressor server. Current work is
+limited to:
+
+- fast automatic hiding of new watched sensitive-page edits
+- bounded catch-up from the last trusted hide anchor after downtime or failure
+- randomized daytime last-24-hours rechecks and nightly full rechecks
+- truthful degraded or blocked runtime status
+- exact deployment proof for the running target-host binary
+
+The following are explicitly out of scope until the same-run target-host smoke
+passes:
+
+- TUI polish beyond showing truthful protection state
+- broad reporting or dashboard growth
+- repo-wide Spec Kit template or workflow cleanup
+- inactive feature work such as `002-fix-git-commit`
+- speculative architecture or operator-surface expansion not needed for live
+  protection
+
+Realtime protection is trusted only when the same run proves: exact binary
+identity, fresh daemon-owned runtime status from that PID, current or bounded
+lag under active edits, quick hiding of a new watched edit, and visible failure
+state without daemon exit. A stale replayed hide while the daemon remains hours
+behind is a failure, not partial success.
+
+Historical evidence sections below explain why this freeze exists, but they do
+not widen the active scope.
+
 
 ## Clarifications
 
@@ -50,15 +80,15 @@ As the suppressor operator, I need the operator console to show whether real-tim
 **Acceptance Scenarios**:
 
 1. **Given** the suppressor has not observed recent change activity for longer than the freshness threshold while wiki activity continues, **When** the operator views status, **Then** the console clearly reports stale real-time monitoring and the current lag.
-2. **Given** the real-time stream disconnects, stalls, or resumes with a gap, **When** the daemon recovers, **Then** it catches up on eligible missed edits before reporting the real-time path as healthy again.
+2. **Given** the authoritative recentchanges polling path stalls, falls behind, or detects a recovery gap, **When** the daemon recovers, **Then** it catches up on eligible missed edits before reporting the real-time path as healthy again.
 3. **Given** a suppression attempt fails because of rights, session, rate, network, or wiki-side errors, **When** the daemon continues running, **Then** the operator sees a clear actionable notice and the edit remains queued for retry or manual review.
 4. **Given** fresh target-wiki events continue to arrive but the latest eligible live suppression attempt is failed, throttled, blocked, or unresolved, **When** the operator views status, **Then** the console reports degraded protection rather than a healthy real-time state.
 5. **Given** the operator runs an emergency catch-up or coverage report while the daemon is already running, **When** the operator views status and command output, **Then** daemon-owned real-time status remains authoritative and the command output is clearly distinguishable from daemon evidence.
-6. **Given** the stream reopens without a real missed-change gap or only reconnect noise occurred, **When** monitoring resumes, **Then** the daemon does not relabel the event as startup recovery and does not remain in a recovery state after recovery has ended.
+6. **Given** the retained observer reconnects or the polling loop overlaps without a real missed-change gap, **When** monitoring resumes, **Then** the daemon does not relabel the event as startup recovery and does not remain in a recovery state after recovery has ended.
 7. **Given** an updated version changes a previously documented operator status surface, report surface, or authoritative launch path, **When** the operator prepares to run that version, **Then** the release evidence clearly states whether the previous setup remains valid and, if not, the required migration or verification steps before the new version is trusted.
 8. **Given** the suppressor was offline or failed for a period, **When** automatic recovery starts, **Then** the daemon resumes coverage from the timestamp of the last successful hide recorded before the interruption and does not declare healthy until the missed watched-page exposure since that point is hidden or reported unresolved.
-9. **Given** the daemon stays up through the day, **When** a randomized verification run is scheduled, **Then** it rechecks the rolling last 24 hours of watched-page exposure and records that exact verification window for the operator.
-10. **Given** the daemon stays up through the night, **When** the nightly fallback run is scheduled, **Then** it performs a full watched-set recheck at a randomized night hour rather than relying only on the daytime rolling window.
+9. **Given** the operator needs a rolling verification pass during the current emergency live-only production phase, **When** they run the explicit `Last 24 hours` verification, **Then** it rechecks the rolling last 24 hours of watched-page exposure and records that exact verification window for the operator.
+10. **Given** the operator needs a broader fallback verification pass during the current emergency live-only production phase, **When** they run the explicit full watched-set recheck, **Then** it performs that full watched-set verification without being mistaken for the primary realtime protection path.
 11. **Given** an updated version changes the authoritative operator surface, launch path, or status artifact format, **When** the operator reviews release evidence before trusting that version, **Then** the evidence includes the required human approval point, required migration checks, and a clear fallback or rollback path to the last trusted workflow.
 
 ---
@@ -80,7 +110,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 ### Edge Cases
 
 - The daemon starts after eligible edits already appeared and must catch up without waiting for the next nightly run.
-- The real-time feed reconnects and replays events that were already hidden.
+- The retained observer reconnects and replays events that were already hidden.
 - The watched sensitive-page list changes while the daemon is running.
 - The suppressor account loses rights, has an expired session, or is throttled while eligible edits are arriving.
 - A page is moved, deleted, protected, or otherwise changes state between edit detection and hiding.
@@ -99,7 +129,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - A low-spec host runs the daemon and TUI concurrently while catch-up, logging, and status persistence are active.
 - A one-shot diagnostic or reporting action runs while the daemon is healthy, catching up, stale, unhealthy, or blocked and must not replace daemon-owned status truth.
 - Fresh target-wiki events continue to arrive while the latest live hide outcome is still failed, throttled, blocked, or unresolved.
-- The stream reopens or reconnects without a true missed-change gap and must not be mislabeled as startup recovery.
+- The retained observer reconnects or the polling loop overlaps without a true missed-change gap and must not be mislabeled as startup recovery.
 - Recovery starts after an outage longer than the daytime rolling verification window and must still resume from the last successful hide instead of silently truncating coverage.
 - A randomized daytime rolling 24-hour recheck overlaps with a source-triggered recovery, manual catch-up, or nightly full recheck and must stay truthful about which coverage window each action is handling.
 - The actual deployment path uses a local supervisor rather than a system service, so operator verification must use the authoritative runtime surface for that path.
@@ -121,12 +151,12 @@ As the suppressor operator, I need confidence that edits made after the suppress
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST continuously monitor new changes on watched sensitive pages whenever the suppressor daemon is running.
+- **FR-001**: The system MUST continuously monitor new changes on watched sensitive pages whenever the suppressor daemon is running, using MediaWiki recentchanges polling as the authoritative live detector for the MVP.
 - **FR-002**: The system MUST automatically hide each newly published eligible edit on a watched sensitive page without requiring manual refresh, cache reload, or nightly reconciliation.
 - **FR-003**: The system MUST keep the real-time hiding path active independently from slower reconciliation, coverage, or reporting work. Recentchange-triggered live work MUST be accepted, submitted, or visibly degraded even while reconciliation, catch-up, verification, nightly fallback, or one-shot command work is active; the MVP has no fixed internal live-worker handoff SLA beyond the external hide timing in SC-001, but it MUST measure handoff and completion timings and optimize them as fast as practical.
 - **FR-004**: The system MUST determine and record one final outcome for every observed watched-page edit: hidden, already hidden, skipped by policy, failed, retried, or unresolved.
-- **FR-005**: The system MUST detect stale, stalled, disconnected, or gapped real-time monitoring and attempt recovery without operator intervention.
-- **FR-006**: The system MUST catch up on eligible watched-page edits missed during daemon downtime, feed gaps, restart, or recovery from the timestamp of the last successful hide recorded before the interruption, or from an explicitly documented older trusted recovery anchor if that timestamp is unavailable, before declaring real-time monitoring healthy.
+- **FR-005**: The system MUST detect stale, stalled, disconnected, or gapped real-time monitoring on the authoritative polling path and attempt recovery without operator intervention; retained observer transport evidence may assist diagnosis but must not by itself restore healthy status.
+- **FR-006**: The system MUST catch up on eligible watched-page edits missed during daemon downtime, polling or observer gaps, restart, or recovery from the timestamp of the last successful hide recorded before the interruption, or from an explicitly documented older trusted recovery anchor if that timestamp is unavailable, before declaring real-time monitoring healthy.
 - **FR-007**: The system MUST surface real-time health in the operator console, including current freshness, lag, last observed change, last eligible edit handled, last hiding action, latest actionable error, and enough context to distinguish transport freshness from live hide effectiveness, and the primary operator view MUST use plain-language labels and consistent field naming that answer whether protection is working now, what background work is active, what the last meaningful hide/error was, and how long the daemon has been continuously protecting edits.
 - **FR-008**: The system MUST provide an operator-initiated emergency catch-up or verification action that checks recent watched-page edits and reports unresolved exposure.
 - **FR-009**: The system MUST provide an accident-window coverage report that separates hidden, already-hidden, skipped, failed, and unresolved edits, and it MUST also provide a clearly labeled operator-visible `Last 24 hours` verification preset so the operator can run or review a rolling 24-hour check without supplying custom timestamps.
@@ -138,7 +168,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **FR-015**: The system MUST treat changes to `Удзельнік:Wizardist/SuppressionList` and configured source-adjacent request pages, including `Вікіпедыя:Запыты да схавальнікаў`, as immediate recovery triggers that refresh source state and run bounded catch-up for newly added or recently affected watched pages, or visibly defer that follow-up with a retry point when shared recovery limits prevent immediate execution.
 - **FR-016**: The system MUST serialize MediaWiki API timestamp parameters in a MediaWiki-accepted UTC second-precision format and test this behavior against catch-up and coverage queries.
 - **FR-017**: The system MUST classify MediaWiki/API/transport failures into compact non-sensitive categories, persist the actionable class/code/status and failure context, and aggregate repeated failures so one root cause cannot flood the TUI or terminal, regardless of whether the failure occurs in live hiding, source refresh, catch-up, or reconciliation.
-- **FR-018**: The system MUST keep implementation boundaries microservice-like inside the existing local daemon: stream ingestion, source refresh, catch-up, worker execution, state persistence, and TUI rendering communicate through explicit structs, bounded channels, and small interfaces, without adding extra OS services or public network surfaces for this feature.
+- **FR-018**: The system MUST keep implementation boundaries microservice-like inside the existing local daemon: authoritative recentchanges polling, retained observer or transport compatibility, source refresh, catch-up, worker execution, state persistence, and TUI rendering communicate through explicit structs, bounded channels, and small interfaces, without adding extra OS services or public network surfaces for this feature.
 - **FR-019**: The system MUST remain economical on low-spec hardware by using bounded queues, bounded catch-up windows, bounded concurrency, compact persisted state, coalesced logging, and no unbounded in-memory revision/title buffers, without lowering latency/recovery targets or dropping documentation evidence.
 - **FR-020**: The system MUST preserve implementation lessons in durable code comments, tests, and maintained suppressor docs when they prevent recurrence of this incident, especially timestamp formatting, source-list catch-up, error classification, warning coalescing, and test-page benchmark rules.
 - **FR-021**: The system MUST treat the daemon-owned runtime status surface as authoritative for operator real-time health, and one-shot diagnostic, coverage, benchmark, or report actions MUST NOT overwrite or impersonate that daemon-owned state.
@@ -150,8 +180,8 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **FR-027**: The system MUST preserve backward-compatible operator-facing machine-readable status and report surfaces for the previously documented setup, or explicitly declare any intentional incompatibility before release readiness is claimed.
 - **FR-028**: If an update invalidates a previously documented launch path, persisted state artifact, or operator workflow, the system MUST provide an explicit migration notice, required operator actions, the new authoritative diagnostics path, the required human approval point before trusting the new setup, and a clear fallback or rollback path to the last trusted workflow before the update is treated as production-ready.
 - **FR-029**: The system MUST detect incompatible, unreadable, or stale prior operator state or supervisory artifacts and surface a non-healthy or migration-needed diagnostic instead of silently presenting healthy status.
-- **FR-030**: While the daemon remains running, the system MUST schedule randomized daytime verification runs that recheck the rolling last 24 hours of watched-page exposure and record the exact covered window and outcome counts in operator-visible status or reports.
-- **FR-031**: While the daemon remains running, the system MUST schedule a full watched-set fallback recheck at a randomized night hour and keep that run clearly distinct from the rolling last 24-hour daytime verification.
+- **FR-030**: The system MUST provide an operator-visible rolling last 24 hours verification path that records the exact covered window and outcome counts in status or reports. Automatic daytime scheduling MAY remain disabled in the emergency live-only production profile until live-hide soak passes.
+- **FR-031**: The system MUST provide an operator-visible full watched-set fallback verification path that stays clearly distinct from the rolling last 24-hour verification. Automatic nightly scheduling MAY remain disabled in the emergency live-only production profile until live-hide soak passes.
 - **FR-032**: Actionable operator surfaces that show a safe revision identifier for inspection MUST render that identifier as a browser-openable link or equivalent directly usable target without requiring a separate lookup action.
 - **FR-033**: The primary operator status view MUST prioritize operator-meaningful evidence over internal counters by clearly showing current protection state, daemon uptime, current background task and progress, last successful hide, current recovery or verification window, latest actionable error, and any recent offline or stalled interval before exposing secondary diagnostic bookkeeping.
 - **FR-034**: The suppressor Makefile MUST provide an additive server-build target that runs
@@ -163,15 +193,18 @@ As the suppressor operator, I need confidence that edits made after the suppress
   without writing secrets, refuses to start a duplicate live daemon, starts the normal daemon or
   dry-run daemon detached from the invoking terminal, redirects daemon output to a non-sensitive
   operator-visible log path, waits for PID and daemon-owned runtime-status evidence, prints the PID,
-  status path, log path, mode, and config path, and exits successfully only when the background
-  process remains alive after that verification.
+  status path, log path, mode, and config path, records or prints enough safe artifact-identity
+  data to tie that launch to one exact binary, and exits successfully only when the background
+  process remains alive after that verification. Target-host trust for this path requires the same
+  run to prove current daemon-owned runtime status and bounded freshness or lag under active edits;
+  receipt or PID evidence alone is not sufficient.
 
 ### Key Entities
 
 - **Watched Sensitive Page**: A page whose new eligible edits must be protected by the suppressor. Key attributes include page identity, current listing source, and whether it is active for suppression.
 - **Observed Edit**: A newly observed or caught-up change on a watched page. Key attributes include page, edit identifier, timestamp, actor category, eligibility status, and handling outcome.
 - **Suppression Action**: A hide attempt or confirmed hide result for an observed edit. Key attributes include target edit, outcome, timing, error reason if any, and retry state.
-- **Real-Time Health State**: The operator-visible freshness and effectiveness state of background monitoring. Key attributes include last observed change time, last eligible edit time, current lag, recovery state, latest actionable notice, latest protection outcome, and whether stream freshness and hide effectiveness currently agree.
+- **Real-Time Health State**: The operator-visible freshness and effectiveness state of background monitoring. Key attributes include last observed change time, last eligible edit time, current lag, recovery state, latest actionable notice, latest protection outcome, and whether polling-backed freshness and hide effectiveness currently agree.
 - **Coverage Window**: A bounded time range used to verify edits after the suppressor-rights accident or after daemon downtime. Key attributes include start, end, checked pages, counted outcomes, and unresolved items.
 - **API Failure Snapshot**: A compact non-sensitive classification of a MediaWiki/API/transport failure. Key attributes include failure class, API code, HTTP status, retryability, failure context, safe sample title/revision, and timestamp.
 - **Source Refresh Event**: An observed source-list or request-page change plus its refresh and immediate catch-up result. Key attributes include trigger title, trigger revision, old/new source revision, added/removed titles, catch-up scope, outcome, deferred-by-backoff status, retry point, and safe error details.
@@ -190,9 +223,9 @@ As the suppressor operator, I need confidence that edits made after the suppress
 ### Measurable Outcomes
 
 - **SC-001**: Under normal wiki availability and account rights, at least 95% of newly published eligible watched-page edits are hidden within 1 second of becoming visible, and 99% are hidden within 5 seconds; release evidence must report p95 and p99 for the controlled realtime path. No separate fixed internal live-worker handoff limit is required for this MVP, but release evidence must record observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden timings and prove background work does not block live recent edits from reacting.
-- **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, including cases where fresh events continue but the latest live hide outcome is failed, throttled, blocked, or unresolved, the operator console shows a non-healthy state and current lag measured against the latest observed target-wiki event or a bounded API freshness probe when the stream is silent.
+- **SC-002**: If real-time monitoring is stale, stalled, disconnected, or ineffective for more than 10 seconds while relevant wiki activity continues, including cases where fresh events continue but the latest live hide outcome is failed, throttled, blocked, or unresolved, the operator console shows a non-healthy state and current lag measured against the latest polling-observed target-wiki event or a bounded API freshness probe when polling cannot advance. A stale replayed hide while lag remains above this threshold does not count as realtime success.
 - **SC-003**: For daemon restart or real-time recovery gaps up to 30 minutes, eligible watched-page edits missed since the recorded `last_successful_hide_at` timestamp, or since an explicitly documented older trusted fallback anchor when that timestamp is unavailable, are either hidden or reported unresolved within 2 minutes.
-- **SC-003a**: Recovery evidence MUST name the selected anchor, covered window start and end, outcome counts, unresolved samples, and whether the anchor was `last_successful_hide_at` or a fallback; the daemon MUST NOT declare healthy until that selected window is hidden or reported unresolved.
+- **SC-003a**: Recovery evidence MUST name the selected anchor, covered window start and end, outcome counts, unresolved samples, candidate source and candidate counts when candidate-first recovery runs, any fallback reason, and whether the anchor was `last_successful_hide_at` or a fallback; the daemon MUST NOT declare healthy until that selected window is hidden or reported unresolved.
 - **SC-004**: Accident-window verification accounts for 100% of eligible watched-page edits in the selected window as hidden, already hidden, skipped, failed, or unresolved.
 - **SC-005**: The operator can distinguish "running and hiding", "running but catching up", "running but unhealthy", "blocked by rights/session/wiki error", and "one-shot operator command output" from the console without inspecting raw logs.
 - **SC-006**: Automated or controlled verification covers immediate hiding, feed stall recovery, missed-edit catch-up, duplicate event handling, a burst of at least 10 controlled eligible events across watched pages, public `user|comment` RevDel safety boundaries, and rights/session failure reporting.
@@ -214,16 +247,18 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - **SC-021**: After rsyncing the server binary to the target host, the operator can run
   `./suppressor --config ./config.toml server-start`, close the SSH terminal, and within 10 seconds
   verify that the PID remains alive, `runtime_status.json` is daemon-owned and updating, daemon
-  output is written to the printed log path, and missing config/secrets or duplicate/stale daemon
-  conditions fail with a non-healthy diagnostic instead of creating an orphaned or falsely healthy
-  daemon.
+  output is written to the printed log path, the launch is tied to a safe artifact-identity tuple,
+  and the same run proves current or bounded lag under live activity rather than only replaying
+  stale edits. Missing config/secrets, duplicate or stale daemon conditions, legacy-only status
+  shape, or stale replay while hours behind must fail with a non-healthy diagnostic instead of
+  creating an orphaned or falsely healthy daemon.
 
 ## Assumptions
 
 - The suppressor remains scoped to be.wikipedia.org sensitive-page suppression and does not broaden into a general moderation tool.
 - The operator account is expected to have the required suppression rights during normal operation; missing rights are treated as an urgent unhealthy condition.
 - Manual refresh and cache reload are diagnostic or recovery aids, not prerequisites for hiding newly published edits.
-- Nightly reconciliation remains a fallback safety net; real-time hiding is the primary protection path.
+- Nightly reconciliation remains a fallback safety net; recentchanges polling is the primary protection path, and retained EventStreams observer evidence is diagnostic only.
 - The exact accident window can be supplied during planning or operation; the feature must support checking any bounded recent window rather than hard-coding one date range.
 - The persisted timestamp of the last successful hide is trustworthy enough to serve as the primary automatic recovery anchor unless an older explicit compatibility rule says otherwise.
 - Sensitive article content and hidden text must not be displayed in routine logs, reports, or console status.
@@ -255,7 +290,7 @@ As the suppressor operator, I need confidence that edits made after the suppress
 - Update operator-facing docs and release evidence to explain the required approval point, compatibility verdict, and fallback or rollback path whenever a release changes the trusted operator workflow or status artifacts.
 - Update implementation docs with internal service boundaries, resource-economy defaults, state/log bounds, and incident lessons that should shape future suppressor changes.
 - Update operations docs with low-spec expectations, configured bot test page benchmark use, bot-edit requirements, and release evidence interpretation.
-- Update operator and operations docs to explain daemon-owned status truth, one-shot command separation, launch-path-aware verification, and degraded protection versus mere stream freshness.
+- Update operator and operations docs to explain daemon-owned status truth, one-shot command separation, launch-path-aware verification, and degraded protection versus mere transport freshness.
 - Update operator-facing docs to define the primary status view in operator language, including uptime, current task, recovery window, last successful hide, latest actionable error, and which secondary diagnostics are intentionally de-emphasized.
 - Update operator-facing docs to state the post-publication architecture limit explicitly and avoid any claim that the current feature can guarantee zero first-view prevention.
 - Update feature-local docs, contracts, tests, and examples to use synthetic or redacted evidence for

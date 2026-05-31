@@ -12,10 +12,166 @@ docmeta:
   - speckit-plan server-running launch-path mismatch update on 2026-05-07
   - speckit-plan live-priority parallel execution update on 2026-05-09
   - speckit-plan live-latency clarification update on 2026-05-09
+  - speckit-plan KISS/catch-up simplification update on 2026-05-10
+  - speckit-plan rsynced crash evidence update on 2026-05-13
+  - speckit-plan rsynced old-command deployment evidence update on 2026-05-14
 ---
 
 # Research: Real-Time Suppression Recovery
 
+
+## Decision: Apply a KISS remediation reset before adding more suppressor behavior
+
+**Rationale**: Constitution v1.10.0 makes KISS, human intent, and small code mandatory. The active
+human intent is not to build a broader platform; it is to make the existing suppressor react fast to
+recent watched edits, keep reconciliation in the background, and show a compact trustworthy status.
+The next design step must therefore reduce accidental complexity instead of adding another layer of
+status fields, queues, or docs. New abstractions are allowed only when they remove current
+duplication or make a measured delay boundary smaller and easier to test.
+
+The first simplification target is not a cosmetic refactor. It is the slow startup/recovery path:
+the daemon can spend minutes scanning all watched pages even when only a small candidate set exists
+for the selected window. The second target is the primary TUI: it must answer the operator's
+current protection questions before secondary counters and command output.
+
+**Alternatives considered**:
+
+- Continue feature expansion and clean up later. Rejected because the operator's primary complaint
+  is delay and tangled code now.
+- Do a broad rewrite of `runtime.rs`, `catchup.rs`, and the TUI before fixing behavior. Rejected
+  because it risks another large unproven structure. Split only at the boundaries needed for the
+  current measured failures.
+- Treat the slow catch-up as acceptable because reconciliation may be slower. Rejected because
+  slower background work still must not block live recent edits or make startup look stuck.
+
+## Decision: Replace ordinary startup full-set catch-up with candidate-first recovery
+
+**Rationale**: The current catch-up implementation iterates the watched-title set and asks for
+revisions title by title. When the last successful hide anchor is days old, startup can turn into a
+serial scan across the entire watched set even if the selected window contains only a small number
+of relevant edits. This is exactly the wrong shape for a latency-sensitive daemon.
+
+The preferred recovery algorithm is:
+
+1. Select the recovery anchor and window.
+2. Query a bounded global candidate source for changes in that window, such as recentchanges.
+3. Normalize and filter candidates against the watched-title cache.
+4. Verify/hide only matching candidate revisions through the background lane.
+5. Record aggregate progress and timing.
+6. Fall back to per-title watched-set scanning only when candidate discovery is unavailable,
+   incomplete for the selected window, or explicitly requested as a full check.
+
+This keeps large windows possible without making every ordinary startup behave like a full nightly
+recheck. It also preserves the user's rule that reconciliation or nightly work may be slower while
+live recent edits continue reacting.
+
+**Alternatives considered**:
+
+- Keep the current per-title scan and increase concurrency. Rejected because it still does too much
+  work and can waste API budget on pages with no edits.
+- Always truncate recovery to a short recent window. Rejected because the daemon must not silently
+  drop coverage after downtime.
+- Always run a full watched-set pass at startup. Rejected because full scans belong to nightly/full
+  verification, explicit operator checks, or fallback conditions, not ordinary recent recovery.
+
+## Decision: Make the TUI primary status compact and make the log pane honest
+
+**Rationale**: The current primary status can contain many lines of internal counters, command
+output, stale-check details, and notices. That is technically informative but not operator-first.
+The primary TUI should show the small set of facts that answer whether protection is working now:
+protection state, current work, live lag, last successful hide, latest actionable issue, and
+full-check freshness only when it affects trust.
+
+The log pane must also be honest about its source. If it only contains lines captured by the current
+supervisor session, it should not behave or label itself like a persistent daemon log tail. A
+detached/current daemon log tail is useful only if it actually reads the log path for that daemon
+run.
+
+**Alternatives considered**:
+
+- Keep adding status rows to explain every internal state. Rejected because it makes the important
+  facts harder to find.
+- Hide all diagnostics. Rejected because secondary diagnostics are still useful when the primary
+  answer is degraded or blocked.
+- Treat the empty/bottom-follow log pane as a bug only in scrolling. Rejected because the deeper
+  issue is that the pane does not clearly state whether it is session output or daemon log output.
+
+## Decision: Treat rsynced server evidence as crash diagnosis, not smoke readiness
+
+**Rationale**: The 2026-05-13 rsynced target-host bundle shows that the old missing
+`[realtime]` config failure is no longer the active server failure: the config now contains the
+reviewed realtime section and the daemon evidence can be tied to a `server-start` PID/status/log
+set. This is enough to update the T040 diagnosis from launch-path mismatch toward mostly aligned
+launch evidence, pending logout-survival confirmation and concise non-secret recording.
+
+The same bundle also shows the server is not running the current MVP design. Runtime status is
+`unhealthy` and lacks the additive live/background lane and latency fields expected after the
+live-priority work. Therefore the server process can be useful diagnostic evidence, but it cannot
+be used for T052 smoke readiness or release trust until a rebuilt current binary is rsynced and
+relaunched.
+
+The 2026-05-14 follow-up bundle narrows the deployment problem further. The crash-resilience fixes
+are now implemented locally and covered by tests, but a bundle collected after the operator updated
+the binary and relaunched with the old command still lacks the new lane/latency fields and still
+shows legacy recovery evidence. That means the active risk is no longer just "fix local crash
+policy"; it is "prove the target host actually launched the rebuilt artifact."
+
+**Alternatives considered**:
+
+- Treat the server process as release-ready because it is alive. Rejected because `unhealthy`
+  status and missing lane/latency fields show that protection trust and launch liveness are
+  different gates.
+- Keep T040 fully blocked by the old screenshot mismatch. Rejected because the rsynced PID/status/log
+  facts supersede the earlier mismatch diagnosis, although logout-survival evidence still remains.
+- Reopen config policy. Rejected because Q001 already approved the config migration path and the
+  target config now has the reviewed realtime section.
+
+## Decision: Require binary identity proof before target-host smoke trust
+
+**Rationale**: The operator already reported that the binary was updated, yet the 2026-05-14
+rsynced bundle still looked like a legacy deployment. Process liveness and a `server-start` receipt
+are necessary but not sufficient evidence. For this MVP, the deployment path must prove which exact
+binary file launched the daemon and that the same run wrote the current runtime-status shape.
+
+The minimum safe proof is a non-secret artifact identity tuple recorded with the launch evidence,
+such as the resolved binary path plus size/mtime or another reviewed fingerprint, tied to the same
+PID, receipt, and daemon-owned `runtime_status.json`. Without that proof, a stale copied binary,
+wrong launch directory, or older wrapper command can masquerade as a successful update.
+
+**Alternatives considered**:
+
+- Trust the rsync claim alone. Rejected because the target-host status already contradicted the
+  claim once.
+- Treat any running suppressor process as current enough. Rejected because T052 is specifically
+  about the current lane-aware crash-resilient MVP, not generic liveness.
+- Require secrets or raw hashes in tracked docs. Rejected because the proof must stay non-secret and
+  repository-safe.
+
+## Decision: Keep the daemon alive on permission and live-state failures
+
+**Rationale**: The rsynced historical log shows two server-observed crash modes that were present
+in the old deployment. A live RevDel permission failure was classified and then followed by a
+deliberate process exit. Separately, the realtime task stopped after a local cursor or state
+persistence failure. Both behaviors are wrong for the minimal stable server: they turn actionable
+degraded protection into a crashed or silently impaired daemon. The local implementation now fixes
+both, so the remaining question is deployment proof, not design direction.
+
+The daemon should treat classified RevDel auth or permission failure as a blocked protection state,
+not as process death. It may pause further hide submission, enter backoff, or require operator
+action, but it must keep status fresh and preserve evidence. Live-detector state persistence
+failures, including retained observer cursor writes, should create a non-healthy actionable issue
+and a bounded retry or reconnect path. They must not let the realtime task disappear while the rest
+of the daemon appears idle or healthy.
+
+**Alternatives considered**:
+
+- Exit the process on permission failure to fail closed. Rejected because there is no external
+  supervisor guaranteed for the active MVP path, and exit removes the freshest operator evidence.
+- Ignore retained cursor persistence errors and continue without resume state. Rejected because that
+  risks missed-event ambiguity and false healthy status.
+- Add a separate process supervisor or service manager now. Rejected because the MVP intentionally
+  stays one binary and one detached `server-start` command; robustness should be fixed inside that
+  runtime first.
 
 ## Decision: Treat the active visible watched edit as the immediate live-hide incident
 
@@ -70,7 +226,7 @@ must wait until this mismatch is resolved or a human go/no-go exception records 
 ## Decision: Automatic recovery anchors on `last_successful_hide_at`
 
 **Rationale**: The clarified requirement is that if the daemon was offline, stalled, or recovered
-from a stream error, it must cover watched-page exposure from the last known successful hide, not
+from a polling or observer error, it must cover watched-page exposure from the last known successful hide, not
 from an arbitrary recent fixed window. The runtime state already persists `last_successful_hide_at`,
 so the safest compatible design is to treat that timestamp as the primary recovery anchor and use an
 older documented trusted anchor only when this value is missing or unreadable.
@@ -86,8 +242,9 @@ older documented trusted anchor only when this value is missing or unreadable.
 
 ## Decision: Reset the remaining work to a suppressor MVP stabilization path
 
-**Rationale**: Constitution v1.9.0 declares an active human-safety freeze for this feature, makes
-config surfaces human-reviewed operator contracts, and adds public-repo privacy rules. The
+**Rationale**: Constitution v1.10.0 declares an active human-safety freeze for this feature, makes
+config surfaces human-reviewed operator contracts, adds public-repo privacy rules, and requires
+KISS/intent-first planning. The
 highest-risk gap from analysis is not missing feature ambition; it is that critical daemon and
 launch-path verification is too late while broad status, TUI, and reporting work has expanded. The
 remaining work must therefore prioritize the smallest server-runnable daemon MVP: live hiding,
@@ -326,8 +483,9 @@ arbitrary timestamped coverage reports.
 
 ## Decision: Keep full watched-set catch-up for true bootstrap, verified gaps, or explicit full checks
 
-**Rationale**: Ordinary EventStreams reopen noise should not trigger a full startup recovery. Full
-watched-set work should remain limited to cases where the operator can defend the cost:
+**Rationale**: Ordinary retained-observer reopen noise or overlapping polling windows should not
+trigger a full startup recovery. Full watched-set work should remain limited to cases where the
+operator can defend the cost:
 
 - true daemon bootstrap
 - verified gap recovery where the gap scope demands it
@@ -338,7 +496,7 @@ All other reopen or reconnect cases should use the narrowest truthful recovery n
 
 **Alternatives considered**:
 
-- Keep triggering full startup catch-up on every stream `Open`. Rejected because it wastes API
+- Keep triggering full startup catch-up on every observer `Open`. Rejected because it wastes API
   budget and keeps the daemon in `catching-up` too often.
 - Disable all automatic catch-up on reconnect. Rejected because real gaps still need bounded
   backfill.
@@ -363,7 +521,7 @@ early under one repeated root cause, and retain only bounded unresolved samples.
 
 ## Decision: Split live and background suppression execution into parallel bounded lanes
 
-**Rationale**: The latest performance concern is not only EventStreams delay. The implementation
+**Rationale**: The latest performance concern is not only the old EventStreams delay mode. The implementation
 can pass local queue and worker tests while still letting reconciliation, catch-up, scheduled
 verification, or one-shot work occupy the same suppression worker path ahead of a newly observed
 live edit. That makes seconds-to-minutes delay plausible whenever a background batch, API retry
@@ -417,8 +575,8 @@ bounded assertions for:
 - 10-edit synthetic burst behavior
 
 Deployment evidence should keep reporting publish-to-detect and publish-to-hidden for controlled
-live or dry-run events because those include EventStreams and wiki-side delay that local tests
-cannot simulate.
+live or dry-run events because those include recentchanges polling delay, wiki-side delay, and
+target-host execution effects that local tests cannot simulate.
 
 **Alternatives considered**:
 
@@ -436,7 +594,7 @@ cannot simulate.
 **Rationale**: The latest runtime artifacts showed a failed scheduled reconciliation after only a
 small amount of progress, `last_daytime_verification_at=null`, `last_nightly_full_recheck_at=null`,
 and a checkpoint map whose oldest full-check timestamps are years old. That means operator trust is
-not determined by stream freshness alone. The design must treat two things as first-class evidence:
+not determined by polling freshness alone. The design must treat two things as first-class evidence:
 
 - whether the latest daytime or nightly verification succeeded
 - how stale the full watched-set checkpoint map currently is
@@ -451,7 +609,7 @@ as a real issue until a later successful run clears it.
   not see the lag clearly enough from the current surface.
 - Show only the number of checkpoint pages. Rejected because `1427` checkpoint pages says nothing
   about whether the newest full check is today or years old.
-- Clear degradation as soon as the stream reopens. Rejected because healthy stream transport does
+- Clear degradation as soon as the retained observer reopens. Rejected because observer transport does
   not prove nightly or daytime verification actually caught up.
 
 ## Decision: Cross-check daemon runtime truth against the live process path
@@ -512,7 +670,7 @@ must not imply a guarantee of zero first-view prevention.
 **Alternatives considered**:
 
 - Promise zero first-view exposure once the daemon is healthy. Rejected because it is not
-  technically defensible for EventStreams-based post-publication handling.
+  technically defensible for post-publication recentchanges-based handling.
 - Ignore the limitation in docs. Rejected because the operator specifically wants trustworthy
   evidence.
 - Broaden this feature into in-wiki pre-publication blocking. Rejected because it changes tool

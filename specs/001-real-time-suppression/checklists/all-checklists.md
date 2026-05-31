@@ -17,10 +17,10 @@ docmeta:
 
 ## Current Requirement Alignment
 
-- [x] CHK004 Are checklist gates aligned with constitution v1.9.0 privacy requirements that forbid real sensitive-edit incident identifiers in tracked artifacts? [Consistency, Constitution §IX, Spec §FR-012]
-- [x] CHK005 Are launch-evidence checklist gates aligned that a live process with launch-path, PID-file, runtime-status, or detached-log mismatch is blocked T040 evidence rather than launch proof? [Consistency, Plan §Summary, Tasks §T040]
-- [x] CHK006 Are T052 and T042 dependencies represented so target-host smoke and resource evidence remain blocked until T040 evidence aligns, a fallback is recorded, or a human go/no-go exception records the risk? [Dependency, Tasks §T052, Tasks §T042]
-- [x] CHK007 Are config-stability checklist gates aligned that Q001 remains answered and the current blocker is launch evidence, not another config-policy decision? [Consistency, Plan §Review/Approval Workflow, Tasks §T039-T040]
+- [x] CHK004 Are checklist gates aligned with constitution v1.10.0 privacy and KISS requirements that forbid real sensitive-edit incident identifiers in tracked artifacts and keep the suppressor MVP narrow? [Consistency, Constitution §VIII/IX/X, Spec §FR-012]
+- [x] CHK005 Are launch-evidence checklist gates aligned that rsynced PID/status/log evidence can advance T040 while an old or unhealthy deployed binary still blocks T052 smoke readiness? [Consistency, Plan §Summary, Tasks §T040/T052]
+- [x] CHK006 Are T052 and T042 dependencies represented so target-host smoke and resource evidence remain blocked until T040 logout evidence, crash-resilience fixes, rebuilt-binary deployment, and smoke evidence are handled? [Dependency, Tasks §T052, Tasks §T042, Tasks §T067-T077]
+- [x] CHK007 Are config-stability checklist gates aligned that Q001 remains answered and the current blockers are logout-survival evidence, crash resilience, rebuilt-binary smoke, and resource evidence rather than another config-policy decision? [Consistency, Plan §Review/Approval Workflow, Tasks §T039-T040]
 
 ## Public-Repo Privacy
 
@@ -36,6 +36,6 @@ docmeta:
 
 ## Notes
 
-- Existing audited checklist files: `operator-safety.md`, `realtime.md`, `recovery.md`, `mvp-evidence.md`, `mvp-stability.md`, `server-start.md`, `deployment-evidence.md`, `runtime-truth.md`, `config-stability.md`, `resource-economy.md`, `requirements.md`, and `release-readiness.md`.
+- Existing audited checklist files: `operator-safety.md`, `realtime.md`, `recovery.md`, `mvp-evidence.md`, `mvp-stability.md`, `server-start.md`, `deployment-evidence.md`, `runtime-truth.md`, `config-stability.md`, `resource-economy.md`, `requirements.md`, `release-readiness.md`, `live-priority.md`, and `crash-resilience.md`.
 - Scope: requirements-quality checklist state only. This audit does not claim implementation, target-host launch, live smoke, or resource evidence has passed.
-- Current authority after this audit: `plan.md`, `tasks.md`, `quickstart.md`, constitution v1.9.0, and the active contracts.
+- Current authority after this audit: `plan.md`, `tasks.md`, `quickstart.md`, constitution v1.10.0, and the active contracts.

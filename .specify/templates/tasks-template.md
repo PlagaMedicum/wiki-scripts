@@ -83,6 +83,11 @@ Examples of foundational tasks (adjust based on your project):
   section
 - [ ] T014 Add synthetic fixtures and redaction checks for any sensitive-edit, suppression,
   moderation, or incident evidence in tracked docs, tests, contracts, examples, and code comments
+- [ ] T015 Restate the human owner's intent, primary success condition, and out-of-scope work in
+  the feature artifacts; stop for clarification if any material ambiguity remains
+- [ ] T016 Add a simplicity gate: smallest viable design, named constants for repeated values,
+  obvious module ownership, no unjustified abstraction/dependency/service/background job, and no
+  secondary polish ahead of the primary goal
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -176,6 +181,9 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Run `make docs` or `python3 tools/doc_workflow.py all`
 - [ ] TXXX Update `specs/000-repo-governance/spec.md` or `research.md` if the change affects repo policy
 - [ ] TXXX Code cleanup and refactoring
+- [ ] TXXX Remove accidental complexity introduced during implementation: duplicate logic,
+  oversized functions/modules, unclear constants, speculative abstractions, and low-value polish
+  that distracts from the accepted goal
 - [ ] TXXX Performance optimization across all stories
 - [ ] TXXX Resource-economy verification for CPU, memory, disk, network, queues, polling, and logs
 - [ ] TXXX Low-spec manual benchmark or automated check when resource pressure can affect behavior
@@ -284,6 +292,12 @@ With multiple developers:
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
+- Avoid: turning a narrow user request into a framework, generic engine, broad rewrite, or new
+  service without explicit current need
+- Avoid: repeating values or logic instead of using named constants and narrow helpers where they
+  make the code clearer
+- Avoid: hyperfixating on cosmetic or speculative details while the user's primary pain point is
+  still slow, broken, unmeasured, or unclear
 - Avoid: silent destructive edits, unapproved setup-breaking refactors, incompatible schema/state
   rewrites without migration steps, or changes that disrupt prior setups without explicit approval
 - Avoid: unreviewed config churn, required config keys without compatibility fixtures, default

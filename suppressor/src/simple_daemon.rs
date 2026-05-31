@@ -32,6 +32,8 @@ const PENDING_RETRY_SECONDS: i64 = 30;
 const PROCESSED_CAPACITY: usize = 10_000;
 const MAX_PENDING_ITEMS: usize = 5_000;
 const MAX_QUARANTINED_ITEMS: usize = 5_000;
+const QUARANTINE_VERIFY_INTERVAL_SECONDS: i64 = 300;
+const QUARANTINE_VERIFY_PER_PASS: usize = 25;
 const SMOKE_TEST_PAGE: &str = "Удзельнік:Plaga_med_Bot/suppressor/tests";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -159,6 +161,7 @@ struct SimpleDaemon {
     launch_path: LaunchPathSnapshot,
     state_file: PathBuf,
     next_cache_refresh_at: DateTime<Utc>,
+    next_quarantine_verify_at: DateTime<Utc>,
 }
 
 impl SimpleDaemon {
@@ -195,6 +198,7 @@ impl SimpleDaemon {
             launch_path,
             state_file,
             next_cache_refresh_at: Utc::now(),
+            next_quarantine_verify_at: Utc::now(),
         };
 
         daemon
@@ -231,6 +235,7 @@ impl SimpleDaemon {
         ));
         daemon.next_cache_refresh_at = Utc::now()
             + TimeDelta::seconds(daemon.config.suppression_list.metadata_recheck_seconds as i64);
+        daemon.resolve_quarantined_already_hidden().await;
         daemon.persist_state()?;
         Ok(daemon)
     }
@@ -314,6 +319,7 @@ impl SimpleDaemon {
         if let Err(error) = self.refresh_cache_if_due().await {
             self.record_error(error, "source-refresh", None, None);
         }
+        self.resolve_quarantined_if_due().await;
 
         let end = Utc::now();
         let start = self.live_poll_start(end);
@@ -335,6 +341,59 @@ impl SimpleDaemon {
                 self.record_poll_error(error, "live-poll", start, end);
             }
         }
+    }
+
+    async fn resolve_quarantined_if_due(&mut self) {
+        let now = Utc::now();
+        if now < self.next_quarantine_verify_at {
+            return;
+        }
+        self.next_quarantine_verify_at =
+            now + TimeDelta::seconds(QUARANTINE_VERIFY_INTERVAL_SECONDS);
+        self.resolve_quarantined_already_hidden().await;
+    }
+
+    async fn resolve_quarantined_already_hidden(&mut self) {
+        if self.state.quarantined.is_empty() {
+            return;
+        }
+        let items = self
+            .state
+            .quarantined
+            .iter()
+            .take(QUARANTINE_VERIFY_PER_PASS)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut resolved = Vec::new();
+        for item in items {
+            let target = HideTarget {
+                title: item.title.clone(),
+                revid: item.revid,
+                observed_at: item.observed_at,
+                source_label: "quarantine-verification".to_string(),
+            };
+            if self.verify_terminal_failure_already_hidden(&target).await {
+                resolved.push(item.revid);
+            }
+        }
+        if resolved.is_empty() {
+            return;
+        }
+        for revid in &resolved {
+            self.processed.insert(*revid);
+        }
+        self.state
+            .quarantined
+            .retain(|item| !resolved.contains(&item.revid));
+        self.state.latest_error = latest_quarantined_error(&self.state);
+        if let Err(error) = self.persist_state() {
+            error!(error = %error, "failed to persist resolved quarantine state");
+            return;
+        }
+        info!(
+            resolved_count = resolved.len(),
+            "cleared quarantined revisiondelete failure(s) that are now hidden"
+        );
     }
 
     async fn handle_reload_signal(&mut self) {
@@ -676,11 +735,66 @@ impl SimpleDaemon {
             Some(&target.title),
             Some(target.revid),
         );
-        if is_terminal_hide_failure(&failure) {
-            if self.verify_terminal_failure_already_hidden(target).await {
-                self.record_hide_success(target, "already-hidden-after-terminal-failure")?;
-                return Ok(());
+        if is_terminal_hide_failure(&failure)
+            && self.verify_terminal_failure_already_hidden(target).await
+        {
+            self.record_hide_success(target, "already-hidden-after-terminal-failure")?;
+            return Ok(());
+        }
+        if should_retry_after_fresh_auth(&failure) {
+            match self.hide_revision_after_fresh_auth(target).await {
+                Ok(()) => {
+                    self.record_hide_success(target, "hidden-after-fresh-auth")?;
+                    return Ok(());
+                }
+                Err(retry_error) => {
+                    let retry_failure = classify_api_failure(
+                        &retry_error,
+                        "revisiondelete",
+                        Some(&target.title),
+                        Some(target.revid),
+                    );
+                    warn!(
+                        title = %target.title,
+                        revid = target.revid,
+                        class = %retry_failure.class,
+                        api_code = ?retry_failure.api_code,
+                        http_status = ?retry_failure.http_status,
+                        retryable = retry_failure.retryable,
+                        message = %retry_failure.message,
+                        "revisiondelete still failed after fresh authentication"
+                    );
+                    if is_terminal_hide_failure(&retry_failure)
+                        && self.verify_terminal_failure_already_hidden(target).await
+                    {
+                        self.record_hide_success(target, "already-hidden-after-terminal-failure")?;
+                        return Ok(());
+                    }
+                    return self.record_classified_hide_failure(target, retry_failure);
+                }
             }
+        }
+        self.record_classified_hide_failure(target, failure)
+    }
+
+    async fn hide_revision_after_fresh_auth(&mut self, target: &HideTarget) -> Result<()> {
+        warn!(
+            title = %target.title,
+            revid = target.revid,
+            "revisiondelete returned permission failure; refreshing MediaWiki session before quarantine"
+        );
+        self.auth = authenticate(&self.client, &self.env)
+            .await
+            .context("re-login after permission failure failed")?;
+        self.hide_revision(target.clone()).await
+    }
+
+    fn record_classified_hide_failure(
+        &mut self,
+        target: &HideTarget,
+        failure: ApiFailureSnapshot,
+    ) -> Result<()> {
+        if is_terminal_hide_failure(&failure) {
             warn!(
                 title = %target.title,
                 revid = target.revid,
@@ -1186,6 +1300,10 @@ fn is_terminal_hide_failure(failure: &ApiFailureSnapshot) -> bool {
     ) || failure.class == "permission"
 }
 
+fn should_retry_after_fresh_auth(failure: &ApiFailureSnapshot) -> bool {
+    matches!(failure.api_code.as_deref(), Some("permissiondenied")) || failure.class == "permission"
+}
+
 fn daemon_state_for(requested_state: &str, dry_run: bool) -> String {
     if requested_state == "stopped" {
         return "stopped".to_string();
@@ -1379,6 +1497,19 @@ mod tests {
         assert_eq!(state.quarantined.len(), 1);
         assert_eq!(state.quarantined[0].revid, 42);
         assert_eq!(state.quarantined[0].attempt_count, 255);
+    }
+
+    #[test]
+    fn permission_failure_gets_fresh_auth_retry_before_quarantine() {
+        let permission = api_failure_with_code("permission", "permissiondenied");
+        let cantdelete = api_failure_with_code("permission", "cantdelete");
+        let timeout = api_failure("timeout");
+
+        assert!(should_retry_after_fresh_auth(&permission));
+        assert!(is_terminal_hide_failure(&permission));
+        assert!(should_retry_after_fresh_auth(&cantdelete));
+        assert!(is_terminal_hide_failure(&cantdelete));
+        assert!(!should_retry_after_fresh_auth(&timeout));
     }
 
     #[test]

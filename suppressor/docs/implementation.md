@@ -107,6 +107,11 @@ recentchanges for the selected window, filters by the normalized watched-title c
 candidate source/counts/chunks/elapsed time. The older full watched-set scan is allowed only with an
 explicit fallback reason or for explicit full verification work.
 
+Report-only coverage must not classify recentchanges candidates as unresolved from recentchanges
+alone. Recentchanges does not include RevDel hidden-state flags, so report-only mode must verify the
+revision by id before counting it as visible exposure. Already-hidden revisions belong in
+`already_hidden`, not in unresolved samples.
+
 ## Internal Service Boundaries
 
 - `stream.rs`: recentchanges poll lifecycle, overlap dedupe, source-page/request-page trigger
@@ -158,6 +163,12 @@ window. The nightly scheduler is a full watched-set recheck and must stay labele
 the rolling verification path. Retained observer reopen, idle status, or one fresh polled event
 must not clear failed scheduled verification, stale full-recheck freshness, or shared backoff
 evidence on their own.
+
+The minimal polling daemon reports current lag from the latest successful poll. Operator status code
+must preserve that polling lag instead of recomputing lag from the last watched edit timestamp; a
+quiet wiki with no watched-page edits is not stale by itself. Launch-path compatibility checks must
+also compare normalized paths so harmless spellings such as `././state/daemon.pid` and
+`./state/daemon.pid` do not create false unhealthy status.
 
 `server-start` is additive. It keeps `run`, `dry-run`, TUI-managed starts, and optional systemd
 starts available, but it provides the current rsync server path: prepare runtime parents, validate

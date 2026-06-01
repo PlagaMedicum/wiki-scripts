@@ -124,8 +124,14 @@ pub async fn run_catchup_window(
                     "starting candidate-first catch-up"
                 );
                 for candidate in discovery.watched_candidates {
-                    if !process_revision_candidate(runtime, &request, &mut summary, candidate)
-                        .await?
+                    if !process_revision_candidate(
+                        runtime,
+                        &request,
+                        &mut summary,
+                        &mut warning_aggregates,
+                        candidate,
+                    )
+                    .await?
                     {
                         break;
                     }
@@ -210,12 +216,14 @@ pub async fn run_catchup_window(
                 runtime,
                 &request,
                 &mut summary,
+                &mut warning_aggregates,
                 CatchupRevisionCandidate {
                     title: title.clone(),
                     revid: revision.revid,
                     timestamp: revision.timestamp,
                     user_hidden: revision.user_hidden,
                     comment_hidden: revision.comment_hidden,
+                    hidden_state_verified: true,
                 },
             )
             .await?
@@ -249,6 +257,7 @@ struct CatchupRevisionCandidate {
     timestamp: DateTime<Utc>,
     user_hidden: bool,
     comment_hidden: bool,
+    hidden_state_verified: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -286,6 +295,7 @@ async fn discover_recentchange_candidates(
             timestamp: change.timestamp,
             user_hidden: false,
             comment_hidden: false,
+            hidden_state_verified: false,
         });
     }
     Ok(CandidateDiscovery {
@@ -301,7 +311,8 @@ async fn process_revision_candidate(
     runtime: &Arc<AppRuntime>,
     request: &CatchupRequest,
     summary: &mut CoverageSummary,
-    candidate: CatchupRevisionCandidate,
+    warning_aggregates: &mut WarningAggregates,
+    mut candidate: CatchupRevisionCandidate,
 ) -> Result<bool> {
     if summary.edits_checked >= runtime.config.catchup.max_revisions_per_run {
         summary.stopped_early_reason = Some("max-revisions-reached".to_string());
@@ -323,6 +334,15 @@ async fn process_revision_candidate(
         return Ok(false);
     }
     summary.edits_checked += 1;
+    let needs_report_only_verification = request.report_only
+        && !candidate.hidden_state_verified
+        && (!candidate.user_hidden || !candidate.comment_hidden);
+    if needs_report_only_verification
+        && !verify_report_only_candidate(runtime, summary, warning_aggregates, &mut candidate)
+            .await?
+    {
+        return Ok(summary.stopped_early_reason.is_none());
+    }
     if candidate.user_hidden && candidate.comment_hidden {
         summary.already_hidden_count += 1;
         return Ok(true);
@@ -399,6 +419,78 @@ async fn process_revision_candidate(
         }
     }
     Ok(true)
+}
+
+async fn verify_report_only_candidate(
+    runtime: &Arc<AppRuntime>,
+    summary: &mut CoverageSummary,
+    warning_aggregates: &mut WarningAggregates,
+    candidate: &mut CatchupRevisionCandidate,
+) -> Result<bool> {
+    match runtime.client.fetch_revision_by_id(candidate.revid).await {
+        Ok(Some(revision)) => {
+            candidate.timestamp = revision.timestamp;
+            candidate.user_hidden = revision.user_hidden;
+            candidate.comment_hidden = revision.comment_hidden;
+            candidate.hidden_state_verified = true;
+            Ok(true)
+        }
+        Ok(None) => {
+            summary.failed_count += 1;
+            push_unresolved_item(
+                summary,
+                runtime.config.catchup.unresolved_sample_limit,
+                UnresolvedExposureItem {
+                    title: candidate.title.clone(),
+                    revid: candidate.revid,
+                    revision_url: Some(crate::mw_api::revision_url(
+                        &runtime.config.wiki.server_name,
+                        candidate.revid,
+                    )),
+                    age_seconds: Some((Utc::now() - candidate.timestamp).num_seconds()),
+                    reason: "revision-query-missing".to_string(),
+                    next_action: "rerun coverage; if the revision was deleted, verify manually"
+                        .to_string(),
+                },
+            );
+            Ok(false)
+        }
+        Err(error) => {
+            let failure = classify_api_failure(
+                &error,
+                "fetch-revision",
+                Some(&candidate.title),
+                Some(candidate.revid),
+            );
+            let observation = warning_aggregates.record(
+                failure.clone(),
+                runtime.config.catchup.rate_limit_stop_after_failures,
+                runtime.config.catchup.rate_limit_backoff_default_seconds,
+                Utc::now(),
+            );
+            summary.failed_count += 1;
+            push_unresolved_item(
+                summary,
+                runtime.config.catchup.unresolved_sample_limit,
+                UnresolvedExposureItem {
+                    title: candidate.title.clone(),
+                    revid: candidate.revid,
+                    revision_url: Some(crate::mw_api::revision_url(
+                        &runtime.config.wiki.server_name,
+                        candidate.revid,
+                    )),
+                    age_seconds: Some((Utc::now() - candidate.timestamp).num_seconds()),
+                    reason: format!("revision-query-failed:{}", warning_reason(&failure)),
+                    next_action: "check API/network and rerun coverage".to_string(),
+                },
+            );
+            if observation.stop_after {
+                summary.stopped_early_reason = Some("rate-limited".to_string());
+                summary.backoff_until = observation.backoff_until;
+            }
+            Ok(false)
+        }
+    }
 }
 
 async fn scoped_titles(runtime: &Arc<AppRuntime>, title_scope: Option<Vec<String>>) -> Vec<String> {
@@ -947,6 +1039,29 @@ mod tests {
         }"#
     }
 
+    fn revision_by_id_response(revid: u64, hidden: bool) -> String {
+        let hidden_fields = if hidden {
+            r#","userhidden":true,"commenthidden":true"#
+        } else {
+            ""
+        };
+        format!(
+            r#"{{
+              "query": {{
+                "pages": [
+                  {{
+                    "pageid": 1,
+                    "title": "Foo",
+                    "revisions": [
+                      {{"revid": {revid}, "timestamp": "2026-05-13T12:00:00Z"{hidden_fields}}}
+                    ]
+                  }}
+                ]
+              }}
+            }}"#
+        )
+    }
+
     #[tokio::test]
     async fn default_catchup_reports_last_successful_hide_anchor_in_summary() {
         let server = MockServer::start().await;
@@ -1044,6 +1159,16 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("revids", "101"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(revision_by_id_response(101, false), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
 
         let temp = tempdir().unwrap();
         let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
@@ -1082,6 +1207,65 @@ mod tests {
         assert_eq!(summary.unresolved_count, 1);
         assert_eq!(summary.fallback_reason, None);
         assert!(summary.candidate_discovery_elapsed_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn report_only_recentchanges_verifies_already_hidden_candidate() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("list", "recentchanges"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(recentchanges_response(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/w/api.php"))
+            .and(query_param("revids", "101"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(revision_by_id_response(101, true), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let temp = tempdir().unwrap();
+        let env = test_env(&temp, format!("{}/w/api.php", server.uri()));
+        let harness = build_test_runtime_harness_with_env(
+            &temp,
+            RuntimeStatusSurfaceMode::DetachedCommand,
+            env,
+        );
+        let start = DateTime::parse_from_rfc3339("2026-05-13T11:59:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-05-13T12:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let summary = run_catchup_window(
+            &harness.runtime,
+            CatchupRequest {
+                start,
+                end,
+                trigger: "coverage-last-24h".to_string(),
+                scope_label: "Last 24 hours".to_string(),
+                report_only: true,
+                allow_large_window: false,
+                title_scope: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.edits_checked, 1);
+        assert_eq!(summary.already_hidden_count, 1);
+        assert_eq!(summary.unresolved_count, 0);
+        assert_eq!(summary.failed_count, 0);
     }
 
     #[tokio::test]

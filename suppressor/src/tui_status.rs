@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 
@@ -204,8 +204,6 @@ fn validate_server_start_launch_path(
         return None;
     }
 
-    let expected_pid_file = paths.pid_file.display().to_string();
-    let expected_status_file = paths.runtime_status_file.display().to_string();
     let invalid_reason = if daemon_pid != Some(launch_path.pid) {
         Some(format!(
             "launch_path pid {} does not match pid file {:?}",
@@ -216,9 +214,9 @@ fn validate_server_start_launch_path(
             "launch_path pid {} is not running",
             launch_path.pid
         ))
-    } else if launch_path.pid_file != expected_pid_file {
+    } else if !path_text_matches(&launch_path.pid_file, &paths.pid_file) {
         Some("launch_path pid_file does not match active config".to_string())
-    } else if launch_path.runtime_status_file != expected_status_file {
+    } else if !path_text_matches(&launch_path.runtime_status_file, &paths.runtime_status_file) {
         Some("launch_path runtime_status_file does not match active config".to_string())
     } else if launch_path.log_path.is_none() {
         Some("launch_path is missing detached log path".to_string())
@@ -267,6 +265,27 @@ fn validate_server_start_launch_path(
     Some(notice)
 }
 
+fn path_text_matches(left: &str, right: &Path) -> bool {
+    normalized_path_text(Path::new(left)) == normalized_path_text(right)
+}
+
+fn normalized_path_text(path: &Path) -> String {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::ParentDir | Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        normalized.display().to_string()
+    }
+}
+
 fn apply_blocking_notice_to_runtime_status(
     status: &mut RuntimeStatus,
     notice: CompatibilityNotice,
@@ -302,7 +321,13 @@ fn populate_runtime_derivatives(
 ) {
     let now = Utc::now();
     let active_backoff_until = normalize_backoff_derivatives(status, now);
-    if status.realtime.last_freshness_probe_source.as_deref() == Some("polling") {
+    if status.realtime.current_lag_source.as_deref() == Some("recentchanges-polling")
+        && (status.realtime.current_lag_millis.is_some()
+            || status.realtime.current_lag_seconds.is_some())
+    {
+        // The minimal polling daemon already reports lag from the latest successful poll.
+        // Do not reinterpret a quiet wiki as stale just because no matching event arrived.
+    } else if status.realtime.last_freshness_probe_source.as_deref() == Some("polling") {
         if let Some(polled_at) = status.realtime.last_freshness_probe_at {
             let lag_millis = (now - polled_at).num_milliseconds().max(0);
             status.realtime.current_lag_seconds = Some(lag_millis / 1000);
@@ -913,6 +938,18 @@ mod tests {
     }
 
     #[test]
+    fn launch_path_validation_ignores_dot_path_spelling() {
+        assert!(path_text_matches(
+            "././state/daemon.pid",
+            std::path::Path::new("./state/daemon.pid")
+        ));
+        assert!(path_text_matches(
+            "/tmp/suppressor/./state/runtime_status.json",
+            std::path::Path::new("/tmp/suppressor/state/runtime_status.json")
+        ));
+    }
+
+    #[test]
     fn collect_status_maps_unreadable_runtime_status_to_migration_notice() {
         let temp = tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
@@ -1203,6 +1240,29 @@ mod tests {
                 .realtime
                 .current_lag_millis
                 .is_some_and(|millis| (3000..5000).contains(&millis))
+        );
+    }
+
+    #[test]
+    fn populate_runtime_derivatives_preserves_minimal_polling_lag() {
+        let mut status = RuntimeStatus {
+            realtime: RealtimeRuntimeStatus {
+                last_event_observed_at: Some(Utc::now() - chrono::TimeDelta::hours(3)),
+                current_lag_seconds: Some(0),
+                current_lag_millis: Some(123),
+                current_lag_source: Some("recentchanges-polling".to_string()),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        populate_runtime_derivatives(&mut status, None, 0);
+
+        assert_eq!(status.realtime.current_lag_seconds, Some(0));
+        assert_eq!(status.realtime.current_lag_millis, Some(123));
+        assert_eq!(
+            status.realtime.current_lag_source.as_deref(),
+            Some("recentchanges-polling")
         );
     }
 

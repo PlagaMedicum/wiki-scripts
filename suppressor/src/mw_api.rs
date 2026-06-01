@@ -264,15 +264,8 @@ impl MediaWikiClient {
             let page = first_page(&value)?;
             if let Some(revisions) = page["revisions"].as_array() {
                 for revision in revisions {
-                    if let (Some(revid), Some(timestamp)) =
-                        (revision["revid"].as_u64(), revision["timestamp"].as_str())
-                    {
-                        result.push(RevisionRecord {
-                            revid,
-                            timestamp: parse_timestamp(timestamp)?,
-                            user_hidden: revision.get("userhidden").is_some(),
-                            comment_hidden: revision.get("commenthidden").is_some(),
-                        });
+                    if let Some(record) = revision_record_from_value(revision)? {
+                        result.push(record);
                     }
                 }
             }
@@ -284,6 +277,34 @@ impl MediaWikiClient {
         }
 
         Ok(result)
+    }
+
+    pub async fn fetch_revision_by_id(&self, revid: u64) -> Result<Option<RevisionRecord>> {
+        let revid_text = revid.to_string();
+        let value = self
+            .get_json(&[
+                ("action", "query"),
+                ("prop", "revisions"),
+                ("revids", revid_text.as_str()),
+                ("rvprop", "ids|timestamp|user|comment"),
+            ])
+            .await?;
+        let Some(pages) = value["query"]["pages"].as_array() else {
+            return Ok(None);
+        };
+        for page in pages {
+            let Some(revisions) = page["revisions"].as_array() else {
+                continue;
+            };
+            for revision in revisions {
+                if let Some(record) = revision_record_from_value(revision)?
+                    && record.revid == revid
+                {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub async fn fetch_revisions_in_window(
@@ -657,6 +678,20 @@ pub fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
     Ok(DateTime::parse_from_rfc3339(value)
         .with_context(|| format!("Invalid RFC3339 timestamp {}", value))?
         .with_timezone(&Utc))
+}
+
+fn revision_record_from_value(revision: &Value) -> Result<Option<RevisionRecord>> {
+    let (Some(revid), Some(timestamp)) =
+        (revision["revid"].as_u64(), revision["timestamp"].as_str())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(RevisionRecord {
+        revid,
+        timestamp: parse_timestamp(timestamp)?,
+        user_hidden: revision.get("userhidden").is_some(),
+        comment_hidden: revision.get("commenthidden").is_some(),
+    }))
 }
 
 pub fn classify_api_failure(

@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Current suppressor runtime boundaries and architectural constraints.
-  source: .specify/doc-registry.json
----
-
 # Suppressor Runtime Boundaries
 
 

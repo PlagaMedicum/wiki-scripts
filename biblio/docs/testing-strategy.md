@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Current biblio testing strategy and coverage shape.
-  source: .specify/doc-registry.json
----
-
 # Biblio Testing Strategy
 
 

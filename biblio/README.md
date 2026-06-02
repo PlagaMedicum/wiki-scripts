@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Operator entry points and current documented contract for biblio.
-  source: .specify/doc-registry.json
----
-
 # Biblio
 
 

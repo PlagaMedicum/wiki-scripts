@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Current suppressor implementation contract at the documented scope.
-  source: .specify/doc-registry.json
----
-
 # Suppressor Implementation
 
 

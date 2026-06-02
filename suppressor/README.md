@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Operator entry points and current documented scope for suppressor.
-  source: .specify/doc-registry.json
----
-
 # Suppressor
 
 

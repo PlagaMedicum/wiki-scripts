@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Current suppressor testing strategy and maintained test story.
-  source: .specify/doc-registry.json
----
-
 # Suppressor Testing Strategy
 
 

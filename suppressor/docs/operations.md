@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Operator setup and runtime contract for suppressor.
-  source: .specify/doc-registry.json
----
-
 # Suppressor Operations
 
 
@@ -183,15 +175,10 @@ section to the server config as a quick background fix. The next valid path must
 - a human-reviewed backward-compatible loader or migration-needed diagnostic, with tests and a new
   server build before deployment trust
 
-The active approval packet is in
-`specs/001-real-time-suppression/questions.md` and
-`specs/001-real-time-suppression/review-queue.md`. Q001 must be answered before any T040 launch
-evidence is accepted.
-
-2026-05-07 update: Q001 is answered. Path 1 is approved: target-host config migration to the
-reviewed tracked baseline. The human operator reports that the server config was updated and the
-daemon was started. The next required evidence is T040: non-secret `server-start` receipt,
-PID/runtime/log paths, daemon-owned status freshness, and terminal logout survival.
+2026-05-07 update: the human-approved path is target-host config migration to the reviewed tracked
+baseline. The human operator reports that the server config was updated and the daemon was started.
+The next required evidence is non-secret `server-start` receipt, PID/runtime/log paths,
+daemon-owned status freshness, and terminal logout survival.
 
 Later 2026-05-07 server-running evidence showed a live process, but the status remained
 non-healthy because launch-path, PID-file, runtime-status, and detached-log evidence did not agree.
@@ -199,8 +186,8 @@ That is blocked T040 evidence, not a successful launch proof. Preserve a possibl
 while gathering evidence, but do not trust the deployment until the mismatch is resolved through a
 matching receipt, safe fresh `server-start`, or rollback to the last trusted workflow.
 
-T040 may use an already-started daemon only if the operator evidence ties that process to the
-Q001-approved config migration and the deployed binary's
+This evidence may use an already-started daemon only if the operator evidence ties that process to
+the approved config migration and the deployed binary's
 `./suppressor --config ./config.toml server-start` command. If the original receipt is unavailable,
 the safe replacement evidence is the same receipt fields from daemon-owned status and local process
 inspection: mode, PID, binary path, config path, PID file, `runtime_status.json` path, detached log

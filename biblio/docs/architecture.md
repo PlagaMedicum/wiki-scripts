@@ -1,11 +1,3 @@
----
-docmeta:
-  status: maintained
-  review: code-reviewed
-  purpose: Current biblio boundaries, module roles, and source-definition rules.
-  source: .specify/doc-registry.json
----
-
 # Biblio Architecture
 
 

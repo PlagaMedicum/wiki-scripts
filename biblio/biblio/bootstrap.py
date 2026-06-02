@@ -38,14 +38,12 @@ def normalize_bot_username(username: str) -> str:
 def split_bot_password_login(login: str) -> tuple[str, str]:
     if "@" not in login:
         raise RuntimeError(
-            "WIKI_BOT_USERNAME must use the full BotPasswords login in the form "
-            "'Username@label'."
+            "WIKI_BOT_USERNAME must use the full BotPasswords login in the form 'Username@label'."
         )
     username, suffix = login.split("@", 1)
     if not username.strip() or not suffix.strip():
         raise RuntimeError(
-            "WIKI_BOT_USERNAME must use the full BotPasswords login in the form "
-            "'Username@label'."
+            "WIKI_BOT_USERNAME must use the full BotPasswords login in the form 'Username@label'."
         )
     return normalize_bot_username(username), suffix.strip()
 

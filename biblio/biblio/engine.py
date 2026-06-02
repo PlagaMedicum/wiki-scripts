@@ -289,7 +289,9 @@ def replace_line_exact_rules(
             extra_argument_values.setdefault(key, []).append(value)
         if spec.short_ref is not None:
             old_ref_alias = _extract_short_ref_alias(body, spec)
-            if old_ref_alias and _normalize_short_ref_token(old_ref_alias) != _normalize_short_ref_token(spec.short_ref.ref):
+            if old_ref_alias and _normalize_short_ref_token(
+                old_ref_alias
+            ) != _normalize_short_ref_token(spec.short_ref.ref):
                 short_ref_aliases.append(old_ref_alias)
     parts.append(text[position:])
     return (
@@ -383,7 +385,9 @@ def apply_regex_rules(
             )
             if spec.short_ref is not None:
                 old_ref_alias = _extract_short_ref_alias(match_text, spec)
-                if old_ref_alias and _normalize_short_ref_token(old_ref_alias) != _normalize_short_ref_token(spec.short_ref.ref):
+                if old_ref_alias and _normalize_short_ref_token(
+                    old_ref_alias
+                ) != _normalize_short_ref_token(spec.short_ref.ref):
                     short_ref_aliases.append(old_ref_alias)
 
             mapping = {
@@ -535,7 +539,9 @@ def apply_normalized_unit_regex_rules(
             )
             if spec.short_ref is not None:
                 old_ref_alias = _extract_short_ref_alias(unit_text, spec)
-                if old_ref_alias and _normalize_short_ref_token(old_ref_alias) != _normalize_short_ref_token(spec.short_ref.ref):
+                if old_ref_alias and _normalize_short_ref_token(
+                    old_ref_alias
+                ) != _normalize_short_ref_token(spec.short_ref.ref):
                     short_ref_aliases.append(old_ref_alias)
             matched = True
             break

@@ -8,6 +8,7 @@ use reqwest::{
     Client, StatusCode, Url,
     header::{CONTENT_TYPE, RETRY_AFTER},
 };
+use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
 
@@ -51,7 +52,7 @@ pub struct RecentChangeProbe {
     pub revid: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RecentChangeRecord {
     pub title: String,
     pub timestamp: DateTime<Utc>,

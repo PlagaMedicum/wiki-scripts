@@ -252,7 +252,9 @@ def test_rich_diff_panel_explains_manual_review_reasoning():
         page_arguments=[],
         entry_arguments=["Асаковыя"],
         extra_argument_values={"author": ["Скуратовіч А."]},
-        review_reasons=["Entry or author inferred from bibliography prefix before template citation; confirm manually."],
+        review_reasons=[
+            "Entry or author inferred from bibliography prefix before template citation; confirm manually."
+        ],
     )
 
     ui.print_diff_panel(
@@ -505,8 +507,13 @@ def test_bulk_status_prints_plain_status_lines():
     output = stream.getvalue()
     normalized_output = " ".join(output.split())
     assert output.count("[bst]") == 2
-    assert 'page=2/5 ph=save title="Page title" detail="Publishing edit to the wiki"' in normalized_output
-    assert 'page=2/5 ph=retry title="Page title" detail="Retrying save in 2.00s"' in normalized_output
+    assert (
+        'page=2/5 ph=save title="Page title" detail="Publishing edit to the wiki"'
+        in normalized_output
+    )
+    assert (
+        'page=2/5 ph=retry title="Page title" detail="Retrying save in 2.00s"' in normalized_output
+    )
 
 
 def test_compact_status_helpers_keep_identifiers() -> None:
@@ -525,7 +532,10 @@ def test_compact_status_helpers_keep_identifiers() -> None:
         retries=0,
     )
 
-    assert format_queue_status_line(index=1, total=3, title="Page title") == '[q] 1/3 title="Page title"'
+    assert (
+        format_queue_status_line(index=1, total=3, title="Page title")
+        == '[q] 1/3 title="Page title"'
+    )
     assert (
         format_bulk_status_line(status)
         == '[bst] src="demo (Demo) [1/1]" page=1/3 ph=scan title="Page title" '

@@ -3,9 +3,9 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::commands::{
-    run_check_auth, run_coverage_last_24h, run_coverage_report, run_emergency_catchup,
-    run_hide_revid, run_manual_sweep, run_print_effective_config, run_reload_cache,
-    run_server_start, run_supervisor,
+    run_check_auth, run_coverage_last_24h, run_coverage_report, run_emergency_catchup, run_health,
+    run_hide_revid, run_last_edits, run_manual_sweep, run_perf, run_print_effective_config,
+    run_reload_cache, run_server_start, run_status, run_supervisor,
 };
 use crate::daemon::run_daemon;
 
@@ -13,7 +13,16 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Run => run_daemon(cli.config, false, cli.verbose).await,
-        Command::Tui => crate::tui::run(cli.config, cli.verbose).await,
+        Command::Status { json } => run_status(cli.config, json),
+        Command::Health { json } => {
+            let exit_code = run_health(cli.config, json)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Command::LastEdits { limit, json } => run_last_edits(cli.config, limit, json).await,
+        Command::Perf { json } => run_perf(cli.config, json),
         Command::DryRun => run_daemon(cli.config, true, cli.verbose).await,
         Command::CheckAuth => run_check_auth(cli.config, cli.verbose).await,
         Command::HideRevid { id } => run_hide_revid(cli.config, id, cli.verbose).await,
@@ -75,7 +84,8 @@ pub async fn run() -> Result<()> {
             run_supervisor(cli.config, dry_run, log_file, cli.verbose)
         }
         Command::ReloadCache => run_reload_cache(cli.config),
-        Command::NightlySweepNow => run_manual_sweep(cli.config),
+        Command::CatchUpNow => run_manual_sweep(cli.config, "catch-up-now"),
+        Command::NightlySweepNow => run_manual_sweep(cli.config, "nightly-sweep-now"),
         Command::PrintEffectiveConfig => run_print_effective_config(cli.config, cli.verbose),
     }
 }

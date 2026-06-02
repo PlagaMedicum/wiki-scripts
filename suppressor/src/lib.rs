@@ -20,10 +20,6 @@ mod simple_daemon;
 pub mod state;
 mod stream;
 pub mod titles;
-pub mod tui;
-mod tui_process;
-mod tui_status;
-mod tui_view;
 mod worker;
 
 use anyhow::Result;

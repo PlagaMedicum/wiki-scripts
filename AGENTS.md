@@ -21,7 +21,12 @@
 ## Current cleanup direction
 
 - Spec Kit is no longer part of this repository.
-- Keep suppressor runtime behavior stable unless the user explicitly asks to change it.
-- Prefer shrinking docs, generated artifacts, and duplicate code before adding new structure.
+- Keep suppressor protection behavior stable unless the user explicitly asks to change it.
+- Prefer shrinking docs, generated artifacts, optional UI, dependencies, and duplicate code before
+  adding new structure.
+- Keep backend/runtime code separate from operator presentation. Commands may read backend state;
+  backend modules must not depend on command rendering.
+- Keep docs short: README for entry points, one architecture overview, one operations note, one
+  testing note. Put durable tricky implementation facts near the code they protect.
 - For suppressor work, read `suppressor/README.md`, the relevant `suppressor/docs/` file, and only
   the code touched by the task.

@@ -20,9 +20,28 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Run,
-    Tui,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Health {
+        #[arg(long)]
+        json: bool,
+    },
+    LastEdits {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    Perf {
+        #[arg(long)]
+        json: bool,
+    },
     CheckAuth,
     ReloadCache,
+    #[command(name = "catch-up-now")]
+    CatchUpNow,
     DryRun,
     HideRevid {
         id: u64,
@@ -130,10 +149,40 @@ mod tests {
     }
 
     #[test]
-    fn parses_tui_command() {
-        let cli = Cli::try_parse_from(["suppressor", "tui"]).unwrap();
+    fn parses_status_command() {
+        let cli = Cli::try_parse_from(["suppressor", "status", "--json"]).unwrap();
         match cli.command {
-            Command::Tui => {}
+            Command::Status { json } => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_health_command() {
+        let cli = Cli::try_parse_from(["suppressor", "health", "--json"]).unwrap();
+        match cli.command {
+            Command::Health { json } => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_last_edits_command() {
+        let cli = Cli::try_parse_from(["suppressor", "last-edits", "--limit", "7"]).unwrap();
+        match cli.command {
+            Command::LastEdits { limit, json } => {
+                assert_eq!(limit, 7);
+                assert!(!json);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_perf_command() {
+        let cli = Cli::try_parse_from(["suppressor", "perf"]).unwrap();
+        match cli.command {
+            Command::Perf { json } => assert!(!json),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -208,6 +257,15 @@ mod tests {
                 assert!(!dry_run);
                 assert!(report_only);
             }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_catch_up_now_command() {
+        let cli = Cli::try_parse_from(["suppressor", "catch-up-now"]).unwrap();
+        match cli.command {
+            Command::CatchUpNow => {}
             other => panic!("unexpected command: {other:?}"),
         }
     }

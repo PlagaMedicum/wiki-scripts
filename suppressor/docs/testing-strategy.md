@@ -27,7 +27,7 @@
 - detached `server-start` parsing, preflight, duplicate PID refusal, startup timeout, and
   launch-path status checks
 - command-report compatibility, bounded unresolved samples, and daemon-vs-command status separation
-- TUI support helpers
+- status, health, performance, and signal command helpers
 
 ### Boundary Tests
 
@@ -49,7 +49,7 @@
 - MediaWiki API timestamp formatting for recovery query parameters
 - compact runtime status fields for latest classified errors, source refresh, resource summaries,
   and coalesced warning summaries
-- command-report isolation and TUI rendering for one-shot output
+- command-report isolation and CLI rendering for one-shot output
 - recovery-anchor selection from `last_successful_hide_at`
 - `server-start` startup evidence helpers
 - live-priority local tests for blocked background work, synthetic bursts, deadline deferral, and
@@ -58,7 +58,7 @@
 ## Known Gaps
 
 - no full live recentchanges-polling-to-RevDel CI path
-- no full real-TUI integration automation
+- no terminal UI integration automation because the operator surface is plain CLI
 - no broad live-wiki production simulation in CI
 - no automated percentile proof for the production recentchanges polling path; local tests prove
   bounded synthetic p50/p95/p99 snapshots, but target-host release claims still need controlled live
@@ -122,7 +122,7 @@ Alternate incident causes were also inspected and covered in the implementation 
   falsely completed.
 - Retained observer reopen now has regression coverage proving stale full-recheck freshness is not
   cleared by unrelated fresh transport evidence.
-- Command and TUI report tests cover `Last 24 hours` preset wiring, bounded command reports,
+- Command report tests cover `Last 24 hours` preset wiring, bounded command reports,
   unresolved revision links, next actions, and command output that stays distinct from daemon-owned
   realtime status.
 

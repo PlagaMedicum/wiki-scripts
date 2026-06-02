@@ -38,9 +38,7 @@ DEFAULT_PAGE_PATTERNS = (
 
 DEFAULT_REJECT_PATTERNS = (r"^\s*:\s*іл",)
 
-PERSISTENT_SOURCE_FILENAMES = (
-    "source.toml",
-)
+PERSISTENT_SOURCE_FILENAMES = ("source.toml",)
 
 RUNTIME_STATE_FILENAMES = (
     "rules.json",
@@ -89,10 +87,7 @@ def discover_source_specs(root: Path | None = None) -> list[SourceSpec]:
     for path in sorted(source_root(actual_root).glob("*/source.toml")):
         specs.append(_load_source_spec_from_dir(path.parent, actual_root))
     hidden_alias_ids = {
-        alias
-        for spec in specs
-        for variant in spec.volume_variants
-        for alias in variant.aliases
+        alias for spec in specs for variant in spec.volume_variants for alias in variant.aliases
     }
     return [spec for spec in specs if spec.source_id not in hidden_alias_ids]
 
@@ -594,10 +589,13 @@ def _load_source_spec_from_dir(source_dir: Path, actual_root: Path) -> SourceSpe
                 volume_data.get("macros", {}),
                 context=f"{context}.macros",
             )
-            volume_short_ref = _load_short_ref(
-                volume_data.get("short_ref"),
-                context=f"{context}.short_ref",
-            ) or base_short_ref
+            volume_short_ref = (
+                _load_short_ref(
+                    volume_data.get("short_ref"),
+                    context=f"{context}.short_ref",
+                )
+                or base_short_ref
+            )
             volume_variants.append(
                 _build_source_spec(
                     source_dir=source_dir,

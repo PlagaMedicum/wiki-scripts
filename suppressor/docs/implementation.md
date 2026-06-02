@@ -53,7 +53,7 @@ summary. This keeps process liveness separate from realtime protection effective
 
 - Linux-first
 - one system
-- one local operator TUI
+- one local operator CLI
 - current production baseline aimed at be.wiki
 
 ## Safety Rules
@@ -122,12 +122,11 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
   snapshots, and local JSON compatibility.
 - `worker.rs`: RevDel submission, retry/relogin/token-refresh flow, final outcome recording, and
   blocked-state persistence.
-- `tui_status.rs` and `tui_view.rs`: read-only local status collection and compact operator
-  rendering.
+- status and health commands: read-only local status rendering and health exit codes.
 
-These are internal ownership boundaries inside one local daemon/TUI deployment. They are the
-intended microservice-style architecture for this tool; adding separate OS services would need a
-separate justification because it increases overhead and deployment failure modes.
+These are internal ownership boundaries inside one local daemon deployment. They are the intended
+microservice-style architecture for this tool; adding separate OS services would need a separate
+justification because it increases overhead and deployment failure modes.
 
 ## API And Warning Contracts
 
@@ -162,8 +161,8 @@ quiet wiki with no watched-page edits is not stale by itself. Launch-path compat
 also compare normalized paths so harmless spellings such as `././state/daemon.pid` and
 `./state/daemon.pid` do not create false unhealthy status.
 
-`server-start` is additive. It keeps `run`, `dry-run`, TUI-managed starts, and optional systemd
-starts available, but it provides the current rsync server path: prepare runtime parents, validate
-auth inputs without printing secrets, refuse duplicate live daemons, detach stdout/stderr to a log,
-start a new session, and wait until PID file plus daemon-owned `runtime_status.json` agree on a
-fresh `launch_path=server-start`.
+`server-start` is additive. It keeps `run`, `dry-run`, and optional systemd starts available, but
+it provides the current rsync server path: prepare runtime parents, validate auth inputs without
+printing secrets, refuse duplicate live daemons, detach stdout/stderr to a log, start a new
+session, and wait until PID file plus daemon-owned `runtime_status.json` agree on a fresh
+`launch_path=server-start`.

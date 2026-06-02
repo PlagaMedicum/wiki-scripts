@@ -16,8 +16,8 @@ goal and clarify risky ambiguity before design choices harden.
 - [`suppressor/`](suppressor/README.md)
   Rust tooling for fast public RevDel on watched revisions, kept intentionally narrow and
   safety-sensitive, with low-spec local operation treated as a design constraint.
-  Main libraries: `tokio`, `reqwest`, `reqwest-eventsource`, `ratatui`,
-  `metrics-exporter-prometheus`, `serde`.
+  Main libraries: `tokio`, `reqwest`, `reqwest-eventsource`, `metrics-exporter-prometheus`,
+  `serde`.
 
 ## Workflow In Brief
 

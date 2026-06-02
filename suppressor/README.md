@@ -11,7 +11,7 @@ data.
 - one detached `server-start` supervisor that restarts the daemon child after exits
 - one current production baseline aimed at be.wiki
 - one rsync-ready aarch64 binary launch path for the server
-- legacy TUI, reconciliation, and report commands retained for manual diagnostics
+- small CLI commands for status, health, recovery, coverage, and performance inspection
 
 Future multiwiki support is possible, but it is not the current runtime model.
 
@@ -54,8 +54,12 @@ receipt, and is trusted only after the PID and `runtime_status.json` keep updati
 - `make smoke-test`
 - `make dry-run`
 - `make run`
-- `make tui`
+- `make status`
+- `make health`
+- `make last-edits ARGS="--limit 20"`
+- `make perf`
 - `make reload-cache`
+- `make catch-up-now`
 - `make emergency-catchup ARGS="--dry-run"`
 - `make coverage-report ARGS="--start 2026-04-24T00:00:00Z --report-only"`
 - `make nightly-sweep-now`
@@ -79,7 +83,7 @@ Current scope:
 Not current scope:
 
 - EventStreams as the production live source
-- TUI, reconciliation, and nightly verification as required live-hide paths
+- reconciliation and nightly verification as required live-hide paths
 - broader moderation platform work
 - remote multi-operator control
 - public network service exposure
@@ -102,8 +106,9 @@ are separate so "running" is not treated as "hiding". Important states are:
 - `blocked`: auth/session failures prevent hiding
 
 Recovery starts from the persisted recentchanges poll cursor when that anchor exists; otherwise it
-uses the bounded recent emergency window. Manual cache reload, TUI, reconciliation, and one-shot
-reports remain diagnostic or fallback actions; they do not replace daemon-owned realtime truth.
+uses the bounded recent emergency window. Manual cache reload, reconciliation, status commands, and
+one-shot reports remain diagnostic or fallback actions; they do not replace daemon-owned realtime
+truth.
 
 ## Further Reading
 

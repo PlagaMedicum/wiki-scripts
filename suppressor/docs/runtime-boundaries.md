@@ -3,13 +3,13 @@
 
 ## Current Reality
 
-`suppressor` is a single Rust daemon with one local supervisor TUI and one additive detached binary
-launch path for rsync server deployment.
+`suppressor` is a single Rust daemon with small local CLI control commands and one additive
+detached binary launch path for rsync server deployment.
 
 That shape is intentional:
 
 - one runtime for the automation logic
-- one local control surface for the operator
+- one local command surface for the operator
 - one current deployment target on one system
 
 ## Core Runtime Areas
@@ -24,7 +24,8 @@ That shape is intentional:
 - `worker.rs`: queued RevDel execution
 - `cache/`: watched-title cache loading and persistence
 - `state.rs`: local durable state
-- `tui*.rs`: local TUI supervision
+- status/control commands read state and send bounded operator signals; they do not own daemon
+  logic
 
 ## State Categories
 
@@ -81,7 +82,7 @@ page scans, or reconciliation sleeps.
 
 - keep `suppressor` narrow
 - keep current deployment local-first
-- keep the daemon and the TUI separate
+- keep daemon/runtime logic separate from command rendering
 - keep logs and metrics at the edges
 - keep realtime health separate from daemon process health and reconciliation progress
 - keep daemon-owned `runtime_status.json` separate from one-shot `command_report.json`

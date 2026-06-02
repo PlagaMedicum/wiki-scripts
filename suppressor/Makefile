@@ -14,7 +14,7 @@ TEST_ARGS ?= -- --test-threads=1
 
 RUN_ENV = RUST_LOG=$(LOG_LEVEL) BEWIKI_LOG_FORMAT=$(LOG_FORMAT) BEWIKI_ENV_FILE=$(ENV_FILE)
 
-.PHONY: help env-check run dry-run tui check-auth reload-cache hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint check
+.PHONY: help env-check run dry-run status health last-edits perf check-auth reload-cache catch-up-now hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint check
 
 define REQUIRE_CONFIG
 	@if [ -f "$(CONFIG)" ]; then :; else \
@@ -39,9 +39,13 @@ help:
 		'  make env-check' \
 		'  make run [CONFIG=./config.toml] [ARGS="..."]' \
 		'  make dry-run [CONFIG=./config.toml] [ARGS="..."]' \
-		'  make tui [CONFIG=./config.toml] [ARGS="..."]' \
+		'  make status [CONFIG=./config.toml] [ARGS="--json"]' \
+		'  make health [CONFIG=./config.toml] [ARGS="--json"]' \
+		'  make last-edits [CONFIG=./config.toml] [ARGS="--limit 20"]' \
+		'  make perf [CONFIG=./config.toml] [ARGS="--json"]' \
 		'  make check-auth [CONFIG=./config.toml]' \
 		'  make reload-cache [CONFIG=./config.toml]' \
+		'  make catch-up-now [CONFIG=./config.toml]' \
 		'  make hide-revid REVID=<revision_id> [CONFIG=./config.toml] [ARGS="..."]' \
 		'  make smoke-test [CONFIG=./config.toml] [ARGS="--page User:Bot/Test"]' \
 		'  make emergency-catchup [CONFIG=./config.toml] [ARGS="--dry-run"]' \
@@ -82,9 +86,22 @@ dry-run:
 	$(call REQUIRE_ENV)
 	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" dry-run $(ARGS)
 
-tui:
+status:
 	$(call REQUIRE_CONFIG)
-	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" tui $(ARGS)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" status $(ARGS)
+
+health:
+	$(call REQUIRE_CONFIG)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" health $(ARGS)
+
+last-edits:
+	$(call REQUIRE_CONFIG)
+	$(call REQUIRE_ENV)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" last-edits $(ARGS)
+
+perf:
+	$(call REQUIRE_CONFIG)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" perf $(ARGS)
 
 check-auth:
 	$(call REQUIRE_CONFIG)
@@ -94,6 +111,10 @@ check-auth:
 reload-cache:
 	$(call REQUIRE_CONFIG)
 	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" reload-cache $(ARGS)
+
+catch-up-now:
+	$(call REQUIRE_CONFIG)
+	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" catch-up-now $(ARGS)
 
 hide-revid:
 	@if [ -n "$(REVID)" ]; then :; else \

@@ -462,7 +462,7 @@ pub fn init_logging(config: &LoggingConfig, verbose: bool) {
                 .with_span_list(false)
                 .finish();
             let _ = tracing::subscriber::set_global_default(subscriber);
-        } else if format.eq_ignore_ascii_case("tui") {
+        } else if format.eq_ignore_ascii_case("compact") {
             let subscriber = tracing_subscriber::fmt()
                 .with_env_filter(filter)
                 .compact()

@@ -8,7 +8,7 @@
 3. Run `make env-check`.
 4. Run `make check-auth`.
 5. Run `make dry-run`.
-6. Move to `make run`, `make tui`, `systemd`, or the rsynced binary `server-start` path only after
+6. Move to `make run`, `systemd`, or the rsynced binary `server-start` path only after
    the dry run is clean and the actual launch path has its own evidence.
 
 ## Emergency 001 Trust Gate
@@ -31,8 +31,8 @@ freshness proof does not count as realtime protection proof.
 Treat the active supervisor path on this host as the source of truth for whether protection is
 running.
 
-- The normal local operator workflow is `make tui`, which starts and supervises a TUI-managed child
-  daemon.
+- The normal local operator workflow is `make run` for an attached daemon, or `server-start` for
+  detached server deployment.
 - The rsync server workflow is `./suppressor --config ./config.toml server-start` from the deployed
   directory. It starts a detached supervisor, which starts and restarts the daemon child it
   verifies.
@@ -48,10 +48,10 @@ running.
 
 For day-to-day use:
 
-1. Start or attach through `make tui`.
-2. Trust the primary status rows before the raw log pane.
+1. Start through `make run`, `systemd`, or `server-start`.
+2. Trust `make health` and `make status` before process lines or command reports.
 3. Use one-shot commands only for bounded manual verification or catch-up.
-4. Treat `command_report.json` and command log lines as separate evidence from daemon-owned
+4. Treat `command_report.json`, journal lines, and Prometheus metrics as separate evidence from daemon-owned
    realtime protection state.
 
 The current MVP daemon trusts MediaWiki `recentchanges` polling as the authoritative live detector.
@@ -67,9 +67,9 @@ checked-in production baseline:
 
 Keep these manual operator tools available:
 
-- `Emergency catch-up`
-- `Coverage: Last 24 hours`
-- `Run bounded recovery`
+- `make catch-up-now`
+- `make emergency-catchup ARGS="--dry-run"`
+- `./suppressor --config ./config.toml coverage-last-24h --report-only`
 
 Those commands are bounded operator actions. They do not prove the daemon is currently protecting
 live edits, and they must not be used to excuse a failing live path.
@@ -79,12 +79,14 @@ live edits, and they must not be used to excuse a failing live path.
 The minimal daemon must install handlers for the operator signals before entering its main loop:
 
 - `reload-cache` sends `SIGHUP` and means "force a watched-page cache reload"
-- `nightly-sweep-now` sends `SIGUSR1` and now means "run bounded manual recovery"
+- `catch-up-now` sends `SIGUSR1` and means "run bounded manual recovery"
+- `nightly-sweep-now` remains a legacy alias for the same signal while old operator scripts are
+  retired
 - `SIGTERM` means graceful stop
 
-Do not remove these handlers while the CLI and TUI still use signal delivery. The Unix default for
-`SIGHUP` and `SIGUSR1` is process termination, so an unhandled operator command can look like a
-random crash followed by supervisor restart.
+Do not remove these handlers while the CLI uses signal delivery. The Unix default for `SIGHUP` and
+`SIGUSR1` is process termination, so an unhandled operator command can look like a random crash
+followed by supervisor restart.
 
 Per-revision RevDel denials such as `permissiondenied` or `cantdelete` are terminal for that target.
 The daemon quarantines them in `simple_daemon_state.json`, reports degraded status with a manual
@@ -135,8 +137,8 @@ The checked-in `config.toml` is the current be.wiki production baseline for:
 - metrics bind
 
 Treat that file as the current working baseline, not as a guarantee that every wiki already fits it.
-The low-spec defaults are intentionally conservative: one daemon process, one TUI, queue capacity
-100, sequential bounded catch-up, five safe title samples per repeated warning class, and no
+The low-spec defaults are intentionally conservative: one daemon process, small CLI controls, queue
+capacity 100, sequential bounded catch-up, five safe title samples per repeated warning class, and no
 unbounded warning output. These bounds are not a license to delay hiding; if a source-list edit adds
 more titles than the planning threshold, the daemon still starts title-scoped catch-up and logs that
 the source edit is large.
@@ -381,31 +383,26 @@ Older runtime-status artifacts currently load safely when new fields are missing
 `realtime.state="unknown"`, `stale_threshold_seconds=10`, empty recovery warnings, and no backoff
 instead of failing to deserialize.
 
-The TUI runs one-shot operator actions as their own commands:
+Operator actions run as plain commands:
 
-- `Emergency catch-up` runs `emergency-catchup`
-- `Coverage: Last 24 hours` runs `coverage-last-24h --report-only`
-- control-center messages are labeled with the `[control]` prefix
+- `catch-up-now` sends bounded manual recovery to the running daemon
+- `emergency-catchup` runs a bounded recovery command
+- `coverage-last-24h --report-only` runs the rolling daily verification preset
 
 One-shot command results are written to bounded `command_report.json` and rendered as command output.
 They do not overwrite daemon-owned `runtime_status.json` and must not be treated as proof that the
 daemon is healthy or running.
 
-The live-output pane now avoids the wrapped-row follow bug by not wrapping log lines at all. Follow mode
-tracks raw logical lines, so the newest visible entry stays aligned with the newest stored entry. The
-tradeoff is that long log lines are clipped by terminal width instead of reflowing; only the status
-panes still use wrapped paragraph rendering.
-
 ## Operational Notes
 
-- use `make tui` for local supervision
-- use the binary command `coverage-last-24h --report-only` or the TUI `Coverage: Last 24 hours`
-  action for the rolling daily verification preset
+- use `make status`, `make health`, `make perf`, and Prometheus metrics for local supervision
+- use the binary command `coverage-last-24h --report-only` for the rolling daily verification preset
 - keep logs free of secrets and suppressed payloads
 - use `make reload-cache` only for watched-list cache diagnostics
+- use `make catch-up-now` to ask the running daemon for bounded manual recovery
 - use `make emergency-catchup ARGS="--dry-run"` for a bounded recent recovery check
 - use `make coverage-report ARGS="--start <RFC3339> --report-only"` for accident-window accounting
-- use `make nightly-sweep-now` as a slower safety-net reconciliation action
+- keep `make nightly-sweep-now` only as the old alias for bounded manual recovery
 - treat auth or rights loss as a stop-condition, not a soft warning
 - treat active shared backoff, stale full-recheck evidence, failed scheduled verification, or stale
   launch-path evidence as non-healthy until later successful evidence clears it
@@ -447,15 +444,15 @@ protection rows.
 
 ## Incident Response Flow
 
-1. Open `make tui` and check `Realtime`, lag, latest outcome, recovery trigger, and latest error.
+1. Run `make health` and `make status`; check realtime state, lag, latest outcome, recovery trigger,
+   and latest error.
 2. If realtime is stale, reconnecting, unhealthy, or blocked, do not rely on the daemon process line
    alone.
 3. Run `make emergency-catchup ARGS="--dry-run"` to inspect the recent default window without hiding.
 4. If the report is correct and auth is healthy, run `make emergency-catchup` to queue unresolved
    eligible edits for hiding.
 5. For a known accident window, run `make coverage-report ARGS="--start <RFC3339> --end <RFC3339> --report-only"`.
-6. For the routine rolling window, use `./suppressor --config ./config.toml coverage-last-24h --report-only`
-   or the TUI `Coverage: Last 24 hours` action.
+6. For the routine rolling window, use `./suppressor --config ./config.toml coverage-last-24h --report-only`.
 7. Treat unresolved items as open exposure until each one has a reason, owner, and next action.
 
 Reports include page title, revision ID, age, reason, and next action. They must not include hidden
@@ -471,8 +468,8 @@ Edits to configured request pages, including `Вікіпедыя:Запыты д
 recent-window catch-up over the current watched set. This is a recovery hook, not a replacement for
 keeping the source list current.
 
-Runtime status and the TUI show the latest source-refresh outcome, added/removed counts, catch-up
-scope, classified refresh errors, and the latest catch-up summary.
+Runtime status shows the latest source-refresh outcome, added/removed counts, catch-up scope,
+classified refresh errors, and the latest catch-up summary.
 
 ## 2026-04-25 Warning-Storm Lesson
 

@@ -225,7 +225,9 @@ def test_replace_line_exact_rule_uses_entry_and_pages_from_current_line(repo_roo
     assert result.entry_arguments == ["Асмолавічы"]
 
 
-def test_replace_belen_line_exact_rule_updates_matching_sfn_and_requires_manual_review(project_root):
+def test_replace_belen_line_exact_rule_updates_matching_sfn_and_requires_manual_review(
+    project_root,
+):
     spec = load_source_spec("belen5", root=project_root)
     body = (
         "{{кніга|аўтар = Мушынскі М.|частка = Гарэцкі Максім Іванавіч|"
@@ -235,13 +237,7 @@ def test_replace_belen_line_exact_rule_updates_matching_sfn_and_requires_manual_
         "isbn = 985-11-0090-0 (т. 5), ISBN 985-11-0035-8|тыраж = 10 000|"
         "ref= Мушынскі М.}}"
     )
-    text = (
-        "{{Sfn|Мушынскі М.|1997|с=81}}\n"
-        "* "
-        + body
-        + "\n"
-        "{{Sfn|Іншы аўтар|1997|с=12}}"
-    )
+    text = "{{Sfn|Мушынскі М.|1997|с=81}}\n* " + body + "\n{{Sfn|Іншы аўтар|1997|с=12}}"
 
     result = replace_text(
         text,

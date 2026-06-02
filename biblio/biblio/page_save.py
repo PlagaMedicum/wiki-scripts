@@ -51,10 +51,7 @@ def _changed_bytes(old_text: str, new_text: str) -> int:
     new_bytes = new_text.encode("utf-8")
     prefix = _common_prefix_length(old_bytes, new_bytes)
     suffix = _common_suffix_length(old_bytes, new_bytes, prefix)
-    return (
-        len(old_bytes) - prefix - suffix
-        + len(new_bytes) - prefix - suffix
-    )
+    return len(old_bytes) - prefix - suffix + len(new_bytes) - prefix - suffix
 
 
 def _common_prefix_length(old_bytes: bytes, new_bytes: bytes) -> int:

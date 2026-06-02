@@ -14,7 +14,10 @@ That shape is intentional:
 
 ## Core Runtime Areas
 
-- `app.rs` / `cli.rs` / `commands.rs`: CLI dispatch and one-shot commands
+- `app.rs` / `cli.rs`: CLI parsing and dispatch
+- `command_context.rs`: shared command config/path loading interface
+- `commands.rs`: mutating and one-shot operator command controllers
+- `status_command.rs`: read-only operator status, health, performance, and recent-edit inspection
 - `daemon.rs` / `runtime.rs`: daemon lifecycle, launch-path snapshots, and runtime assembly
 - `auth.rs` / `mw_api.rs`: auth and MediaWiki transport
 - `stream.rs`: recentchanges polling as the authoritative live detector, with retained
@@ -26,6 +29,19 @@ That shape is intentional:
 - `state.rs`: local durable state
 - status/control commands read state and send bounded operator signals; they do not own daemon
   logic
+
+## Service Shape
+
+The code is organized as small internal services inside one binary. This is the local version of
+microservice architecture: each module owns a domain, communicates through typed interfaces, and
+does not import presentation details from controllers.
+
+- controllers: `app.rs`, `cli.rs`, `commands.rs`, and `status_command.rs`
+- domain services: live detection, cache, catch-up, worker, scheduler, reconciliation, runtime state
+- gateways: MediaWiki API, auth, local JSON state, signals, metrics, and logs
+
+Controllers may call services and render operator output. Services may emit typed snapshots,
+reports, logs, and metrics. Services must not call controller rendering code.
 
 ## State Categories
 
@@ -83,6 +99,8 @@ page scans, or reconciliation sleeps.
 - keep `suppressor` narrow
 - keep current deployment local-first
 - keep daemon/runtime logic separate from command rendering
+- keep service interfaces small enough that one domain can be edited without loading the whole
+  daemon
 - keep logs and metrics at the edges
 - keep realtime health separate from daemon process health and reconciliation progress
 - keep daemon-owned `runtime_status.json` separate from one-shot `command_report.json`

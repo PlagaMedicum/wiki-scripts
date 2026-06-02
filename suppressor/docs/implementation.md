@@ -109,10 +109,12 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
 - `stream.rs`: recentchanges poll lifecycle, overlap dedupe, source-page/request-page trigger
   detection, retained observer compatibility, source refresh orchestration, and live candidate
   routing.
+- `status_command.rs`: read-only status, health, performance, and recent-edit command controller.
 - `cache/`: suppression-list parsing, redirect-enriched watched-title cache, and watched-title
   diffing.
-- `commands.rs`: one-shot command orchestration, bounded command-report persistence, and detached
-  `server-start` launch verification.
+- `command_context.rs`: shared config/path loading for command controllers.
+- `commands.rs`: mutating one-shot command orchestration, bounded command-report persistence, and
+  detached `server-start` launch verification.
 - `catchup.rs`: bounded recovery windows, optional title scopes, per-revision accounting, safe
   unresolved revision links, next-action text, and warning aggregation.
 - `mw_api.rs`: MediaWiki transport, shared timestamp formatting, response parsing, retryability, and
@@ -122,7 +124,6 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
   snapshots, and local JSON compatibility.
 - `worker.rs`: RevDel submission, retry/relogin/token-refresh flow, final outcome recording, and
   blocked-state persistence.
-- status and health commands: read-only local status rendering and health exit codes.
 
 These are internal ownership boundaries inside one local daemon deployment. They are the intended
 microservice-style architecture for this tool; adding separate OS services would need a separate

@@ -24,8 +24,12 @@
 - Keep suppressor protection behavior stable unless the user explicitly asks to change it.
 - Prefer shrinking docs, generated artifacts, optional UI, dependencies, and duplicate code before
   adding new structure.
-- Keep backend/runtime code separate from operator presentation. Commands may read backend state;
-  backend modules must not depend on command rendering.
+- Treat modules as small internal services. Each service owns one domain, exposes a narrow
+  interface, and avoids reaching across boundaries for implementation details.
+- Keep controllers thin. CLI commands may translate operator intent into backend calls or read
+  state, but backend/runtime modules must not depend on command rendering or operator presentation.
+- Keep communication explicit: pass typed inputs, return typed results or compact state snapshots,
+  and avoid global side channels unless they are deliberate runtime state surfaces.
 - Keep docs short: README for entry points, one architecture overview, one operations note, one
   testing note. Put durable tricky implementation facts near the code they protect.
 - For suppressor work, read `suppressor/README.md`, the relevant `suppressor/docs/` file, and only

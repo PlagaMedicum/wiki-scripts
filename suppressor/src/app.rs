@@ -3,11 +3,12 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::commands::{
-    run_check_auth, run_coverage_last_24h, run_coverage_report, run_emergency_catchup, run_health,
-    run_hide_revid, run_last_edits, run_manual_sweep, run_perf, run_print_effective_config,
-    run_reload_cache, run_server_start, run_status, run_supervisor,
+    run_check_auth, run_coverage_last_24h, run_coverage_report, run_emergency_catchup,
+    run_hide_revid, run_manual_sweep, run_print_effective_config, run_reload_cache,
+    run_server_start, run_supervisor,
 };
 use crate::daemon::run_daemon;
+use crate::status_command::{run_health, run_last_edits, run_perf, run_status};
 
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();

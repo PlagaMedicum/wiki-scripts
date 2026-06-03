@@ -12,11 +12,24 @@
 - Use `rtk` for token economy.
 
 ## Writing code
-- Try to write as minimal amount of code as possible, according to KISS (keep it simple stupid).
-- Document your code and ensure adding documentation and notes about experiences with hard issues, to not repeat mistakes.
-- Always prefer easy, performant, reliable, fast, simple, not greedy on resources, optimizes, compact sollutions.
-- Ensure reusability of your code, do not repeat yourself.
-- Store all common commands and check common commands from Makefiles. If you repeat some commands often, add them into according makefiles.
+
+- Prefer compact, explicit code with narrow ownership. Remove duplication, generated artifacts, and
+  accidental abstractions before adding new structure.
+- Document only facts that protect future work: interfaces, invariants, failure modes, and hard-won
+  operational lessons. Keep ordinary code self-explanatory.
+- Use existing Makefiles for common commands. Add a command only when repeated manual invocations
+  show that it belongs in the project workflow.
+
+## Reasoning rules
+
+- Treat user examples as evidence for an underlying principle, not text to copy into permanent
+  rules. First identify the failure mode, then choose the smallest durable guidance or code change
+  that addresses that class of failure.
+- Distinguish session instructions from repository policy. Operational comments about the current
+  task do not become durable project rules unless the user asks for that explicitly.
+- If a durable rule would mostly mirror one prompt phrase, ask before writing it down.
+- Prefer positive principles and scoped ownership boundaries over long lists of one-off bans.
+- When uncertain, ask the operator instead of making a broad, confident policy decision.
 
 ## Current cleanup direction
 

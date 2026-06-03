@@ -119,6 +119,8 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
   `command_report.json` persistence.
 - `commands.rs`: direct operator commands for auth, one-revision hiding, daemon signals, and
   effective config rendering.
+- `daemon_backlog.rs`: production daemon pending/quarantine state, retry timing, unresolved
+  summaries, and processed-revision defaults.
 - `catchup.rs`: bounded recovery windows, optional title scopes, per-revision accounting, safe
   unresolved revision links, next-action text, and warning aggregation.
 - `mw_api.rs`: MediaWiki transport, shared timestamp formatting, response parsing, retryability, and

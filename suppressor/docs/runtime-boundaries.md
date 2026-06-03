@@ -21,6 +21,7 @@ That shape is intentional:
 - `server_start.rs`: detached supervisor controller and startup proof checks
 - `status_command.rs`: read-only operator status, health, performance, and recent-edit inspection
 - `daemon.rs` / `runtime.rs`: daemon lifecycle, launch-path snapshots, and runtime assembly
+- `daemon_backlog.rs`: production daemon pending/quarantine state and retry bookkeeping
 - `auth.rs` / `mw_api.rs`: auth and MediaWiki transport
 - `stream.rs`: recentchanges polling as the authoritative live detector, with retained
   EventStreams observer/fallback code kept out of the healthy-state truth path for the MVP

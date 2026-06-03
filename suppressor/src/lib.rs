@@ -15,6 +15,7 @@ pub mod recentchange;
 pub mod reconcile;
 pub mod runtime;
 mod scheduler;
+mod server_start;
 mod signal_control;
 pub mod signals;
 mod simple_daemon;

@@ -113,8 +113,9 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
 - `cache/`: suppression-list parsing, redirect-enriched watched-title cache, and watched-title
   diffing.
 - `command_context.rs`: shared config/path loading for command controllers.
-- `commands.rs`: mutating one-shot command orchestration, bounded command-report persistence, and
-  detached `server-start` launch verification.
+- `server_start.rs`: detached supervisor launch, startup verification, and non-secret launch
+  receipt rendering.
+- `commands.rs`: mutating one-shot command orchestration and bounded command-report persistence.
 - `catchup.rs`: bounded recovery windows, optional title scopes, per-revision accounting, safe
   unresolved revision links, next-action text, and warning aggregation.
 - `mw_api.rs`: MediaWiki transport, shared timestamp formatting, response parsing, retryability, and

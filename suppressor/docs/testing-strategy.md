@@ -69,6 +69,14 @@
 
 ## Current Gate Evidence
 
+- Before daemon refactors, preserve these behavior surfaces unless the operator explicitly approves
+  a behavior change: recentchanges polling, public `user|comment` RevDel scope, pending retry,
+  quarantine, bounded startup/manual catch-up windows, signal commands, supervisor restart evidence,
+  runtime-status schema, and command-report isolation.
+- In managed agent runs, use the direct `rtk` refactor gate: `rtk cargo fmt --check`,
+  `rtk cargo clippy --all-targets --all-features -- -D warnings`,
+  `rtk cargo test -- --test-threads=1`, and `rtk git diff --check`. Passing it proves local
+  regression coverage only; deployment confidence still needs target-host evidence.
 - `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1`: passed with
   223 tests on 2026-05-14 for the polling-first, crash-resilient source tree.
 - `rtk cargo clippy --manifest-path suppressor/Cargo.toml --all-targets --all-features -- -D warnings`: passed.

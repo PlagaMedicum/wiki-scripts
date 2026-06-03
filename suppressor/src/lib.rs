@@ -6,6 +6,7 @@ pub mod cli;
 mod command_context;
 mod commands;
 pub mod config;
+mod coverage_command;
 mod daemon;
 pub(crate) mod effective_config;
 pub mod locks;

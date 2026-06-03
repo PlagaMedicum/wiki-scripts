@@ -16,7 +16,8 @@ That shape is intentional:
 
 - `app.rs` / `cli.rs`: CLI parsing and dispatch
 - `command_context.rs`: shared command config/path loading interface
-- `commands.rs`: mutating and one-shot operator command controllers
+- `commands.rs`: direct auth, hide, signal, and effective-config command controllers
+- `coverage_command.rs`: bounded emergency catch-up, coverage, and command-report controller
 - `server_start.rs`: detached supervisor controller and startup proof checks
 - `status_command.rs`: read-only operator status, health, performance, and recent-edit inspection
 - `daemon.rs` / `runtime.rs`: daemon lifecycle, launch-path snapshots, and runtime assembly
@@ -37,7 +38,8 @@ The code is organized as small internal services inside one binary. This is the 
 microservice architecture: each module owns a domain, communicates through typed interfaces, and
 does not import presentation details from controllers.
 
-- controllers: `app.rs`, `cli.rs`, `commands.rs`, `server_start.rs`, and `status_command.rs`
+- controllers: `app.rs`, `cli.rs`, `commands.rs`, `coverage_command.rs`, `server_start.rs`, and
+  `status_command.rs`
 - domain services: live detection, cache, catch-up, worker, scheduler, reconciliation, runtime state
 - gateways: MediaWiki API, auth, local JSON state, signals, metrics, and logs
 

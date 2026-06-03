@@ -38,9 +38,11 @@ identify how a real person edited a sensitive page; use synthetic fixtures and a
 
 ## Where To Look Next
 
+- repo command orchestration:
+  `Makefile`
 - project usage and scope:
   [`biblio/README.md`](biblio/README.md) and [`suppressor/README.md`](suppressor/README.md)
-- project commands:
+- detailed project commands:
   `biblio/Makefile` and `suppressor/Makefile`
 - local agent rules:
   [`AGENTS.md`](AGENTS.md)

@@ -9,6 +9,7 @@ pub mod config;
 mod coverage_command;
 mod daemon;
 mod daemon_backlog;
+mod daemon_windows;
 pub(crate) mod effective_config;
 pub mod locks;
 pub mod metrics;

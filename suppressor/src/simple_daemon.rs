@@ -12,7 +12,7 @@ use crate::auth::{AuthState, authenticate, refresh_csrf_token};
 use crate::cache::{
     CachePersistence, CacheRefreshMode, RuntimeCache, load_or_bootstrap, refresh_cache,
 };
-use crate::config::{AppConfig, CatchupConfig, EnvConfig, RuntimePaths, init_logging, load_env};
+use crate::config::{AppConfig, EnvConfig, RuntimePaths, init_logging, load_env};
 use crate::daemon_backlog::{
     HideTarget, MAX_PENDING_ITEMS, MAX_QUARANTINED_ITEMS, PROCESSED_CAPACITY, STATE_FILE_NAME,
     SimpleDaemonState, effective_realtime_state, is_blocking_failure, is_terminal_hide_failure,
@@ -31,7 +31,6 @@ use crate::state::{
 use crate::titles::normalize_title;
 
 const LIVE_POLL_INTERVAL_SECONDS: u64 = 1;
-const LIVE_OVERLAP_SECONDS: i64 = 15;
 const QUARANTINE_VERIFY_INTERVAL_SECONDS: i64 = 300;
 const QUARANTINE_VERIFY_PER_PASS: usize = 25;
 const SMOKE_TEST_PAGE: &str = "Удзельнік:Plaga_med_Bot/suppressor/tests";
@@ -396,11 +395,11 @@ impl SimpleDaemon {
     }
 
     fn startup_catchup_start(&self, end: DateTime<Utc>) -> DateTime<Utc> {
-        startup_catchup_start_for(&self.state, &self.config.catchup, end)
+        crate::daemon_windows::startup_catchup_start(&self.state, &self.config.catchup, end)
     }
 
     fn live_poll_start(&self, end: DateTime<Utc>) -> DateTime<Utc> {
-        live_poll_start_for(&self.state, &self.config.catchup, end)
+        crate::daemon_windows::live_poll_start(&self.state, &self.config.catchup, end)
     }
 
     async fn refresh_cache_if_due(&mut self) -> Result<()> {
@@ -1048,31 +1047,6 @@ fn actionable_issue_for_failure(
     }
 }
 
-fn startup_catchup_start_for(
-    state: &SimpleDaemonState,
-    catchup: &CatchupConfig,
-    end: DateTime<Utc>,
-) -> DateTime<Utc> {
-    let fallback = end - TimeDelta::seconds(catchup.default_window_seconds);
-    let Some(cursor) = state.last_successful_poll_at else {
-        return fallback;
-    };
-    let max_start = end - TimeDelta::seconds(catchup.max_window_seconds);
-    cursor.max(max_start).min(end)
-}
-
-fn live_poll_start_for(
-    state: &SimpleDaemonState,
-    catchup: &CatchupConfig,
-    end: DateTime<Utc>,
-) -> DateTime<Utc> {
-    state
-        .last_successful_poll_at
-        .map(|cursor| cursor - TimeDelta::seconds(LIVE_OVERLAP_SECONDS))
-        .unwrap_or_else(|| end - TimeDelta::seconds(catchup.default_window_seconds))
-        .max(end - TimeDelta::seconds(catchup.max_window_seconds))
-}
-
 fn daemon_state_for(requested_state: &str, dry_run: bool) -> String {
     if requested_state == "stopped" {
         return "stopped".to_string();
@@ -1133,14 +1107,6 @@ mod tests {
         }
     }
 
-    fn test_catchup_config() -> CatchupConfig {
-        CatchupConfig {
-            default_window_seconds: 1_800,
-            max_window_seconds: 7_200,
-            ..CatchupConfig::default()
-        }
-    }
-
     #[test]
     fn permission_failure_gets_fresh_auth_retry_before_quarantine() {
         let permission = api_failure_with_code("permission", "permissiondenied");
@@ -1152,75 +1118,5 @@ mod tests {
         assert!(should_retry_after_fresh_auth(&cantdelete));
         assert!(is_terminal_hide_failure(&cantdelete));
         assert!(!should_retry_after_fresh_auth(&timeout));
-    }
-
-    #[test]
-    fn startup_catchup_uses_default_window_without_poll_cursor() {
-        let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let state = SimpleDaemonState::default();
-
-        assert_eq!(
-            startup_catchup_start_for(&state, &test_catchup_config(), end),
-            end - TimeDelta::seconds(1_800)
-        );
-    }
-
-    #[test]
-    fn startup_catchup_clamps_old_cursor_to_max_window() {
-        let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let state = SimpleDaemonState {
-            last_successful_poll_at: Some(end - TimeDelta::seconds(20_000)),
-            ..SimpleDaemonState::default()
-        };
-
-        assert_eq!(
-            startup_catchup_start_for(&state, &test_catchup_config(), end),
-            end - TimeDelta::seconds(7_200)
-        );
-    }
-
-    #[test]
-    fn startup_catchup_clamps_future_cursor_to_now() {
-        let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let state = SimpleDaemonState {
-            last_successful_poll_at: Some(end + TimeDelta::seconds(60)),
-            ..SimpleDaemonState::default()
-        };
-
-        assert_eq!(
-            startup_catchup_start_for(&state, &test_catchup_config(), end),
-            end
-        );
-    }
-
-    #[test]
-    fn live_poll_reuses_overlap_without_exceeding_max_window() {
-        let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let catchup = test_catchup_config();
-        let recent = SimpleDaemonState {
-            last_successful_poll_at: Some(end - TimeDelta::seconds(60)),
-            ..SimpleDaemonState::default()
-        };
-        let old = SimpleDaemonState {
-            last_successful_poll_at: Some(end - TimeDelta::seconds(20_000)),
-            ..SimpleDaemonState::default()
-        };
-
-        assert_eq!(
-            live_poll_start_for(&recent, &catchup, end),
-            end - TimeDelta::seconds(60 + LIVE_OVERLAP_SECONDS)
-        );
-        assert_eq!(
-            live_poll_start_for(&old, &catchup, end),
-            end - TimeDelta::seconds(7_200)
-        );
     }
 }

@@ -49,8 +49,6 @@ receipt, and is trusted only after the PID and `runtime_status.json` keep updati
 
 ## Common Commands
 
-Make is only a small command router. Pass suppressor CLI flags and positionals through `ARGS`.
-
 - `make env-check`
 - `make check-auth`
 - `make smoke-test`
@@ -62,10 +60,8 @@ Make is only a small command router. Pass suppressor CLI flags and positionals t
 - `make perf`
 - `make reload-cache`
 - `make catch-up-now`
-- `make hide-revid ARGS="12345"`
 - `make emergency-catchup ARGS="--dry-run"`
 - `make coverage-report ARGS="--start 2026-04-24T00:00:00Z --report-only"`
-- `make coverage-last-24h ARGS="--report-only"`
 - `make nightly-sweep-now`
 - `make build`
 - `make build-server`

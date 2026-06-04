@@ -134,11 +134,4 @@ page scans, or reconciliation sleeps.
   log path agree for that detached child
 - do not broaden the service unless there is a strong operational reason
 
-## Future Direction
-
-Possible future work, not current implementation:
-
-- multiwiki support
-- stronger process separation only if it improves failure isolation or safety
-
-Remote control or broader moderation-platform ambitions are not the default path.
+Future work is tracked only in the repo-level `docs/plan.md`.

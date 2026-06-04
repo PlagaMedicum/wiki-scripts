@@ -54,8 +54,8 @@ For day-to-day use:
 4. Treat `command_report.json`, journal lines, and Prometheus metrics as separate evidence from daemon-owned
    realtime protection state.
 
-The current MVP daemon trusts MediaWiki `recentchanges` polling as the authoritative live detector.
-Retained EventStreams code is not the healthy-state source of truth for this hotfix tree.
+The daemon trusts MediaWiki `recentchanges` polling as the authoritative live detector. Retained
+EventStreams code is not the healthy-state source of truth.
 
 ## Emergency Live-Only Production Profile
 
@@ -143,82 +143,12 @@ unbounded warning output. These bounds are not a license to delay hiding; if a s
 more titles than the planning threshold, the daemon still starts title-scoped catch-up and logs that
 the source edit is large.
 
-## 2026-05-06 Config-Stability Gate
+## Config-Stability Gate
 
-Human review rule: config changes are operator-contract changes. Do not edit tracked config,
-target-host config, config schema, defaults, environment variable names, loading semantics, or
-deployment-required sections unless the change has a concrete motivation, explicit human review,
-compatibility or migration evidence, rollback/fallback, and target-host verification.
-
-Target-host evidence from `ubuntu@webtop:~/wiki-supressor/suppressor`:
-
-```text
-./suppressor server-start
-Error: Failed to parse config file config.toml
-
-Caused by:
-    TOML parse error at line 1, column 1
-      |
-    1 | [wiki]
-      | ^
-    missing field `realtime`
-```
-
-Config-stability verdict: BLOCK production trust. The deployed server config diverges from the
-reviewed tracked baseline because the current baseline has a `[realtime]` section, while the target
-host config used by that command does not. This evidence is a config-load failure before daemon
-trust, not a launch success.
-
-No config edit was approved or performed by this T039 pass. Do not add `[realtime]` or any other
-section to the server config as a quick background fix. The next valid path must be one of:
-
-- a human-reviewed migration of the target-host config to the reviewed tracked baseline, with a
-  backup/rollback path and post-migration `server-start` evidence
-- a human-reviewed backward-compatible loader or migration-needed diagnostic, with tests and a new
-  server build before deployment trust
-
-2026-05-07 update: the human-approved path is target-host config migration to the reviewed tracked
-baseline. The human operator reports that the server config was updated and the daemon was started.
-The next required evidence is non-secret `server-start` receipt, PID/runtime/log paths,
-daemon-owned status freshness, and terminal logout survival.
-
-Later 2026-05-07 server-running evidence showed a live process, but the status remained
-non-healthy because launch-path, PID-file, runtime-status, and detached-log evidence did not agree.
-That is blocked T040 evidence, not a successful launch proof. Preserve a possibly protective daemon
-while gathering evidence, but do not trust the deployment until the mismatch is resolved through a
-matching receipt, safe fresh `server-start`, or rollback to the last trusted workflow.
-
-This evidence may use an already-started daemon only if the operator evidence ties that process to
-the approved config migration and the deployed binary's
-`./suppressor --config ./config.toml server-start` command. If the original receipt is unavailable,
-the safe replacement evidence is the same receipt fields from daemon-owned status and local process
-inspection: mode, PID, binary path, config path, PID file, `runtime_status.json` path, detached log
-path, and `launch_path=server-start`. Record a safe artifact identity tuple for that launched
-binary, such as resolved path plus size/mtime from `stat`, and tie it to the same PID and
-daemon-owned status file. `runtime_status.json` must match the live PID when present, have a daemon
-timestamp or file mtime no older than 10 seconds at inspection, and remain fresh on a second
-inspection within 10 seconds. After closing the SSH terminal and reconnecting, the same PID must be
-alive and daemon-owned status must still be fresh. Do not record `.env` values, passwords, cookies,
-tokens, session material, raw hidden text, sensitive article content, or full unredacted logs.
-
-2026-05-13 rsynced update: the target-host bundle safely proved that the reviewed `[realtime]`
-config is present and that one `server-start` run wrote aligned PID/status/log metadata. Safe facts
-from that bundle include `launch_path.kind=server-start`, `launch_path.pid=28423`,
-`launch_path.binary_path=/home/ubuntu/wiki-supressor/suppressor/suppressor`,
-`launch_path.config_path=config.toml`, `launch_path.runtime_status_file=./state/runtime_status.json`,
-`launch_path.log_path=./state/daemon.log`, and a `runtime_status.json` file mtime of
-`2026-05-13 22:36:45 +0200`. Treat this as partial T040 launch evidence only; logout-survival and
-current-binary proof are still missing.
-
-2026-05-14 rsynced relaunch update: the follow-up bundle still lacked `live_lane`,
-`background_lane`, and `latency`, and its recovery summary still showed the legacy shape rather
-than current candidate-first evidence. Therefore the active blocker is deployment identity and
-launch workflow trust, not another unresolved local crash-policy design.
-
-Rollback or fallback until then: keep target-host deployment blocked, use the last trusted
-binary/config/state workflow if one exists, or use manual emergency catch-up while a reviewed fix is
-prepared. No T040 launch evidence counts until the launch evidence gate has a matching receipt or
-explicit fallback path.
+Config changes are operator-contract changes. Do not edit tracked config, target-host config,
+config schema, defaults, environment variable names, loading semantics, or deployment-required
+sections unless the change has a concrete motivation, human review, compatibility or migration
+evidence, rollback/fallback, and target-host verification.
 
 ## State Files
 
@@ -276,29 +206,14 @@ The receipt must include mode, daemon PID, supervisor PID, binary path, config p
 only after reconnecting to the server and confirming the supervisor PID is alive, the current
 `daemon.pid` process is alive, stdout/stderr are going to the printed log path, and daemon-owned
 `runtime_status.json` continues updating under the 10-second freshness rule above.
-For T052 preflight, the same run must also prove current-MVP status shape: `runtime_status.json`
-should include `live_lane`, `background_lane`, and `latency`, and if a recovery pass runs it should
-surface candidate-first aggregate fields rather than only the older legacy recovery summary. Missing
-receipt fields, missing config, missing secrets, unwritable state/log paths, duplicate daemon,
-startup timeout, stale PID, stale runtime status, launch-path/PID mismatch, non-`server-start`
-launch labels, missing logout-survival evidence, missing safe artifact identity, legacy-only status
-shape, or unhealthy startup evidence blocks deployment trust. A running daemon may continue
-protecting edits while evidence is incomplete, but T040 and MVP deployment trust stay blocked until
-the missing or mismatched evidence is resolved and recorded.
-
-## Active Live-Hide Incident
-
-The operator reported a screenshot where a watched sensitive page still had a public hide action
-after an operator-account edit. The concrete page, actor, and revision identifiers are intentionally
-omitted from repository docs and tests. Treat this as failed T041 live-hide evidence. That page is
-expected to be watched, and operator-account eligible edits must not be filtered out. If the exposed
-revision ID is known, hide it manually or run emergency catch-up before waiting for code changes.
-
-For the hotfix, collect only safe server facts: PID/binary, launch path, runtime-status freshness,
-last observed event, last matching title/revision, latest outcome, latest actionable issue, queue
-depth, processed-revision presence for the exposed revision if known, and whether the watched page is
-in the server cache. Do not copy secrets or raw sensitive logs. Fix the first failed boundary in the
-live path before spending time on resource samples or broader close-out.
+The same run must prove current status shape: `runtime_status.json` includes `live_lane`,
+`background_lane`, and `latency`, and recovery work surfaces candidate-first aggregate fields.
+Missing receipt fields, missing config, missing secrets, unwritable state/log paths, duplicate
+daemon, startup timeout, stale PID, stale runtime status, launch-path/PID mismatch, non-`server-start`
+launch labels, missing logout-survival evidence, missing safe artifact identity, old status shape,
+or unhealthy startup evidence blocks deployment trust. A running daemon may continue protecting edits
+while evidence is incomplete, but deployment trust stays blocked until the missing or mismatched
+evidence is resolved and recorded.
 
 ## Crash-Resilience And Recovery Status
 
@@ -337,7 +252,7 @@ short deadline; an expired live attempt records a retrying `deadline-exceeded` o
 edits can still be accepted or visibly rejected.
 
 In `runtime_status.json`, check `realtime.live_lane` and `realtime.background_lane` separately. The
-fields to record for T042 are queue depth, queue capacity, in-flight count, concurrency limit, latest
+fields to record are queue depth, queue capacity, in-flight count, concurrency limit, latest
 saturation time, and latest saturation reason. The legacy `realtime.queue_depth` remains the live
 queue depth for compatibility. Recent timing evidence is under `realtime.latency` for
 observed-to-queue, queue-to-submit, submit-to-complete, and observed-to-hidden.
@@ -347,41 +262,6 @@ target-host smoke check records a live or controlled dry-run edit while reconcil
 verification is either active or queued, then confirms the live lane reacts without waiting for the
 background lane to drain. This check has no fixed internal millisecond SLA; the release target is
 still the external hide evidence in the feature spec.
-
-## 2026-04-28 Baseline Evidence
-
-The current local state footprint is:
-
-- `runtime_status.json`: `3780` bytes
-- `nightly_sweep_progress.json`: `393436` bytes
-- `processed_revids.json`: `24116` bytes
-- `suppression_list_cache.json`: `168984` bytes
-- `last_event_id.txt`: `149` bytes
-- `daemon.pid`: `6` bytes
-
-The measured total for `state/` is `590471` bytes. `nightly_sweep_progress.json` and
-`suppression_list_cache.json` are the dominant files; `runtime_status.json` is small by comparison.
-The current `resource_economy.state_bytes_recent` field is still `0`, so resource-byte accounting is
-not yet reflecting the real on-disk total.
-
-The current runtime snapshot on disk shows the remaining status-integrity problems that the recovery
-work is closing:
-
-- `realtime.state="catching-up"` with `catchup_active=true` and `backoff_until=null`
-- `last_event_observed_at="2026-04-28T19:00:45.173840784Z"` with `current_lag_seconds=0`
-- `last_freshness_probe_at="2026-04-28T19:00:45.500000000Z"`
-- `latest_outcome.mode="live"` and `latest_outcome.outcome="blocked"` with `reason_code="auth-session"`
-- `latest_recovery_warnings=[]` and `latest_recovery_summary.unresolved_items=[]`
-- `reconciliation.last_result="failed: non-json-response: Failed to decode JSON response: expected value at line 1 column 1"`
-
-This means the persisted baseline currently shows a fresh polling cycle, no retained unresolved sample,
-no persisted warning summary growth, and a still-mixed operational picture where the realtime state can
-remain in `catching-up` while the latest actionable live outcome is already blocked for another reason.
-
-Older runtime-status artifacts currently load safely when new fields are missing. The regression test in
-`src/state.rs` proves that older JSON without the newer realtime fields falls back to
-`realtime.state="unknown"`, `stale_threshold_seconds=10`, empty recovery warnings, and no backoff
-instead of failing to deserialize.
 
 Operator actions run as plain commands:
 

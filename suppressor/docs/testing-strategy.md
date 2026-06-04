@@ -63,9 +63,8 @@
 - no automated percentile proof for the production recentchanges polling path; local tests prove
   bounded synthetic p50/p95/p99 snapshots, but target-host release claims still need controlled live
   or dry-run observations
-- no automated proof that the rsynced binary survives SSH logout on the deployment host; T040 must
-  record that manually
-- no automated 10-minute deployment-host CPU/RSS/resource sample; T042 must record that manually
+- no automated proof that the rsynced binary survives SSH logout on the deployment host
+- no automated deployment-host CPU/RSS/resource sample
 
 ## Current Gate Evidence
 
@@ -73,18 +72,12 @@
   a behavior change: recentchanges polling, public `user|comment` RevDel scope, pending retry,
   quarantine, bounded startup/manual catch-up windows, signal commands, supervisor restart evidence,
   runtime-status schema, and command-report isolation.
-- In managed agent runs, use the direct `rtk` refactor gate: `rtk cargo fmt --check`,
-  `rtk cargo clippy --all-targets --all-features -- -D warnings`,
-  `rtk cargo test -- --test-threads=1`, and `rtk git diff --check`. Passing it proves local
-  regression coverage only; deployment confidence still needs target-host evidence.
-- `rtk cargo test --manifest-path suppressor/Cargo.toml -- --test-threads=1`: passed with
-  223 tests on 2026-05-14 for the polling-first, crash-resilient source tree.
-- `rtk cargo clippy --manifest-path suppressor/Cargo.toml --all-targets --all-features -- -D warnings`: passed.
+- In managed agent runs, use the project gate: `rtk make -C suppressor check` plus
+  `rtk git diff --check`. Passing it proves local regression coverage only; deployment confidence
+  still needs target-host evidence.
 - Wiremock-backed tests bind local loopback ports. In sandboxed agent runs they may fail with
   `Operation not permitted` unless the test command is allowed to bind local ports; rerun the same
   `rtk cargo test` gate with that permission before treating it as a code failure.
-- `rtk make -C suppressor build-server`: passed on 2026-05-14 outside the sandboxed Zig cache
-  restriction and produced `target/aarch64-unknown-linux-musl/release/suppressor`.
 
 ## Minimum Server Verification Path
 
@@ -99,7 +92,7 @@ evidence is a release blocker, not a CI substitute.
 
 The implementation was grounded in the code audit finding that the previous EventStreams-first loop
 could wait indefinitely on `stream.next().await` and only reconnect on explicit stream errors or
-EOF. The current MVP hotfix instead makes recentchanges polling authoritative for healthy-state
+EOF. The current implementation instead makes recentchanges polling authoritative for healthy-state
 truth and keeps retained observer evidence secondary.
 
 Alternate incident causes were also inspected and covered in the implementation path:

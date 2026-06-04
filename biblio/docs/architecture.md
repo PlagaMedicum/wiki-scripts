@@ -105,11 +105,4 @@ Bad fit:
 
 If a request stops being bibliography-shaped, it should become a separate tool.
 
-## Future Direction
-
-Planned direction, not current implementation:
-
-- turn the current code-level onboarding/import boundary into a more explicit real boundary with
-  the smallest useful next step
-- keep shared reusable components beneath that split
-- keep one operator-facing Makefile even if the backend shape grows
+Future work is tracked only in the repo-level `docs/plan.md`.

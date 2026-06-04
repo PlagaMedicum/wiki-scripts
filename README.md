@@ -46,3 +46,5 @@ identify how a real person edited a sensitive page; use synthetic fixtures and a
   `biblio/Makefile` and `suppressor/Makefile`
 - local agent rules:
   [`AGENTS.md`](AGENTS.md)
+- repo cleanup and architecture plan:
+  [`docs/plan.md`](docs/plan.md)

@@ -66,7 +66,8 @@
   state, but backend/runtime modules must not depend on command rendering or operator presentation.
 - Keep communication explicit: pass typed inputs, return typed results or compact state snapshots,
   and avoid global side channels unless they are deliberate runtime state surfaces.
-- Keep docs short: README for entry points, one architecture overview, one operations note, one
-  testing note. Put durable tricky implementation facts near the code they protect.
+- Keep docs short: README for entry points, the root `docs/plan.md` for future work, and
+  project-local architecture, operations, and testing notes for current truth. Put durable tricky
+  implementation facts near the code they protect.
 - For suppressor work, read `suppressor/README.md`, the relevant `suppressor/docs/` file, and only
   the code touched by the task.

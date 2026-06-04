@@ -5,7 +5,9 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::mw_api::revision_url;
-use crate::state::{ApiFailureSnapshot, ProcessedRevidsState, UnresolvedExposureItem, load_json};
+use crate::state::{
+    ApiFailureSnapshot, ProcessedRevidsState, SourceListRefresh, UnresolvedExposureItem, load_json,
+};
 
 pub(crate) const STATE_FILE_NAME: &str = "daemon_state.json";
 pub(crate) const PROCESSED_CAPACITY: usize = 10_000;
@@ -24,6 +26,7 @@ pub(crate) struct DaemonState {
     pub(crate) last_successful_hide_revid: Option<u64>,
     pub(crate) last_successful_hide_source_label: Option<String>,
     pub(crate) latest_error: Option<ApiFailureSnapshot>,
+    pub(crate) last_source_refresh: Option<SourceListRefresh>,
     pub(crate) pending: Vec<PendingHide>,
     pub(crate) quarantined: Vec<PendingHide>,
 }

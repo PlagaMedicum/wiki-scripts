@@ -13,8 +13,8 @@ in retained or aspirational runtime code.
 
 ## Decisions
 
-- Replace `simple_daemon.rs` with one `daemon.rs`.
-- Rename `SimpleDaemon` and `SimpleDaemonState` to `Daemon` and `DaemonState`.
+- Keep one active daemon implementation in `daemon.rs`.
+- Keep daemon types named directly after their domain: `Daemon` and `DaemonState`.
 - Use only `daemon_state.json` for daemon-owned pending/quarantine state.
 - Do not add legacy state loading, aliases, or dual writes. Commit history is the legacy store.
 - Keep live hiding behavior stable while adding source-list history sync.
@@ -53,8 +53,9 @@ in retained or aspirational runtime code.
 
 ## Tests
 
-- No `simple_daemon`, `SimpleDaemon`, `minimal daemon`, or `simple_daemon_state.json` references
-  remain.
+- No removed daemon module, type, wording, or state-file references remain.
+- Clippy and Ruff remain the primary quality guardrails. Do not add custom quality tooling when an
+  established lint/test tool can cover the same risk.
 - `daemon_state.json` is the only daemon state file.
 - Low-priority work runs when high-priority work is idle.
 - High-priority work pauses low-priority work at a transaction boundary.

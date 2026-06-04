@@ -21,6 +21,7 @@ That shape is intentional:
 - `server_start.rs`: detached supervisor controller and startup proof checks
 - `status_command.rs`: read-only operator status, health, performance, and recent-edit inspection
 - `daemon.rs` / `runtime.rs`: daemon lifecycle, launch-path snapshots, and runtime assembly
+- `daemon/background.rs`: bounded low-priority source refresh and history-sweep worker
 - `daemon_backlog.rs`: production daemon pending/quarantine state and retry bookkeeping
 - `daemon_windows.rs`: startup catch-up and live polling window selection
 - `auth.rs` / `mw_api.rs`: auth and MediaWiki transport

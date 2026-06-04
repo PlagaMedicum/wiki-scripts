@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,12 +6,12 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeDelta, Utc};
 use tokio::signal::unix::{SignalKind, signal as unix_signal};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 use tracing::{error, info, warn};
 
 use crate::auth::{AuthState, authenticate, refresh_csrf_token};
 use crate::cache::{
-    CachePersistence, CacheRefreshMode, RuntimeCache, load_or_bootstrap, refresh_cache,
+    CachePersistence, CacheRefreshMode, RuntimeCache, SourceRefreshTriggerKind, load_or_bootstrap,
 };
 use crate::config::{AppConfig, EnvConfig, RuntimePaths, init_logging, load_env};
 use crate::daemon_backlog::{
@@ -26,9 +27,16 @@ use crate::signals;
 use crate::state::{
     ActionableIssueSnapshot, ApiFailureSnapshot, CoverageSummary, CurrentTaskSnapshot,
     ExecutionLaneSnapshot, LaunchPathSnapshot, ProcessedRevidsState, RealtimeRuntimeStatus,
-    RuntimeStatus, SuppressionOutcomeSnapshot, load_json, save_json_atomic, save_text_atomic,
+    RuntimeStatus, SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic,
+    save_text_atomic,
 };
 use crate::titles::normalize_title;
+
+mod background;
+
+use background::{
+    BackgroundEvent, BackgroundTask, BackgroundWorker, PriorityGate, spawn_background_worker,
+};
 
 pub(crate) const LAUNCH_KIND_ENV: &str = "SUPPRESSOR_LAUNCH_KIND";
 pub(crate) const LAUNCH_LOG_PATH_ENV: &str = "SUPPRESSOR_LAUNCH_LOG_PATH";
@@ -93,6 +101,12 @@ struct Daemon {
     state_file: PathBuf,
     next_cache_refresh_at: DateTime<Utc>,
     next_quarantine_verify_at: DateTime<Utc>,
+    background_tx: mpsc::Sender<BackgroundTask>,
+    background_rx: mpsc::Receiver<BackgroundEvent>,
+    priority_gate: Arc<PriorityGate>,
+    queued_history_titles: HashSet<String>,
+    background_queue_depth: usize,
+    background_active_task: Option<String>,
 }
 
 impl Daemon {
@@ -109,6 +123,9 @@ impl Daemon {
         migrate_terminal_pending_to_quarantine(&mut state);
         let processed = load_processed_revids(&paths.processed_revids_file)?;
         let launch_path = launch_path_snapshot_from_paths(&paths, Utc::now());
+        let (background_tx, background_task_rx) = mpsc::channel(config.queue.capacity);
+        let (background_event_tx, background_rx) = mpsc::channel(config.queue.capacity);
+        let priority_gate = Arc::new(PriorityGate::default());
 
         let mut daemon = Self {
             config,
@@ -130,6 +147,12 @@ impl Daemon {
             state_file,
             next_cache_refresh_at: Utc::now(),
             next_quarantine_verify_at: Utc::now(),
+            background_tx,
+            background_rx,
+            priority_gate,
+            queued_history_titles: HashSet::new(),
+            background_queue_depth: 0,
+            background_active_task: None,
         };
 
         daemon
@@ -164,6 +187,18 @@ impl Daemon {
             )
             .await?,
         ));
+        spawn_background_worker(BackgroundWorker {
+            config: daemon.config.clone(),
+            paths: daemon.paths.clone(),
+            env: daemon.env.clone(),
+            client: daemon.client.clone(),
+            auth: daemon.auth.clone(),
+            cache: Arc::clone(&daemon.cache),
+            dry_run: daemon.dry_run,
+            priority_gate: Arc::clone(&daemon.priority_gate),
+            task_rx: background_task_rx,
+            event_tx: background_event_tx,
+        });
         daemon.next_cache_refresh_at = Utc::now()
             + TimeDelta::seconds(daemon.config.suppression_list.metadata_recheck_seconds as i64);
         daemon.resolve_quarantined_already_hidden().await;
@@ -219,7 +254,9 @@ impl Daemon {
                     self.handle_manual_sweep_signal().await;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS)) => {
+                    self.drain_background_events().await;
                     self.tick().await;
+                    self.drain_background_events().await;
                 }
             }
         }
@@ -247,9 +284,7 @@ impl Daemon {
     }
 
     async fn tick(&mut self) {
-        if let Err(error) = self.refresh_cache_if_due().await {
-            self.record_error(error, "source-refresh", None, None);
-        }
+        self.refresh_cache_if_due().await;
         self.resolve_quarantined_if_due().await;
 
         let end = Utc::now();
@@ -345,57 +380,189 @@ impl Daemon {
         }
         self.next_cache_refresh_at = Utc::now()
             + TimeDelta::seconds(self.config.suppression_list.metadata_recheck_seconds as i64);
-        match refresh_cache(
-            &self.cache,
-            &self.client,
-            &self.config,
-            &self.paths,
+        self.enqueue_source_refresh(
+            self.config.suppression_list.title.clone(),
+            None,
+            SourceRefreshTriggerKind::SuppressionList,
             CacheRefreshMode::Forced,
-            persistence_for(self.dry_run),
-        )
-        .await
-        {
-            Ok(changed) => {
-                let watched_count = self.cache.read().await.watched_titles().len();
-                info!(
-                    changed,
-                    watched_count, "operator watched-page cache reload completed"
-                );
-                if let Err(error) = self.write_status(
-                    "healthy",
-                    "watched-page cache reload completed",
-                    None,
-                    Some(idle_task_snapshot()),
-                ) {
-                    error!(error = %error, "failed to publish reload completion status");
-                }
-            }
-            Err(error) => self.record_error(error, "source-refresh", None, None),
-        }
+        );
     }
 
     async fn handle_manual_sweep_signal(&mut self) {
         info!("received bounded manual recovery signal");
         let end = Utc::now();
         let start = self.startup_catchup_start(end);
-        if let Err(error) = self
-            .process_window(start, end, "manual-recovery", true)
-            .await
-        {
-            self.record_poll_error(error, "manual-recovery", start, end);
+        self.enqueue_background_task(BackgroundTask::RecentWindow {
+            start,
+            end,
+            source_label: "manual-recovery".to_string(),
+            processed_revids: self.processed.revids.clone(),
+        });
+        if let Err(error) = self.write_status(
+            "catching-up",
+            "bounded manual recovery queued",
+            None,
+            Some(CurrentTaskSnapshot {
+                task_kind: "manual-recovery".to_string(),
+                label: "queued low-priority recovery window".to_string(),
+                window_start: Some(start),
+                window_end: Some(end),
+                started_at: Some(Utc::now()),
+                ..CurrentTaskSnapshot::default()
+            }),
+        ) {
+            error!(error = %error, "failed to publish manual recovery queue status");
+        }
+    }
+
+    fn enqueue_source_refresh(
+        &mut self,
+        title: String,
+        trigger_revid: Option<u64>,
+        trigger_kind: SourceRefreshTriggerKind,
+        refresh_mode: CacheRefreshMode,
+    ) {
+        self.enqueue_background_task(BackgroundTask::SourceRefresh {
+            title,
+            trigger_revid,
+            trigger_kind,
+            refresh_mode,
+        });
+    }
+
+    fn enqueue_history_sweep(&mut self, title: String) {
+        let normalized = normalize_title(&title);
+        if !self.queued_history_titles.insert(normalized) {
             return;
         }
-        if let Err(error) = self.retry_pending(true).await {
-            self.record_error(error, "pending-retry", None, None);
+        self.enqueue_background_task(BackgroundTask::HistorySweep {
+            title,
+            processed_revids: self.processed.revids.clone(),
+        });
+    }
+
+    fn enqueue_background_task(&mut self, task: BackgroundTask) {
+        match self.background_tx.try_send(task) {
+            Ok(()) => {
+                self.background_queue_depth = self.background_queue_depth.saturating_add(1);
+            }
+            Err(error) => {
+                warn!(error = %error, "low-priority daemon task queue is full");
+            }
+        }
+    }
+
+    async fn drain_background_events(&mut self) {
+        while let Ok(event) = self.background_rx.try_recv() {
+            match event {
+                BackgroundEvent::TaskStarted(label) => {
+                    self.background_queue_depth = self.background_queue_depth.saturating_sub(1);
+                    self.background_active_task = Some(label.clone());
+                    if let Err(error) = self.write_status(
+                        "catching-up",
+                        &format!("low-priority task started: {label}"),
+                        None,
+                        Some(CurrentTaskSnapshot {
+                            task_kind: "background".to_string(),
+                            label,
+                            started_at: Some(Utc::now()),
+                            ..CurrentTaskSnapshot::default()
+                        }),
+                    ) {
+                        error!(error = %error, "failed to publish background task start status");
+                    }
+                }
+                BackgroundEvent::TaskFinished => {
+                    self.background_active_task = None;
+                }
+                BackgroundEvent::HistorySweepFinished(title) => {
+                    self.queued_history_titles.remove(&normalize_title(&title));
+                    self.background_active_task = None;
+                }
+                BackgroundEvent::SourceRefreshCompleted {
+                    refresh,
+                    added_titles,
+                    run_recent_window,
+                } => {
+                    self.record_source_refresh(refresh);
+                    for title in added_titles {
+                        self.enqueue_history_sweep(title);
+                    }
+                    if run_recent_window {
+                        let end = Utc::now();
+                        let start = self.startup_catchup_start(end);
+                        self.enqueue_background_task(BackgroundTask::RecentWindow {
+                            start,
+                            end,
+                            source_label: "request-page-refresh".to_string(),
+                            processed_revids: self.processed.revids.clone(),
+                        });
+                    }
+                }
+                BackgroundEvent::HideSucceeded { target, outcome } => {
+                    if let Err(error) = self.record_hide_success(&target, outcome) {
+                        error!(error = %error, "failed to record background hide success");
+                    }
+                }
+                BackgroundEvent::HideFailed { target, failure } => {
+                    if let Err(error) = self.record_classified_hide_failure(&target, failure) {
+                        error!(error = %error, "failed to record background hide failure");
+                    }
+                }
+                BackgroundEvent::TaskFailed { operation, failure } => {
+                    self.record_classified_background_failure(operation, failure);
+                }
+            }
+        }
+    }
+
+    fn record_source_refresh(&mut self, refresh: SourceListRefresh) {
+        let notice = format!(
+            "source refresh {} new={} removed={} catchup={}",
+            refresh.outcome,
+            refresh.new_titles_count,
+            refresh.removed_titles_count,
+            refresh.catchup_triggered
+        );
+        self.state.last_source_refresh = Some(refresh.clone());
+        if let Some(error) = refresh.error.clone() {
+            self.state.latest_error = Some(error.clone());
+            if let Err(save_error) = self.persist_state() {
+                error!(error = %save_error, "failed to persist source refresh failure");
+            }
+            if let Err(status_error) =
+                self.write_status("degraded", &notice, Some(error), Some(idle_task_snapshot()))
+            {
+                error!(error = %status_error, "failed to publish source refresh failure");
+            }
             return;
+        }
+        if let Err(save_error) = self.persist_state() {
+            error!(error = %save_error, "failed to persist source refresh result");
+        }
+        if let Err(status_error) =
+            self.write_status("healthy", &notice, None, Some(idle_task_snapshot()))
+        {
+            error!(error = %status_error, "failed to publish source refresh result");
+        }
+    }
+
+    fn record_classified_background_failure(
+        &mut self,
+        operation: &'static str,
+        failure: ApiFailureSnapshot,
+    ) {
+        self.state.latest_error = Some(failure.clone());
+        if let Err(error) = self.persist_state() {
+            error!(error = %error, "failed to persist background failure");
         }
         if let Err(error) = self.write_status(
-            "healthy",
-            "bounded manual recovery completed",
-            None,
+            "degraded",
+            &format!("{operation} failed: {}", failure.message),
+            Some(failure),
             Some(idle_task_snapshot()),
         ) {
-            error!(error = %error, "failed to publish manual recovery completion status");
+            error!(error = %error, "failed to publish background failure");
         }
     }
 
@@ -407,26 +574,18 @@ impl Daemon {
         crate::daemon_windows::live_poll_start(&self.state, &self.config.catchup, end)
     }
 
-    async fn refresh_cache_if_due(&mut self) -> Result<()> {
+    async fn refresh_cache_if_due(&mut self) {
         if Utc::now() < self.next_cache_refresh_at {
-            return Ok(());
+            return;
         }
         self.next_cache_refresh_at = Utc::now()
             + TimeDelta::seconds(self.config.suppression_list.metadata_recheck_seconds as i64);
-        let changed = refresh_cache(
-            &self.cache,
-            &self.client,
-            &self.config,
-            &self.paths,
+        self.enqueue_source_refresh(
+            self.config.suppression_list.title.clone(),
+            None,
+            SourceRefreshTriggerKind::SuppressionList,
             CacheRefreshMode::Automatic,
-            persistence_for(self.dry_run),
-        )
-        .await?;
-        if changed {
-            let watched_count = self.cache.read().await.watched_titles().len();
-            info!(watched_count, "watched title cache refreshed");
-        }
-        Ok(())
+        );
     }
 
     async fn process_window(
@@ -461,16 +620,41 @@ impl Daemon {
         }
 
         let watched = self.cache.read().await.watched_set.clone();
+        let source_title_normalized = self.cache.read().await.source_title_normalized.clone();
+        let request_pages = self
+            .config
+            .suppression_list
+            .request_pages
+            .iter()
+            .map(|title| normalize_title(title))
+            .collect::<HashSet<_>>();
         let mut watched_count = 0usize;
         for change in changes {
             if self.processed.contains(change.revid) {
                 continue;
             }
-            if !watched.contains(&normalize_title(&change.title)) {
+            let normalized_title = normalize_title(&change.title);
+            if !watched.contains(&normalized_title) {
                 continue;
             }
             watched_count += 1;
+            let source_refresh = if normalized_title == source_title_normalized {
+                Some(SourceRefreshTriggerKind::SuppressionList)
+            } else if request_pages.contains(&normalized_title) {
+                Some(SourceRefreshTriggerKind::RequestPage)
+            } else {
+                None
+            };
+            let trigger_revid = change.revid;
             self.handle_watched_change(change, source_label).await?;
+            if let Some(trigger_kind) = source_refresh {
+                self.enqueue_source_refresh(
+                    self.config.suppression_list.title.clone(),
+                    Some(trigger_revid),
+                    trigger_kind,
+                    CacheRefreshMode::Forced,
+                );
+            }
         }
 
         if window.truncated {
@@ -498,6 +682,7 @@ impl Daemon {
         change: RecentChangeRecord,
         source_label: &str,
     ) -> Result<()> {
+        let _priority_guard = self.priority_gate.begin_high_priority();
         info!(
             title = %change.title,
             revid = change.revid,
@@ -548,6 +733,7 @@ impl Daemon {
             .cloned()
             .collect::<Vec<_>>();
         for item in due {
+            let _priority_guard = self.priority_gate.begin_high_priority();
             let target = HideTarget {
                 title: item.title,
                 revid: item.revid,
@@ -966,11 +1152,14 @@ impl Daemon {
                 live_lane: ExecutionLaneSnapshot {
                     queue_depth: unresolved_count(&self.state),
                     queue_capacity: self.config.queue.capacity,
+                    in_flight: self.priority_gate.high_priority_active_count(),
                     concurrency_limit: 1,
                     ..ExecutionLaneSnapshot::default()
                 },
                 background_lane: ExecutionLaneSnapshot {
+                    queue_depth: self.background_queue_depth,
                     queue_capacity: self.config.queue.capacity,
+                    in_flight: usize::from(self.background_active_task.is_some()),
                     concurrency_limit: 1,
                     ..ExecutionLaneSnapshot::default()
                 },
@@ -988,6 +1177,7 @@ impl Daemon {
                 latest_notice: Some(notice.to_string()),
                 latest_outcome,
                 latest_recovery_summary: Some(self.coverage_summary()),
+                last_source_refresh: self.state.last_source_refresh.clone(),
                 current_task,
                 catchup_active: requested_state == "catching-up",
                 ..RealtimeRuntimeStatus::default()

@@ -630,13 +630,21 @@ impl Daemon {
             .collect::<HashSet<_>>();
         let mut watched_count = 0usize;
         for change in changes {
-            if self.processed.contains(change.revid) {
-                continue;
-            }
             let normalized_title = normalize_title(&change.title);
             let source_refresh =
                 source_refresh_trigger(&normalized_title, &source_title_normalized, &request_pages);
             let trigger_revid = change.revid;
+            if self.processed.contains(change.revid) {
+                if let Some(trigger_kind) = source_refresh {
+                    self.enqueue_source_refresh(
+                        self.config.suppression_list.title.clone(),
+                        Some(trigger_revid),
+                        trigger_kind,
+                        CacheRefreshMode::Forced,
+                    );
+                }
+                continue;
+            }
             if !watched.contains(&normalized_title) {
                 if let Some(trigger_kind) = source_refresh {
                     self.enqueue_source_refresh(
@@ -1333,7 +1341,7 @@ mod tests {
     }
 
     #[test]
-    fn source_refresh_trigger_detects_source_and_request_pages_outside_watched_set() {
+    fn source_refresh_trigger_detects_source_and_request_pages_before_skip_filters() {
         let request_pages = HashSet::from(["Вікіпедыя:Запыты да схавальнікаў".to_string()]);
 
         assert_eq!(

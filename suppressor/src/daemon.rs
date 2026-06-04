@@ -634,18 +634,21 @@ impl Daemon {
                 continue;
             }
             let normalized_title = normalize_title(&change.title);
+            let source_refresh =
+                source_refresh_trigger(&normalized_title, &source_title_normalized, &request_pages);
+            let trigger_revid = change.revid;
             if !watched.contains(&normalized_title) {
+                if let Some(trigger_kind) = source_refresh {
+                    self.enqueue_source_refresh(
+                        self.config.suppression_list.title.clone(),
+                        Some(trigger_revid),
+                        trigger_kind,
+                        CacheRefreshMode::Forced,
+                    );
+                }
                 continue;
             }
             watched_count += 1;
-            let source_refresh = if normalized_title == source_title_normalized {
-                Some(SourceRefreshTriggerKind::SuppressionList)
-            } else if request_pages.contains(&normalized_title) {
-                Some(SourceRefreshTriggerKind::RequestPage)
-            } else {
-                None
-            };
-            let trigger_revid = change.revid;
             self.handle_watched_change(change, source_label).await?;
             if let Some(trigger_kind) = source_refresh {
                 self.enqueue_source_refresh(
@@ -1218,6 +1221,20 @@ impl Daemon {
     }
 }
 
+fn source_refresh_trigger(
+    normalized_title: &str,
+    source_title_normalized: &str,
+    request_pages: &HashSet<String>,
+) -> Option<SourceRefreshTriggerKind> {
+    if normalized_title == source_title_normalized {
+        Some(SourceRefreshTriggerKind::SuppressionList)
+    } else if request_pages.contains(normalized_title) {
+        Some(SourceRefreshTriggerKind::RequestPage)
+    } else {
+        None
+    }
+}
+
 fn actionable_issue_for_failure(
     failure: &ApiFailureSnapshot,
     detected_at: DateTime<Utc>,
@@ -1313,5 +1330,35 @@ mod tests {
         assert!(should_retry_after_fresh_auth(&cantdelete));
         assert!(is_terminal_hide_failure(&cantdelete));
         assert!(!should_retry_after_fresh_auth(&timeout));
+    }
+
+    #[test]
+    fn source_refresh_trigger_detects_source_and_request_pages_outside_watched_set() {
+        let request_pages = HashSet::from(["Вікіпедыя:Запыты да схавальнікаў".to_string()]);
+
+        assert_eq!(
+            source_refresh_trigger(
+                "Удзельнік:Wizardist/SuppressionList",
+                "Удзельнік:Wizardist/SuppressionList",
+                &request_pages,
+            ),
+            Some(SourceRefreshTriggerKind::SuppressionList)
+        );
+        assert_eq!(
+            source_refresh_trigger(
+                "Вікіпедыя:Запыты да схавальнікаў",
+                "Удзельнік:Wizardist/SuppressionList",
+                &request_pages,
+            ),
+            Some(SourceRefreshTriggerKind::RequestPage)
+        );
+        assert_eq!(
+            source_refresh_trigger(
+                "Other",
+                "Удзельнік:Wizardist/SuppressionList",
+                &request_pages
+            ),
+            None
+        );
     }
 }

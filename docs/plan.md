@@ -31,7 +31,7 @@ interfaces, operations, and testing rules; future work belongs here.
 | RCP-004 | `done` | Define maintenance rules for future edits to this plan. |
 | QAG-001 | `done` | Make strict lint, test, audit, and architecture checks required. |
 | QAG-002 | `done` | Review duplicate Rust dependency warnings. |
-| QAG-003 | `ready` | Review unused or oversized dependencies with mature advisory tools. |
+| QAG-003 | `done` | Review unused or oversized dependencies with mature advisory tools. |
 | SBA-001 | `ready` | Plan enforceable suppressor workspace crate boundaries. |
 | SBA-002 | `blocked` | Convert suppressor to a workspace after SBA-001. |
 | SBA-003 | `ready` | Split large daemon runtime responsibilities into smaller modules. |
@@ -244,7 +244,7 @@ Result:
 
 ### QAG-003 Unused Dependency Review
 
-Status: `ready`
+Status: `done`
 
 Start after QAG-001 is stable and before adding more custom tooling.
 
@@ -259,6 +259,15 @@ End when:
 - Removed dependencies are reflected in lockfiles.
 - Remaining dependencies have clear ownership.
 - Root `make check` passes.
+
+Result:
+
+- Ran `cargo-machete` for `suppressor`; removed unused `chrono-tz`, `dotenvy`, and
+  `reqwest-eventsource`.
+- Re-ran `cargo-machete`; it reports no unused suppressor dependencies.
+- Tried `deptry` for `biblio`; it needs package-to-module mapping before it is low-noise
+  because `python-dotenv` correctly provides the imported `dotenv` module. Keep it advisory
+  and do not add it to required checks yet.
 
 ## SBA: Suppressor Architecture
 

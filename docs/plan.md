@@ -32,8 +32,8 @@ interfaces, operations, and testing rules; future work belongs here.
 | QAG-001 | `done` | Make strict lint, test, audit, and architecture checks required. |
 | QAG-002 | `done` | Review duplicate Rust dependency warnings. |
 | QAG-003 | `done` | Review unused or oversized dependencies with mature advisory tools. |
-| SBA-001 | `ready` | Plan enforceable suppressor workspace crate boundaries. |
-| SBA-002 | `blocked` | Convert suppressor to a workspace after SBA-001. |
+| SBA-001 | `done` | Plan enforceable suppressor workspace crate boundaries. |
+| SBA-002 | `ready` | Convert suppressor to a workspace after SBA-001. |
 | SBA-003 | `ready` | Split large daemon runtime responsibilities into smaller modules. |
 | SBA-004 | `blocked` | Remove duplicate command/recovery runtime ownership after daemon boundaries settle. |
 | BBA-001 | `done` | Enforce Python import architecture contracts. |
@@ -273,7 +273,7 @@ Result:
 
 ### SBA-001 Rust Workspace Boundary Plan
 
-Status: `ready`
+Status: `done`
 
 Start when suppressor still relies on one large crate for enforceable architecture.
 
@@ -292,11 +292,66 @@ End when:
 - No runtime behavior, config schema, or state file names change.
 - `make -C suppressor check` passes.
 
+Result:
+
+Target shape:
+
+- `suppressor-core`: inward domain and DTO crate. Owns title normalization, recentchange parsing,
+  cache models, config structs, durable-state structs, action/request/result structs, and small pure
+  helpers. It must not depend on MediaWiki transport, filesystem persistence, process signals,
+  metrics exporters, CLI rendering, or daemon launch.
+- `suppressor-app`: application orchestration crate. Owns runtime state transitions, dispatch lanes,
+  catch-up accounting, reconciliation policy, queue/backlog policy, worker coordination, and
+  application ports. It may depend on `suppressor-core` and trait interfaces for gateways, but not
+  on concrete CLI/status rendering.
+- `suppressor-mediawiki`: outward gateway crate. Owns authentication and MediaWiki HTTP/API calls,
+  API error classification, retry-after parsing, and timestamp formatting. It may depend on
+  `suppressor-core` types and implement `suppressor-app` ports.
+- `suppressor-store`: outward local-state gateway crate. Owns atomic JSON/text persistence,
+  cache-store persistence, pid/signal file helpers, and lock helpers. It may depend on
+  `suppressor-core` types and implement `suppressor-app` ports.
+- `suppressor-telemetry`: outward observability crate. Owns metrics setup and bounded metric
+  snapshots. It may depend on `suppressor-core` status DTOs, but no controller code.
+- `suppressor-cli`: controller crate plus the single `suppressor` binary. Owns `cli.rs`, `app.rs`,
+  command controllers, status/health/perf rendering, coverage command entry points, `server-start`,
+  and concrete wiring of app plus gateway crates.
+
+Dependency direction:
+
+- `suppressor-core` has no local crate dependencies.
+- `suppressor-app -> suppressor-core`.
+- Gateway crates may depend on `suppressor-core` and app port traits only.
+- `suppressor-cli -> suppressor-app + gateway crates`.
+- No inward crate imports `suppressor-cli`; no domain/application crate formats operator output.
+
+Migration order:
+
+1. Create the workspace while keeping all source files in the current crate path and preserving the
+   binary name `suppressor`.
+2. Move pure DTO/helper modules first: `titles`, `recentchange`, cache model, config/state type
+   surfaces. Keep state file names and config schema byte-compatible.
+3. Introduce narrow app ports for MediaWiki, state persistence, signals, and telemetry before moving
+   orchestration modules. Ports must model existing behavior, not redesign it.
+4. Move `mw_api`/`auth`, store/cache persistence, and metrics behind those ports.
+5. Move runtime/catch-up/reconciliation/worker/backlog modules only after their dependencies point
+   inward through ports.
+6. Leave command/status/server-start controllers in `suppressor-cli`; shrink them only after the
+   app crate exposes typed snapshots and command results.
+7. Run `make -C suppressor check` after each move; run root `make check` before each commit that
+   changes public command behavior or shared docs.
+
+Non-goals:
+
+- Do not create multiple deployed daemons or OS services in this migration.
+- Do not rename operator commands, config keys, state files, metrics, or the binary.
+- Do not change live-hide priority, catch-up behavior, source-list refresh behavior, or recovery
+  windows while moving boundaries.
+
 ### SBA-002 Convert Suppressor To Workspace
 
-Status: `blocked`
+Status: `ready`
 
-Blocked by: SBA-001
+Unblocked by: SBA-001
 
 Start when the workspace boundary plan is complete.
 

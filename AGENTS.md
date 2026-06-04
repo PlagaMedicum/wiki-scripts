@@ -15,6 +15,12 @@
 
 - Prefer compact, explicit code with narrow ownership. Remove duplication, generated artifacts, and
   accidental abstractions before adding new structure.
+- Prefer established open-source tools and libraries over local reimplementation when they clearly
+  reduce maintenance or risk. Before adding one, check that it is community-supported,
+  time-tested, actively maintained, and small enough for the problem it solves.
+- Do not add a dependency just to avoid thinking through ownership. If the tool is obscure,
+  unmaintained, oversized, hard to audit, or only saves a few lines of clear local code, keep the
+  local implementation.
 - Document only facts that protect future work: interfaces, invariants, failure modes, and hard-won
   operational lessons. Keep ordinary code self-explanatory.
 - Use existing Makefiles for common commands. Add a command only when repeated manual invocations

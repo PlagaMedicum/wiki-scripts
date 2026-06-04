@@ -1,12 +1,12 @@
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::config::CatchupConfig;
-use crate::daemon_backlog::SimpleDaemonState;
+use crate::daemon_backlog::DaemonState;
 
 const LIVE_OVERLAP_SECONDS: i64 = 15;
 
 pub(crate) fn startup_catchup_start(
-    state: &SimpleDaemonState,
+    state: &DaemonState,
     catchup: &CatchupConfig,
     end: DateTime<Utc>,
 ) -> DateTime<Utc> {
@@ -19,7 +19,7 @@ pub(crate) fn startup_catchup_start(
 }
 
 pub(crate) fn live_poll_start(
-    state: &SimpleDaemonState,
+    state: &DaemonState,
     catchup: &CatchupConfig,
     end: DateTime<Utc>,
 ) -> DateTime<Utc> {
@@ -47,7 +47,7 @@ mod tests {
         let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let state = SimpleDaemonState::default();
+        let state = DaemonState::default();
 
         assert_eq!(
             startup_catchup_start(&state, &test_catchup_config(), end),
@@ -60,9 +60,9 @@ mod tests {
         let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(end - TimeDelta::seconds(20_000)),
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -76,9 +76,9 @@ mod tests {
         let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(end + TimeDelta::seconds(60)),
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -93,13 +93,13 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let catchup = test_catchup_config();
-        let recent = SimpleDaemonState {
+        let recent = DaemonState {
             last_successful_poll_at: Some(end - TimeDelta::seconds(60)),
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
-        let old = SimpleDaemonState {
+        let old = DaemonState {
             last_successful_poll_at: Some(end - TimeDelta::seconds(20_000)),
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(

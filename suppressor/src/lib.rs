@@ -21,7 +21,6 @@ mod scheduler;
 mod server_start;
 mod signal_control;
 pub mod signals;
-mod simple_daemon;
 pub mod state;
 mod status_command;
 mod stream;

@@ -76,7 +76,7 @@ live edits, and they must not be used to excuse a failing live path.
 
 ## 2026-05-31 Signal And RevDel Retry Lesson
 
-The minimal daemon must install handlers for the operator signals before entering its main loop:
+The daemon must install handlers for the operator signals before entering its main loop:
 
 - `reload-cache` sends `SIGHUP` and means "force a watched-page cache reload"
 - `catch-up-now` sends `SIGUSR1` and means "run bounded manual recovery"
@@ -89,7 +89,7 @@ Do not remove these handlers while the CLI uses signal delivery. The Unix defaul
 followed by supervisor restart.
 
 Per-revision RevDel denials such as `permissiondenied` or `cantdelete` are terminal for that target.
-The daemon quarantines them in `simple_daemon_state.json`, reports degraded status with a manual
+The daemon quarantines them in `daemon_state.json`, reports degraded status with a manual
 review next action, and keeps hiding new watched edits. It must not retry those responses forever:
 that wastes API budget, triggers rate limiting, and can delay live polling. Transient transport,
 decode, rate-limit, and server errors remain retryable through the pending queue.

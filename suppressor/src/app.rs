@@ -28,7 +28,7 @@ pub async fn run() -> Result<()> {
         Command::CheckAuth => run_check_auth(cli.config, cli.verbose).await,
         Command::HideRevid { id } => run_hide_revid(cli.config, id, cli.verbose).await,
         Command::SmokeTest { page } => {
-            crate::simple_daemon::run_smoke_test(cli.config, page, cli.verbose).await
+            crate::daemon::run_smoke_test(cli.config, page, cli.verbose).await
         }
         Command::EmergencyCatchup {
             start,

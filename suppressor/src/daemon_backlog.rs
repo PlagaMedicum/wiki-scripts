@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::mw_api::revision_url;
 use crate::state::{ApiFailureSnapshot, ProcessedRevidsState, UnresolvedExposureItem, load_json};
 
-pub(crate) const STATE_FILE_NAME: &str = "simple_daemon_state.json";
+pub(crate) const STATE_FILE_NAME: &str = "daemon_state.json";
 pub(crate) const PROCESSED_CAPACITY: usize = 10_000;
 pub(crate) const MAX_PENDING_ITEMS: usize = 5_000;
 pub(crate) const MAX_QUARANTINED_ITEMS: usize = 5_000;
@@ -16,7 +16,7 @@ const PENDING_RETRY_SECONDS: i64 = 30;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub(crate) struct SimpleDaemonState {
+pub(crate) struct DaemonState {
     pub(crate) last_successful_poll_at: Option<DateTime<Utc>>,
     pub(crate) last_observed_change_at: Option<DateTime<Utc>>,
     pub(crate) last_successful_hide_at: Option<DateTime<Utc>>,
@@ -96,7 +96,7 @@ pub(crate) fn load_processed_revids(path: &Path) -> Result<ProcessedRevidsState>
 }
 
 pub(crate) fn upsert_pending(
-    state: &mut SimpleDaemonState,
+    state: &mut DaemonState,
     target: &HideTarget,
     failure: ApiFailureSnapshot,
 ) {
@@ -123,7 +123,7 @@ pub(crate) fn upsert_pending(
 }
 
 pub(crate) fn upsert_quarantined(
-    state: &mut SimpleDaemonState,
+    state: &mut DaemonState,
     target: &HideTarget,
     failure: ApiFailureSnapshot,
 ) {
@@ -150,7 +150,7 @@ pub(crate) fn upsert_quarantined(
     });
 }
 
-fn upsert_quarantined_item(state: &mut SimpleDaemonState, mut item: PendingHide) {
+fn upsert_quarantined_item(state: &mut DaemonState, mut item: PendingHide) {
     if let Some(existing) = state
         .quarantined
         .iter_mut()
@@ -167,7 +167,7 @@ fn upsert_quarantined_item(state: &mut SimpleDaemonState, mut item: PendingHide)
     state.quarantined.push(item);
 }
 
-pub(crate) fn migrate_terminal_pending_to_quarantine(state: &mut SimpleDaemonState) {
+pub(crate) fn migrate_terminal_pending_to_quarantine(state: &mut DaemonState) {
     let mut retained = Vec::with_capacity(state.pending.len());
     for item in std::mem::take(&mut state.pending) {
         if item.has_terminal_failure() {
@@ -183,11 +183,11 @@ pub(crate) fn next_pending_retry_at(pending: &[PendingHide]) -> Option<DateTime<
     pending.iter().map(PendingHide::retry_due_at).min()
 }
 
-pub(crate) fn unresolved_count(state: &SimpleDaemonState) -> usize {
+pub(crate) fn unresolved_count(state: &DaemonState) -> usize {
     state.pending.len() + state.quarantined.len()
 }
 
-pub(crate) fn latest_quarantined_error(state: &SimpleDaemonState) -> Option<ApiFailureSnapshot> {
+pub(crate) fn latest_quarantined_error(state: &DaemonState) -> Option<ApiFailureSnapshot> {
     state
         .quarantined
         .iter()
@@ -218,7 +218,7 @@ pub(crate) fn unresolved_item_from_pending(
 
 pub(crate) fn effective_realtime_state(
     requested_state: &str,
-    state: &SimpleDaemonState,
+    state: &DaemonState,
     latest_error: Option<&ApiFailureSnapshot>,
     now: DateTime<Utc>,
     stale_threshold_seconds: u64,
@@ -291,7 +291,7 @@ mod tests {
         let end = DateTime::parse_from_rfc3339("2026-05-31T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let state = SimpleDaemonState::default();
+        let state = DaemonState::default();
         let start = state
             .last_successful_poll_at
             .unwrap_or(end - TimeDelta::seconds(1800));
@@ -302,14 +302,14 @@ mod tests {
     #[test]
     fn permission_quarantine_degrades_health() {
         let now = Utc::now();
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(now),
             quarantined: vec![PendingHide {
                 revid: 1,
                 last_error: Some(api_failure_with_code("permission", "permissiondenied")),
                 ..PendingHide::default()
             }],
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -321,14 +321,14 @@ mod tests {
     #[test]
     fn auth_session_pending_blocks_health() {
         let now = Utc::now();
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(now),
             pending: vec![PendingHide {
                 revid: 1,
                 last_error: Some(api_failure("auth-session")),
                 ..PendingHide::default()
             }],
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -340,14 +340,14 @@ mod tests {
     #[test]
     fn nonblocking_pending_degrades_health() {
         let now = Utc::now();
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(now),
             pending: vec![PendingHide {
                 revid: 1,
                 last_error: Some(api_failure("non-json-response")),
                 ..PendingHide::default()
             }],
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -359,9 +359,9 @@ mod tests {
     #[test]
     fn fresh_empty_state_is_healthy() {
         let now = Utc::now();
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(now),
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -373,9 +373,9 @@ mod tests {
     #[test]
     fn stale_empty_state_is_degraded() {
         let now = Utc::now();
-        let state = SimpleDaemonState {
+        let state = DaemonState {
             last_successful_poll_at: Some(now - TimeDelta::seconds(30)),
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         assert_eq!(
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn upsert_pending_preserves_single_item_per_revision() {
-        let mut state = SimpleDaemonState::default();
+        let mut state = DaemonState::default();
         let target = HideTarget {
             title: "Title".to_string(),
             revid: 42,
@@ -403,14 +403,14 @@ mod tests {
 
     #[test]
     fn terminal_pending_migrates_to_quarantine() {
-        let mut state = SimpleDaemonState {
+        let mut state = DaemonState {
             pending: vec![PendingHide {
                 revid: 42,
                 last_error: Some(api_failure_with_code("permission", "permissiondenied")),
                 attempt_count: 255,
                 ..PendingHide::default()
             }],
-            ..SimpleDaemonState::default()
+            ..DaemonState::default()
         };
 
         migrate_terminal_pending_to_quarantine(&mut state);

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::mw_api::PageContent;
-use crate::titles::{normalize_title, parse_source_list};
+use suppressor_core::titles::{normalize_title, parse_source_list};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SuppressionListCache {

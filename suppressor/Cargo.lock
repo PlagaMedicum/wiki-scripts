@@ -1754,12 +1754,23 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "suppressor-core",
  "tempfile",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "suppressor-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

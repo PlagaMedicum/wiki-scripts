@@ -369,6 +369,15 @@ End when:
 - Existing suppressor CLI behavior still works.
 - `make -C suppressor check` passes.
 
+Progress:
+
+- First slice created the workspace and moved pure `titles` and `recentchange` domain modules into
+  `suppressor-core`.
+- The `suppressor` binary crate now imports those modules through the explicit local dependency
+  `suppressor-core = { version = "0.1.0", path = "core" }`.
+- Suppressor Makefile developer gates now build, lint, and test the full workspace so new member
+  crates cannot be skipped by default checks.
+
 ### SBA-003 Split Daemon Runtime Modules
 
 Status: `ready`

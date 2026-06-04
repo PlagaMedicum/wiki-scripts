@@ -30,7 +30,7 @@ use crate::state::{
     RuntimeStatus, SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic,
     save_text_atomic,
 };
-use crate::titles::normalize_title;
+use suppressor_core::titles::normalize_title;
 
 mod background;
 

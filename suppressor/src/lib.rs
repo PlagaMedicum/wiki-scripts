@@ -14,14 +14,12 @@ pub(crate) mod effective_config;
 pub mod locks;
 pub mod metrics;
 pub mod mw_api;
-pub mod recentchange;
 pub mod reconcile;
 pub mod runtime;
 mod server_start;
 pub mod signals;
 pub mod state;
 mod status_command;
-pub mod titles;
 mod worker;
 
 use anyhow::Result;

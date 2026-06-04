@@ -8,7 +8,7 @@ use crate::command_context::CommandContext;
 use crate::config::RuntimePaths;
 use crate::mw_api::MediaWikiClient;
 use crate::state::{ExecutionLaneSnapshot, LatencyMetricStatus, RuntimeStatus, load_json};
-use crate::titles::normalize_title;
+use suppressor_core::titles::normalize_title;
 
 #[derive(Debug, PartialEq, Eq)]
 struct HealthVerdict {

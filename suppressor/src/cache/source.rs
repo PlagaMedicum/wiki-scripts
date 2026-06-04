@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::cache::SuppressionListCache;
 use crate::config::AppConfig;
 use crate::mw_api::{MediaWikiClient, PageMetadata};
-use crate::titles::normalize_title;
+use suppressor_core::titles::normalize_title;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceRefreshTriggerKind {

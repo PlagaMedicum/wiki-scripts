@@ -6,6 +6,10 @@ description = "public revision-delete daemon first developed for be.wiki"
 autobins = false
 publish = false
 
+[workspace]
+members = [".", "core"]
+resolver = "3"
+
 [[bin]]
 name = "suppressor"
 path = "src/main.rs"
@@ -22,6 +26,7 @@ reqwest = { version = "0.12", default-features = false, features = ["cookies", "
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+suppressor-core = { version = "0.1.0", path = "core" }
 tokio = { version = "1.43", features = ["full"] }
 toml = "0.8"
 tracing = "0.1"

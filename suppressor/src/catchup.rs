@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use crate::mw_api::classify_api_failure;
 use crate::runtime::{AppRuntime, DispatchCompletion, RevDelDispatch, RevDelMode};
 use crate::state::{ApiFailureSnapshot, CoverageSummary, UnresolvedExposureItem, WarningSummary};
-use crate::titles::normalize_title;
+use suppressor_core::titles::normalize_title;
 
 #[derive(Clone, Debug)]
 pub struct CatchupRequest {

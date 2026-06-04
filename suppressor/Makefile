@@ -152,29 +152,29 @@ print-effective-config:
 	$(RUN_ENV) $(CARGO) run -- --config "$(CONFIG)" print-effective-config $(ARGS)
 
 build:
-	$(CARGO) build $(ARGS)
+	$(CARGO) build --workspace $(ARGS)
 
 build-server:
 	$(ZIGBUILD) --release --target "$(SERVER_TARGET)" $(ARGS)
 	@printf 'server binary: %s\n' "$(SERVER_BINARY)"
 
 release:
-	$(CARGO) build --release $(ARGS)
+	$(CARGO) build --workspace --release $(ARGS)
 
 test:
-	$(CARGO) test $(ARGS) $(TEST_ARGS)
+	$(CARGO) test --workspace $(ARGS) $(TEST_ARGS)
 
 fmt:
 	$(CARGO) fmt $(ARGS)
 
 lint:
-	$(CARGO) clippy --all-targets --all-features -- -D warnings $(ARGS)
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings $(ARGS)
 
 audit:
 	$(CARGO) deny check $(ARGS)
 
 check:
 	$(CARGO) fmt --check
-	$(CARGO) clippy --all-targets --all-features -- -D warnings
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
 	$(CARGO) deny check
-	$(CARGO) test $(TEST_ARGS)
+	$(CARGO) test --workspace $(TEST_ARGS)

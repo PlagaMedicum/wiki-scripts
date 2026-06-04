@@ -17,7 +17,7 @@ use crate::daemon::persistence_for;
 use crate::daemon_backlog::{HideTarget, is_terminal_hide_failure};
 use crate::mw_api::{MediaWikiClient, classify_api_failure};
 use crate::state::{ApiFailureSnapshot, SourceListRefresh};
-use crate::titles::normalize_title;
+use suppressor_core::titles::normalize_title;
 
 #[derive(Debug)]
 pub(super) enum BackgroundTask {

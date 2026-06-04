@@ -105,4 +105,5 @@ Bad fit:
 
 If a request stops being bibliography-shaped, it should become a separate tool.
 
-Future work is tracked only in the repo-level `docs/plan.md`.
+Backlog and future slices live in the repo-level `docs/plan.md`; this file documents current
+behavior.

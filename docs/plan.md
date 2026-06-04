@@ -21,13 +21,48 @@ interfaces, operations, and testing rules; future work belongs here.
 - `blocked`: needs another task, operator evidence, or a decision first.
 - `later`: valid direction, but not worth doing until earlier boundaries exist.
 
+## Task Index
+
+| ID | Status | Purpose |
+| --- | --- | --- |
+| RCP-001 | `done` | Keep one central repo plan instead of project-local backlogs. |
+| RCP-002 | `done` | Give every planned work item a stable task ID. |
+| RCP-003 | `done` | Keep authored docs current, compact, and free of stale planning evidence. |
+| RCP-004 | `done` | Define maintenance rules for future edits to this plan. |
+| QAG-001 | `done` | Make strict lint, test, audit, and architecture checks required. |
+| QAG-002 | `ready` | Review duplicate Rust dependency warnings. |
+| QAG-003 | `ready` | Review unused or oversized dependencies with mature advisory tools. |
+| SBA-001 | `ready` | Plan enforceable suppressor workspace crate boundaries. |
+| SBA-002 | `blocked` | Convert suppressor to a workspace after SBA-001. |
+| SBA-003 | `ready` | Split large daemon runtime responsibilities into smaller modules. |
+| SBA-004 | `blocked` | Remove duplicate command/recovery runtime ownership after daemon boundaries settle. |
+| BBA-001 | `done` | Enforce Python import architecture contracts. |
+| BBA-002 | `ready` | Separate biblio source-management and run-workflow boundaries. |
+| BBA-003 | `blocked` | Move biblio UI toward snapshot/protocol boundaries after BBA-002. |
+| DEP-001 | `ready` | Prove suppressor deployment identity and live protection after daemon-critical edits. |
+| DEP-002 | `later` | Review config compatibility when schema/defaults change. |
+| MSA-001 | `later` | Decide whether process-level microservice splitting is worth the overhead. |
+
 ## RCP: Repo Planning And Documentation
+
+Purpose: keep planning centralized, task IDs stable, and project-local docs focused on current
+truth. RCP tasks are documentation/control-plane work only; they do not implement suppressor,
+biblio, deployment, or dependency changes unless another task ID is also in scope.
 
 ### RCP-001 Central Plan Surface
 
 Status: `done`
 
+Purpose: remove duplicated planning surfaces and make this file the durable backlog.
+
 Start when project docs contain future-direction, task-ID, or refactor-plan content.
+
+Inputs:
+
+- `README.md`
+- `AGENTS.md`
+- project-local docs under `biblio/docs/` and `suppressor/docs/`
+- any project-local refactor or backlog files
 
 Work:
 
@@ -42,11 +77,22 @@ End when:
 - Project docs describe current truth, not backlog.
 - Root `make check` passes.
 
+Notes:
+
+- This task is complete. Do not recreate project-local plan files.
+
 ### RCP-002 Plan ID Structure
 
 Status: `done`
 
+Purpose: make every future slice referenceable from commits, reviews, and user requests.
+
 Start when the central plan has slices but no stable task IDs.
+
+Inputs:
+
+- current `docs/plan.md`
+- user-requested cleanup philosophy in `AGENTS.md`
 
 Work:
 
@@ -61,12 +107,31 @@ End when:
 - Tasks can be referenced from commits and user requests.
 - Root `make check` passes.
 
+Notes:
+
+- This task is complete. Add new work under a stable workstream prefix instead of adding unlabeled
+  prose.
+
 ### RCP-003 Documentation Economy Pass
 
-Status: `ready`
+Status: `done`
+
+Purpose: keep authored documentation small, current, and non-duplicative.
 
 Start when docs contain stale incident evidence, generated planning artifacts, or repeated
 architecture rules.
+
+Inputs:
+
+- `README.md`
+- `AGENTS.md`
+- `docs/plan.md`
+- `biblio/docs/architecture.md`
+- `biblio/docs/testing-strategy.md`
+- `suppressor/docs/implementation.md`
+- `suppressor/docs/operations.md`
+- `suppressor/docs/runtime-boundaries.md`
+- `suppressor/docs/testing-strategy.md`
 
 Work:
 
@@ -75,12 +140,57 @@ Work:
 - Delete old task evidence once the current rule and test coverage exist.
 - Remove repeated architecture rules from project docs when `AGENTS.md` or this plan already owns
   them.
+- Standardize project-doc future-work pointers to: "Backlog and future slices live in the repo-level
+  `docs/plan.md`; this file documents current behavior."
 
 End when:
 
 - `rg` over authored docs finds no stale task IDs or old refactor-plan files.
 - Project docs remain useful for current operation and development.
 - Root `make check` passes.
+
+Verification:
+
+- `rg -n "Future Direction|Refactor Plan|planned direction|\\bT[0-9]{3}\\b|Slice [0-9]|daemon-refactor-plan" README.md AGENTS.md biblio/README.md biblio/docs suppressor/README.md suppressor/docs`
+- `rtk git diff --check`
+- `rtk make check`
+
+Notes:
+
+- This task is complete for the current docs. Reopen only if stale planning evidence returns.
+
+### RCP-004 Plan Maintenance Rules
+
+Status: `done`
+
+Purpose: prevent the central plan from becoming another unstructured backlog.
+
+Start when `docs/plan.md` has task IDs but no maintenance rules.
+
+Inputs:
+
+- `docs/plan.md`
+- `AGENTS.md`
+
+Work:
+
+- Keep the task index in sync with detailed task entries.
+- Use existing prefixes when possible: `RCP`, `QAG`, `SBA`, `BBA`, `DEP`, `MSA`.
+- Add a new prefix only when the work does not fit an existing ownership area.
+- Set initial status honestly: `ready` only when no prerequisite decision is needed.
+- Update a task to `done` only in the same commit that completes its end criteria.
+- If a task is split, keep the original ID as a parent or historical note and assign new IDs to the
+  smaller tasks.
+
+End when:
+
+- Future agents can add, complete, or split tasks without inventing a new planning format.
+- Root `make check` passes.
+
+Verification:
+
+- Task index contains every detailed task ID exactly once.
+- Every detailed task has status, purpose, start criteria, work, and end criteria.
 
 ## QAG: Quality And Dependency Guardrails
 

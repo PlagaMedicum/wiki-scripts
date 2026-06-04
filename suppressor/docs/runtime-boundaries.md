@@ -134,4 +134,5 @@ page scans, or reconciliation sleeps.
   log path agree for that detached child
 - do not broaden the service unless there is a strong operational reason
 
-Future work is tracked only in the repo-level `docs/plan.md`.
+Backlog and future slices live in the repo-level `docs/plan.md`; this file documents current
+behavior.

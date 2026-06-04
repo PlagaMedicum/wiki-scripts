@@ -2,7 +2,8 @@ use anyhow::Result;
 
 use crate::cache::SuppressionListCache;
 use crate::config::AppConfig;
-use crate::mw_api::{MediaWikiClient, PageMetadata};
+use crate::mw_api::MediaWikiClient;
+use suppressor_core::page::PageMetadata;
 use suppressor_core::titles::normalize_title;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

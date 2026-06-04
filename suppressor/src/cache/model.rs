@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::mw_api::PageContent;
+use suppressor_core::page::PageContent;
 use suppressor_core::titles::{normalize_title, parse_source_list};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -158,7 +158,7 @@ fn compute_hash(values: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mw_api::PageMetadata;
+    use suppressor_core::page::PageMetadata;
 
     #[test]
     fn runtime_cache_builds_watched_set() {

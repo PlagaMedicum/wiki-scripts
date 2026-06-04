@@ -6,8 +6,9 @@ use tokio::sync::RwLock;
 
 use crate::cache::{RuntimeCache, SuppressionListCache};
 use crate::config::{AppConfig, RuntimePaths};
-use crate::mw_api::{MediaWikiClient, PageMetadata};
+use crate::mw_api::MediaWikiClient;
 use crate::state::{load_json, save_json_atomic};
+use suppressor_core::page::PageMetadata;
 
 use super::source::{fetch_bootstrap_snapshot, fetch_refreshed_snapshot, fetch_source_metadata};
 

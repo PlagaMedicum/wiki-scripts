@@ -14,6 +14,7 @@ use tracing::warn;
 
 use crate::config::{EnvConfig, RetryConfig};
 use crate::state::ApiFailureSnapshot;
+use suppressor_core::page::{PageContent, PageMetadata};
 
 #[derive(Clone)]
 pub struct MediaWikiClient {
@@ -22,19 +23,6 @@ pub struct MediaWikiClient {
     stream_url: String,
     user_agent: String,
     retry: RetryConfig,
-}
-
-#[derive(Clone, Debug)]
-pub struct PageMetadata {
-    pub pageid: Option<u64>,
-    pub lastrevid: Option<u64>,
-    pub timestamp: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PageContent {
-    pub metadata: PageMetadata,
-    pub content: String,
 }
 
 #[derive(Clone, Debug)]

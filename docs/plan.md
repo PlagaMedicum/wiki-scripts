@@ -377,6 +377,10 @@ Progress:
   `suppressor-core = { version = "0.1.0", path = "core" }`.
 - Suppressor Makefile developer gates now build, lint, and test the full workspace so new member
   crates cannot be skipped by default checks.
+- Second slice moved `PageMetadata` and `PageContent` DTOs into `suppressor-core`; MediaWiki
+  transport now produces core page DTOs instead of owning them.
+- Keep `cache/model` in the outer crate until source-list parsing returns warnings separately from
+  logging, so core does not gain edge-side logging behavior.
 
 ### SBA-003 Split Daemon Runtime Modules
 

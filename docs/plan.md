@@ -30,7 +30,7 @@ interfaces, operations, and testing rules; future work belongs here.
 | RCP-003 | `done` | Keep authored docs current, compact, and free of stale planning evidence. |
 | RCP-004 | `done` | Define maintenance rules for future edits to this plan. |
 | QAG-001 | `done` | Make strict lint, test, audit, and architecture checks required. |
-| QAG-002 | `ready` | Review duplicate Rust dependency warnings. |
+| QAG-002 | `done` | Review duplicate Rust dependency warnings. |
 | QAG-003 | `ready` | Review unused or oversized dependencies with mature advisory tools. |
 | SBA-001 | `ready` | Plan enforceable suppressor workspace crate boundaries. |
 | SBA-002 | `blocked` | Convert suppressor to a workspace after SBA-001. |
@@ -215,7 +215,7 @@ End when:
 
 ### QAG-002 Rust Duplicate Dependency Review
 
-Status: `ready`
+Status: `done`
 
 Start when `cargo-deny` reports duplicate-version warnings.
 
@@ -230,6 +230,17 @@ End when:
 
 - Duplicates are reduced where safe, or documented as transitive and currently accepted.
 - `make -C suppressor check` passes.
+
+Result:
+
+- Removed the unused direct `rand 0.8` dependency from `suppressor`; the lockfile dropped
+  `rand 0.8`, `rand_chacha 0.3`, and `rand_core 0.6`.
+- Remaining duplicate-version warnings are transitive: `getrandom` is split between
+  `ring`/`rustls`, `metrics-util`, and build/dev dependency paths; `hashbrown` is split
+  between `metrics-util` and `indexmap`; `windows-sys` is split between `ring` and newer
+  CLI/runtime dependencies.
+- Keep duplicate warnings visible in `cargo-deny`; revisit only when a direct dependency
+  upgrade or removal can converge the graph without daemon behavior risk.
 
 ### QAG-003 Unused Dependency Review
 

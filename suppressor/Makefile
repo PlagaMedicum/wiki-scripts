@@ -14,7 +14,7 @@ TEST_ARGS ?= -- --test-threads=1
 
 RUN_ENV = RUST_LOG=$(LOG_LEVEL) BEWIKI_LOG_FORMAT=$(LOG_FORMAT) BEWIKI_ENV_FILE=$(ENV_FILE)
 
-.PHONY: help env-check run dry-run status health last-edits perf check-auth reload-cache catch-up-now hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint check
+.PHONY: help env-check run dry-run status health last-edits perf check-auth reload-cache catch-up-now hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint audit check
 
 define REQUIRE_CONFIG
 	@if [ -f "$(CONFIG)" ]; then :; else \
@@ -60,6 +60,7 @@ help:
 		'  make test [ARGS="..."]' \
 		'  make fmt' \
 		'  make lint' \
+		'  make audit' \
 		'  make check' \
 		'' \
 		'Variables:' \
@@ -169,7 +170,11 @@ fmt:
 lint:
 	$(CARGO) clippy --all-targets --all-features -- -D warnings $(ARGS)
 
+audit:
+	$(CARGO) deny check $(ARGS)
+
 check:
 	$(CARGO) fmt --check
 	$(CARGO) clippy --all-targets --all-features -- -D warnings
+	$(CARGO) deny check
 	$(CARGO) test $(TEST_ARGS)

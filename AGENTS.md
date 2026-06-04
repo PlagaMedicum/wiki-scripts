@@ -25,6 +25,23 @@
   operational lessons. Keep ordinary code self-explanatory.
 - Use existing Makefiles for common commands. Add a command only when repeated manual invocations
   show that it belongs in the project workflow.
+- Treat `make check` as the required pre-commit gate. Formatting, linting, dependency audits,
+  architecture checks, and tests must pass unless the failure is explicitly recorded as an
+  environment limitation or approved temporary exception.
+- Keep normal lint targets strict: warnings are errors, and broad `allow(...)` escapes need a local
+  reason or must be replaced with narrower code ownership.
+
+## Architecture guardrails
+
+- Organize by service first, then by domain/layer inside that service. A directory split is not an
+  architecture boundary unless imports also point the right way.
+- Dependencies point inward: domain and application code must not import controllers, TUI/UI,
+  process launchers, storage details, transport clients, or framework adapters.
+- Controllers and UIs translate operator intent and render state. They communicate with backend
+  services through typed inputs, ports, CLI/API/signal/status surfaces, or compact snapshots; they
+  do not reach into runtime internals for implementation details.
+- For Rust, prefer workspace crates when a boundary must be enforced. Crate visibility and Cargo
+  dependencies are stronger guardrails than a large single crate split into files.
 
 ## Reasoning rules
 

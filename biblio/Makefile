@@ -44,6 +44,7 @@ test:
 lint:
 	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff check .
 	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff format --check .
+	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) lint-imports
 
 format:
 	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) ruff check --fix .

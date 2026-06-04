@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "public revision-delete daemon first developed for be.wiki"
 autobins = false
+publish = false
 
 [[bin]]
 name = "suppressor"

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use tokio::sync::{RwLock, mpsc};
 use tracing::warn;
@@ -16,6 +16,7 @@ use crate::config::{AppConfig, EnvConfig, RuntimePaths};
 use crate::daemon::persistence_for;
 use crate::daemon_backlog::{HideTarget, is_terminal_hide_failure};
 use crate::mw_api::{MediaWikiClient, classify_api_failure};
+use crate::reconcile::revisiondelete_batch_limit;
 use crate::state::{ApiFailureSnapshot, SourceListRefresh};
 use suppressor_core::titles::normalize_title;
 
@@ -258,6 +259,7 @@ impl BackgroundWorker {
                 return;
             }
         };
+        let mut to_hide = Vec::new();
         for revision in revisions.into_iter().rev() {
             if processed_revids.contains(&revision.revid) {
                 continue;
@@ -275,14 +277,17 @@ impl BackgroundWorker {
                 .await;
                 continue;
             }
-            self.priority_gate.wait_for_high_priority_idle().await;
-            self.hide_background_revision(HideTarget {
+            to_hide.push(HideTarget {
                 title: title.clone(),
                 revid: revision.revid,
                 observed_at: Some(revision.timestamp),
                 source_label: "source-list-history".to_string(),
-            })
-            .await;
+            });
+        }
+        let batch_limit = revisiondelete_batch_limit(self.auth.has_high_limits());
+        for batch in to_hide.chunks(batch_limit) {
+            self.priority_gate.wait_for_high_priority_idle().await;
+            self.hide_background_batch(batch).await;
         }
     }
 
@@ -341,19 +346,14 @@ impl BackgroundWorker {
     }
 
     async fn hide_background_revision(&mut self, target: HideTarget) {
-        if self.dry_run {
-            self.send_event(BackgroundEvent::HideSucceeded {
-                target,
-                outcome: "dry-run",
-            })
-            .await;
-            return;
-        }
+        self.hide_single_background_revision(target).await;
+    }
+
+    async fn submit_revisiondelete(&mut self, revids: &[u64]) -> Result<()> {
         let mut csrf = self.auth.csrf_token.clone();
-        let result = self
-            .client
+        self.client
             .revision_delete_with_retry(
-                &[target.revid],
+                revids,
                 &self.config.revdel.reason,
                 &mut csrf,
                 &self.config.retry,
@@ -383,10 +383,88 @@ impl BackgroundWorker {
                     }
                 },
             )
-            .await;
+            .await?;
+        self.auth.csrf_token = csrf;
+        Ok(())
+    }
+
+    async fn hide_background_batch(&mut self, targets: &[HideTarget]) {
+        if targets.is_empty() {
+            return;
+        }
+        if self.dry_run {
+            for target in targets {
+                self.send_event(BackgroundEvent::HideSucceeded {
+                    target: target.clone(),
+                    outcome: "dry-run",
+                })
+                .await;
+            }
+            return;
+        }
+        let revids = targets
+            .iter()
+            .map(|target| target.revid)
+            .collect::<Vec<_>>();
+        let result = self.submit_revisiondelete(&revids).await;
         match result {
             Ok(()) => {
-                self.auth.csrf_token = csrf;
+                for target in targets {
+                    self.send_event(BackgroundEvent::HideSucceeded {
+                        target: target.clone(),
+                        outcome: "hidden",
+                    })
+                    .await;
+                }
+            }
+            Err(error) => {
+                if targets.len() > 1 {
+                    for target in targets {
+                        self.hide_single_background_revision(target.clone()).await;
+                    }
+                    return;
+                }
+                let target = targets
+                    .first()
+                    .expect("empty targets returned before revisiondelete");
+                let failure = classify_api_failure(
+                    &error,
+                    "revisiondelete",
+                    Some(&target.title),
+                    Some(target.revid),
+                );
+                if is_terminal_hide_failure(&failure)
+                    && let Ok(Some(revision)) = self.client.fetch_revision_by_id(target.revid).await
+                    && revision.user_hidden
+                    && revision.comment_hidden
+                {
+                    self.send_event(BackgroundEvent::HideSucceeded {
+                        target: target.clone(),
+                        outcome: "already-hidden-after-terminal-failure",
+                    })
+                    .await;
+                    return;
+                }
+                self.send_event(BackgroundEvent::HideFailed {
+                    target: target.clone(),
+                    failure,
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn hide_single_background_revision(&mut self, target: HideTarget) {
+        if self.dry_run {
+            self.send_event(BackgroundEvent::HideSucceeded {
+                target,
+                outcome: "dry-run",
+            })
+            .await;
+            return;
+        }
+        match self.submit_revisiondelete(&[target.revid]).await {
+            Ok(()) => {
                 self.send_event(BackgroundEvent::HideSucceeded {
                     target,
                     outcome: "hidden",

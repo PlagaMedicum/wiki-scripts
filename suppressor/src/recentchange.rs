@@ -167,11 +167,6 @@ pub(crate) mod test_fixtures {
             self
         }
 
-        pub(crate) fn with_user(mut self, user: impl Into<String>) -> Self {
-            self.user = Some(user.into());
-            self
-        }
-
         pub(crate) fn with_change_type(mut self, change_type: impl Into<String>) -> Self {
             self.change_type = Some(change_type.into());
             self

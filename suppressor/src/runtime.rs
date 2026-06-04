@@ -1535,11 +1535,6 @@ impl AppRuntime {
         self.source_refresh_active.store(false, Ordering::Release);
     }
 
-    #[cfg(test)]
-    pub(crate) fn source_refresh_is_active(&self) -> bool {
-        self.source_refresh_active.load(Ordering::Acquire)
-    }
-
     pub async fn mark_realtime_stream_open(&self) {
         self.update_runtime_status(|status| {
             let now = Utc::now();

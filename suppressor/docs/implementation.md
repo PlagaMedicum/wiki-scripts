@@ -68,11 +68,11 @@ summary. This keeps process liveness separate from realtime protection effective
 
 ## Live And Recovery Boundaries
 
-`stream.rs` owns recentchanges polling, overlap dedupe, target-wiki filtering, watched-title
-matching, source-page/request-page trigger detection, retained observer compatibility, and realtime
-freshness updates. `catchup.rs` owns bounded window selection and coverage accounting. `worker.rs`
-owns actual RevDel execution, retries, processed-revision persistence, and fatal auth/permission
-blocking.
+`daemon.rs` owns production recentchanges polling, overlap dedupe, target-wiki filtering,
+watched-title matching, source-page/request-page trigger detection, priority gating, and realtime
+freshness updates. `daemon/background.rs` owns low-priority source refresh, request-page recovery,
+and newly added title history sweeps. `catchup.rs` owns bounded command recovery and coverage
+accounting. `worker.rs` owns queued RevDel execution for the command/runtime service path.
 
 Nightly/current-day reconciliation remains a safety net. It must not be used as proof that the
 sub-second realtime path is healthy.
@@ -106,9 +106,9 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
 
 ## Internal Service Boundaries
 
-- `stream.rs`: recentchanges poll lifecycle, overlap dedupe, source-page/request-page trigger
-  detection, retained observer compatibility, source refresh orchestration, and live candidate
-  routing.
+- `daemon.rs`: production daemon lifecycle, recentchanges polling, priority gating, and live
+  candidate routing.
+- `daemon/background.rs`: low-priority source refresh, request-page recovery, and history sweeps.
 - `status_command.rs`: read-only status, health, performance, and recent-edit command controller.
 - `cache/`: suppression-list parsing, redirect-enriched watched-title cache, and watched-title
   diffing.

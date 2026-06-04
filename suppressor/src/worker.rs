@@ -13,7 +13,7 @@ use crate::state::{ProcessedRevidsState, save_json_atomic};
 
 const LIVE_BLOCKED_RETRY_SECONDS: u64 = 30;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn run_worker(runtime: Arc<AppRuntime>, rx: mpsc::Receiver<RevDelAction>) {
     run_worker_for_lane(runtime, ExecutionLaneKind::Live, rx).await;
 }

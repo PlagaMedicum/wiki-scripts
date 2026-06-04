@@ -11,7 +11,6 @@ use tracing::{debug, info, warn};
 use crate::cache::{CachePersistence, enrich_redirects, fetch_redirect_target};
 use crate::mw_api::classify_api_failure;
 use crate::runtime::{ReconcilePassContext, ReconciliationRuntime, RevDelMode, set_shared_backoff};
-use crate::scheduler::rolling_window_start;
 use crate::state::{
     ActionableIssueSnapshot, ApiFailureSnapshot, NightlySweepProgress, PageCheckpoint,
     ResourceEconomySnapshot, WarningSummary, save_json_atomic,
@@ -44,6 +43,10 @@ pub(crate) struct ReconciliationPassSummary {
 struct ReconciliationStopRequest {
     reason: String,
     backoff_until: Option<DateTime<Utc>>,
+}
+
+fn rolling_window_start(now: DateTime<Utc>, window_hours: u64) -> DateTime<Utc> {
+    now - TimeDelta::hours(window_hours as i64)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

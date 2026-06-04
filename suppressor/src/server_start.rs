@@ -189,7 +189,7 @@ fn reject_or_clear_pid(
     Ok(())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn reject_or_clear_existing_pid(paths: &RuntimePaths, current_exe: &Path) -> Result<()> {
     let Some(pid) = read_positive_pid(&paths.pid_file)? else {
         return Ok(());

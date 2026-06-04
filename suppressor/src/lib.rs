@@ -17,12 +17,10 @@ pub mod mw_api;
 pub mod recentchange;
 pub mod reconcile;
 pub mod runtime;
-mod scheduler;
 mod server_start;
 pub mod signals;
 pub mod state;
 mod status_command;
-mod stream;
 pub mod titles;
 mod worker;
 

@@ -18,7 +18,7 @@ in retained or aspirational runtime code.
 - Use only `daemon_state.json` for daemon-owned pending/quarantine state.
 - Do not add legacy state loading, aliases, or dual writes. Commit history is the legacy store.
 - Keep live hiding behavior stable while adding source-list history sync.
-- Do not switch this slice to the larger `AppRuntime` / `stream.rs` runtime.
+- Do not switch this slice to the larger `AppRuntime` command/recovery runtime.
 
 ## Scheduler
 

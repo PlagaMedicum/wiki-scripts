@@ -20,15 +20,15 @@ That shape is intentional:
 - `coverage_command.rs`: bounded emergency catch-up, coverage, and command-report controller
 - `server_start.rs`: detached supervisor controller and startup proof checks
 - `status_command.rs`: read-only operator status, health, performance, and recent-edit inspection
-- `daemon.rs` / `runtime.rs`: daemon lifecycle, launch-path snapshots, and runtime assembly
+- `daemon.rs`: production daemon lifecycle, recentchanges polling, priority gating, and launch-path
+  snapshots
+- `runtime.rs`: command/recovery runtime assembly used by coverage and one-shot service paths
 - `daemon/background.rs`: bounded low-priority source refresh and history-sweep worker
 - `daemon_backlog.rs`: production daemon pending/quarantine state and retry bookkeeping
 - `daemon_windows.rs`: startup catch-up and live polling window selection
 - `auth.rs` / `mw_api.rs`: auth and MediaWiki transport
-- `stream.rs`: recentchanges polling as the authoritative live detector, with retained
-  EventStreams observer/fallback code kept out of the healthy-state truth path for the MVP
 - `catchup.rs`: candidate-first bounded recovery and accident-window accounting
-- `scheduler.rs` / `reconcile.rs`: scheduling and reconciliation
+- `reconcile.rs`: watched-set verification and reconciliation
 - `worker.rs`: queued RevDel execution
 - `cache/`: watched-title cache loading and persistence
 - `state.rs`: local durable state

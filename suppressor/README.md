@@ -1,58 +1,78 @@
 # Suppressor
 
+`suppressor` is a Rust daemon for fast public RevDel on matched wiki revisions. It is intentionally
+narrow: watch the configured workflow pages, detect relevant edits quickly, and hide public
+`user|comment` metadata without trying to become a general moderation platform.
 
-`suppressor` is the Rust daemon for rapid public RevDel on matched wiki revisions. This tool stays
-narrow on purpose: fast reaction, strict runtime behavior, and conservative handling of sensitive
-data.
+It is currently running 24/7 on `be.wikipedia.org`, supporting suppressor workflow with faster
+reaction time, but it should be easy to adapt it for other wikis.
 
-## Current Shape
+## What It Does
 
-- one production daemon path: recentchanges polling, watched-title matching, RevDel, bounded catch-up
-- one detached `server-start` supervisor that restarts the daemon child after exits
-- one current production baseline aimed at be.wiki
-- one rsync-ready aarch64 binary launch path for the server
-- small CLI commands for status, health, recovery, coverage, and performance inspection
+- polls MediaWiki `recentchanges`
+- matches revisions against a watched-title set
+- sends public RevDel for `user|comment`
+- performs bounded startup and recovery catch-up
+- exposes operator commands for status, health, cache reload, and manual recovery
+- supports detached `server-start` deployment for the current server workflow
 
-Future multiwiki support is possible, but it is not the current runtime model.
+The checked-in config and docs describe the current be.wiki production baseline. They are not a
+promise that every wiki is supported out of the box.
 
-## Quick Start
+## Install Dependencies
+
+Base requirements:
+
+- Rust toolchain
+- `make`
+- `cargo-deny` for `make audit` and `make check`
+- `cargo-zigbuild` plus Zig when building the server binary with `make build-server`
+
+Typical setup:
+
+```bash
+rustup toolchain install stable
+cargo install cargo-deny cargo-zigbuild
+```
+
+For local development and normal builds, the standard Rust toolchain is enough. The extra
+cross-build tooling is only needed for the current server artifact flow.
+
+## Configure
 
 Run from `suppressor/`:
 
 ```bash
 cp .env.example .env
 make env-check
+```
+
+The example environment file includes:
+
+```dotenv
+BEWIKI_API_URL=https://be.wikipedia.org/w/api.php
+BEWIKI_STREAM_URL=https://stream.wikimedia.org/v2/stream/recentchange
+BEWIKI_BOT_USERNAME=YourBot@revdel-watch
+BEWIKI_BOT_PASSWORD=REDACTED
+BEWIKI_USER_AGENT="bewiki-revdel-daemon/1.0 (contact on-wiki)"
+```
+
+`BEWIKI_BOT_USERNAME` must use the full BotPasswords login in the form `username@label`.
+
+Review `config.toml` before running against any real wiki.
+
+## Basic Usage
+
+Recommended first steps:
+
+```bash
 make check-auth
 make smoke-test
 make dry-run
 ```
 
-Example `.env`:
+Common commands:
 
-```dotenv
-BEWIKI_BOT_USERNAME=YourBot@revdel-watch
-BEWIKI_BOT_PASSWORD=REDACTED
-```
-
-`BEWIKI_BOT_USERNAME` uses the full BotPasswords login in the form `username@label`.
-
-For the current rsync server path, build the aarch64 musl binary and start it on the server from
-the deployed directory:
-
-```bash
-make build-server
-./suppressor --config ./config.toml server-start
-```
-
-`server-start` starts the daemon detached from the SSH terminal, writes a PID/runtime-status/log
-receipt, and is trusted only after the PID and `runtime_status.json` keep updating after reconnect.
-
-## Common Commands
-
-- `make env-check`
-- `make check-auth`
-- `make smoke-test`
-- `make dry-run`
 - `make run`
 - `make status`
 - `make health`
@@ -62,53 +82,41 @@ receipt, and is trusted only after the PID and `runtime_status.json` keep updati
 - `make catch-up-now`
 - `make emergency-catchup ARGS="--dry-run"`
 - `make coverage-report ARGS="--start 2026-04-24T00:00:00Z --report-only"`
-- `make nightly-sweep-now`
+
+Development and release commands:
+
 - `make build`
 - `make build-server`
 - `make release`
 - `make check`
 
-## Scope Boundary
+## Server Deployment
 
-Current scope:
+For the current detached server deployment path:
 
-- MediaWiki recentchanges polling
-- watched-title matching
-- immediate public RevDel for `user|comment`
-- bounded startup and gap catch-up
-- supervisor restart after daemon exits
-- truthful realtime health reporting
-- bounded emergency catch-up and coverage reporting
+```bash
+make build-server
+./suppressor --config ./config.toml server-start
+```
 
-Not current scope:
+`server-start` launches the daemon detached from the terminal, writes a PID/runtime-status/log
+receipt, and restarts the daemon child after exits. Trust the launch only after reconnecting and
+confirming that the PID and `runtime_status.json` continue updating.
 
-- EventStreams as the production live source
-- reconciliation and nightly verification as required live-hide paths
-- broader moderation platform work
-- remote multi-operator control
-- public network service exposure
+## Health Model
 
-## Current Baseline
+The daemon writes realtime state to `state/runtime_status.json`. Process liveness and protection
+health are separate.
 
-The checked-in config is the current working be.wiki production baseline. It is a real baseline,
-not a promise that every other wiki is already supported.
+Important states:
 
-## Realtime Health
+- `healthy`: polling is fresh and no catch-up is active
+- `catching-up`: bounded recovery is running
+- `degraded`: polling or hiding failed, but the daemon is still running and retrying
+- `blocked`: auth or session problems prevent hiding
 
-The daemon persists a realtime section in `runtime_status.json`. Process state and protection state
-are separate so "running" is not treated as "hiding". Important states are:
-
-- `healthy`: recentchanges polling is fresh and no catch-up is active
-- `catching-up`: bounded recovery is checking recent watched-page edits
-- `degraded`: polling or hiding has failed but the daemon is alive and retrying
-- `degraded` with a quarantined unresolved item: RevDel returned a non-retryable per-revision
-  denial; the daemon keeps protecting new edits and does not hammer the API on that revision
-- `blocked`: auth/session failures prevent hiding
-
-Recovery starts from the persisted recentchanges poll cursor when that anchor exists; otherwise it
-uses the bounded recent emergency window. Manual cache reload, reconciliation, status commands, and
-one-shot reports remain diagnostic or fallback actions; they do not replace daemon-owned realtime
-truth.
+One-shot command output in `command_report.json` is useful diagnostic evidence, but it is not the
+same thing as daemon-owned realtime health.
 
 ## Further Reading
 

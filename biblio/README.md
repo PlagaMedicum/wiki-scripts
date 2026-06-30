@@ -1,6 +1,5 @@
 # Biblio
 
-
 `biblio` is the Python tool for bibliography and citation cleanup on wiki pages. It remains a
 narrow tool: deterministic source-driven matching, reviewable changes, and controlled wiki edits.
 

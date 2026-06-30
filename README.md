@@ -1,50 +1,38 @@
 # Wiki Scripts
 
-This repository is a workspace for separate wiki tools, mainly around Belarusian Wikipedia. It is
-not one application and not a generic wiki platform.
+This repository contains small tools used around Belarusian Wikipedia. It is a workspace for
+separate projects, not one application. You can adapt this repo for other wikis as well.
 
-Keep the repo small and direct. Prefer project-local docs, Makefiles, tests, and clear code over
-generated planning artifacts. Human intent comes first; for non-trivial work, restate the concrete
-goal and clarify risky ambiguity before design choices harden.
-
-## Current Projects
+## Projects
 
 - [`biblio/`](biblio/README.md)
-  Python tooling for bibliography and citation cleanup, with source-driven matching and controlled
-  edit workflows.
-  Main libraries: `pywikibot`, `rich`, `prompt-toolkit`, `python-dotenv`.
+  Python tooling for bibliography and citation cleanup.
 - [`suppressor/`](suppressor/README.md)
-  Rust tooling for fast public RevDel on watched revisions, kept intentionally narrow and
-  safety-sensitive, with low-spec local operation treated as a design constraint.
-  Main libraries: `tokio`, `reqwest`, `reqwest-eventsource`, `metrics-exporter-prometheus`,
-  `serde`.
+  Rust tooling for fast public RevDel on matched revisions. It is currently running 24/7 on
+  `be.wikipedia.org` to support suppressor workflow with quicker reaction time.
 
-## Workflow In Brief
+## Basic Repo Usage
 
-Keep suppressor production behavior stable unless a task explicitly asks for runtime changes.
-Cleanup work should first remove unused docs, generated artifacts, and duplicate code around the
-current behavior.
+Run commands from the repository root. Use `make help` for more info.
 
-Safety-, reliability-, or performance-sensitive changes must keep queues and concurrency bounded,
-avoid unnecessary services or dependencies, and verify that simplicity does not come at the cost of
-correctness, recovery, or operator-visible status.
+Project-local commands are forwarded through the root Makefile:
 
-Changes that delete work, break schemas, alter config, or disrupt operator surfaces must be called
-out explicitly and approved by the human owner before the disruptive step runs.
+```bash
+make suppressor-help
+make suppressor-run
+make biblio-help
+make biblio-run
+```
 
-Because this is a public repo, sensitive-edit incident evidence must stay redacted. Do not commit
-real editor names, page titles, revision IDs, diff URLs, comments, screenshots, or log excerpts that
-identify how a real person edited a sensitive page; use synthetic fixtures and aggregate outcomes.
+## Where To Look
 
-## Where To Look Next
+- root command wrapper: `Makefile`
+- suppressor usage: [`suppressor/README.md`](suppressor/README.md)
+- biblio usage: [`biblio/README.md`](biblio/README.md)
+- local agent rules for this repo: [`AGENTS.md`](AGENTS.md)
 
-- repo command orchestration:
-  `Makefile`
-- project usage and scope:
-  [`biblio/README.md`](biblio/README.md) and [`suppressor/README.md`](suppressor/README.md)
-- detailed project commands:
-  `biblio/Makefile` and `suppressor/Makefile`
-- local agent rules:
-  [`AGENTS.md`](AGENTS.md)
-- repo cleanup and architecture plan:
-  [`docs/plan.md`](docs/plan.md)
+## Disclaimer
+
+LLMs are used heavily in this repository for drafting, refactoring, and routine code/documentation
+work. That improves speed, but it also means some code or docs may not yet be fully verified by
+careful manual review. Use thins code with caution.

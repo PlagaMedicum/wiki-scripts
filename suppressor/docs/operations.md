@@ -11,9 +11,9 @@
 6. Move to `make run`, `systemd`, or the rsynced binary `server-start` path only after
    the dry run is clean and the actual launch path has its own evidence.
 
-## Emergency 001 Trust Gate
+## Deployment Trust Gate
 
-Treat the active suppressor recovery gate as the minimal stable server only:
+Treat the active suppressor deployment gate as the minimum server proof:
 
 1. prove the exact binary that is running on the target host
 2. prove the same PID survives logout and owns fresh daemon status
@@ -57,7 +57,7 @@ For day-to-day use:
 The daemon trusts MediaWiki `recentchanges` polling as the authoritative live detector. Retained
 EventStreams code is not the healthy-state source of truth.
 
-## Emergency Live-Only Production Profile
+## Current Live-Only Production Profile
 
 Until the target-host daemon passes live-hide soak, keep automatic verification disabled in the
 checked-in production baseline:
@@ -80,8 +80,8 @@ The daemon must install handlers for the operator signals before entering its ma
 
 - `reload-cache` sends `SIGHUP` and means "force a watched-page cache reload"
 - `catch-up-now` sends `SIGUSR1` and means "run bounded manual recovery"
-- `nightly-sweep-now` remains a legacy alias for the same signal while old operator scripts are
-  retired
+- `nightly-sweep-now` remains a compatibility alias for the same signal while old operator scripts
+  are retired
 - `SIGTERM` means graceful stop
 
 Do not remove these handlers while the CLI uses signal delivery. The Unix default for `SIGHUP` and
@@ -125,14 +125,15 @@ grants needed for that setup.
 The checked-in `config.toml` is the current be.wiki production baseline for:
 
 - API URL
-- EventStreams URL, retained only for non-authoritative observer/fallback code in this hotfix tree
+- EventStreams URL, retained only for non-authoritative observer/fallback code in this release
+  branch
 - watched-list title
 - request-page triggers, currently `Вікіпедыя:Запыты да схавальнікаў`
 - RevDel reason
 - realtime stale/read timeouts
 - bounded catch-up window and maximum revisions per run
 - catch-up warning sample retention
-- disabled automatic daytime and nightly verification in the emergency production profile
+- disabled automatic daytime and nightly verification in the current live-only production profile
 - queue capacity
 - metrics bind
 

@@ -169,7 +169,7 @@ also compare normalized paths so harmless spellings such as `././state/daemon.pi
 `./state/daemon.pid` do not create false unhealthy status.
 
 `server-start` is additive. It keeps `run`, `dry-run`, and optional systemd starts available, but
-it provides the current rsync server path: prepare runtime parents, validate auth inputs without
+it provides the current detached server deployment path: prepare runtime parents, validate auth inputs without
 printing secrets, refuse duplicate live daemons, detach stdout/stderr to a log, start a new
 session, and wait until PID file plus daemon-owned `runtime_status.json` agree on a fresh
 `launch_path=server-start`.

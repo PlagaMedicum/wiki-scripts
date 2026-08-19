@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeDelta, Utc};
 use tokio::signal::unix::{SignalKind, signal as unix_signal};
 use tokio::sync::{RwLock, mpsc};
+use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{error, info, warn};
 
 use crate::auth::{AuthState, authenticate, refresh_csrf_token};
@@ -44,6 +45,7 @@ pub(crate) const LAUNCH_WRITE_PID_ENV: &str = "SUPPRESSOR_LAUNCH_WRITE_PID";
 pub(crate) const SERVER_START_LAUNCH_KIND: &str = "server-start";
 
 const LIVE_POLL_INTERVAL_SECONDS: u64 = 1;
+const ROUTINE_CHECKPOINT_INTERVAL_SECONDS: i64 = 5;
 const QUARANTINE_VERIFY_INTERVAL_SECONDS: i64 = 300;
 const QUARANTINE_VERIFY_PER_PASS: usize = 25;
 pub async fn run_daemon(config_path: PathBuf, dry_run: bool, verbose: bool) -> Result<()> {
@@ -99,6 +101,8 @@ struct Daemon {
     state_file: PathBuf,
     next_cache_refresh_at: DateTime<Utc>,
     next_quarantine_verify_at: DateTime<Utc>,
+    next_routine_checkpoint_at: DateTime<Utc>,
+    request_pages_normalized: HashSet<String>,
     background_tx: mpsc::Sender<BackgroundTask>,
     background_rx: mpsc::Receiver<BackgroundEvent>,
     priority_gate: Arc<PriorityGate>,
@@ -124,6 +128,12 @@ impl Daemon {
         let (background_tx, background_task_rx) = mpsc::channel(config.queue.capacity);
         let (background_event_tx, background_rx) = mpsc::channel(config.queue.capacity);
         let priority_gate = Arc::new(PriorityGate::default());
+        let request_pages_normalized = config
+            .suppression_list
+            .request_pages
+            .iter()
+            .map(|title| normalize_title(title))
+            .collect();
 
         let mut daemon = Self {
             config,
@@ -145,6 +155,8 @@ impl Daemon {
             state_file,
             next_cache_refresh_at: Utc::now(),
             next_quarantine_verify_at: Utc::now(),
+            next_routine_checkpoint_at: Utc::now(),
+            request_pages_normalized,
             background_tx,
             background_rx,
             priority_gate,
@@ -233,6 +245,11 @@ impl Daemon {
         let mut manual_sweep_signal = signals::install_manual_sweep_listener().await?;
         let mut terminate_signal =
             unix_signal(SignalKind::terminate()).context("failed to install SIGTERM listener")?;
+        let mut poll_interval = tokio::time::interval_at(
+            Instant::now() + Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS),
+            Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS),
+        );
+        poll_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -251,7 +268,7 @@ impl Daemon {
                 Some(()) = manual_sweep_signal.recv() => {
                     self.handle_manual_sweep_signal().await;
                 }
-                _ = tokio::time::sleep(Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS)) => {
+                _ = poll_interval.tick() => {
                     self.process_control_requests().await;
                     self.drain_background_events().await;
                     self.tick().await;
@@ -289,17 +306,19 @@ impl Daemon {
         let end = Utc::now();
         let start = self.live_poll_start(end);
         match self.process_window(start, end, "live-poll", false).await {
-            Ok(()) => {
+            Ok(routine_checkpoint_due) => {
                 if let Err(error) = self.retry_pending_due().await {
                     self.record_error(error, "pending-retry", None, None);
                 }
-                if let Err(error) = self.write_status(
-                    "healthy",
-                    "recentchanges poll completed",
-                    None,
-                    Some(idle_task_snapshot()),
-                ) {
-                    error!(error = %error, "failed to write runtime status");
+                if routine_checkpoint_due {
+                    if let Err(error) = self.write_status(
+                        "healthy",
+                        "recentchanges poll completed",
+                        None,
+                        Some(idle_task_snapshot()),
+                    ) {
+                        error!(error = %error, "failed to write runtime status");
+                    }
                 }
             }
             Err(error) => {
@@ -627,20 +646,22 @@ impl Daemon {
         end: DateTime<Utc>,
         source_label: &str,
         catchup: bool,
-    ) -> Result<()> {
-        self.write_status(
-            if catchup { "catching-up" } else { "healthy" },
-            &format!("{source_label} scanning recentchanges"),
-            None,
-            Some(CurrentTaskSnapshot {
-                task_kind: source_label.to_string(),
-                label: "scanning MediaWiki recentchanges".to_string(),
-                window_start: Some(start),
-                window_end: Some(end),
-                started_at: Some(Utc::now()),
-                ..CurrentTaskSnapshot::default()
-            }),
-        )?;
+    ) -> Result<bool> {
+        if catchup {
+            self.write_status(
+                "catching-up",
+                &format!("{source_label} scanning recentchanges"),
+                None,
+                Some(CurrentTaskSnapshot {
+                    task_kind: source_label.to_string(),
+                    label: "scanning MediaWiki recentchanges".to_string(),
+                    window_start: Some(start),
+                    window_end: Some(end),
+                    started_at: Some(Utc::now()),
+                    ..CurrentTaskSnapshot::default()
+                }),
+            )?;
+        }
         let window = self
             .client
             .fetch_recent_changes_in_window(start, end, self.config.catchup.max_revisions_per_run)
@@ -652,20 +673,18 @@ impl Daemon {
             self.state.last_observed_change_at = Some(latest.timestamp);
         }
 
-        let watched = self.cache.read().await.watched_set.clone();
-        let source_title_normalized = self.cache.read().await.source_title_normalized.clone();
-        let request_pages = self
-            .config
-            .suppression_list
-            .request_pages
-            .iter()
-            .map(|title| normalize_title(title))
-            .collect::<HashSet<_>>();
+        let cache = self.cache.read().await;
+        let watched = cache.watched_set.clone();
+        let source_title_normalized = cache.source_title_normalized.clone();
+        drop(cache);
         let mut watched_count = 0usize;
         for change in changes {
             let normalized_title = normalize_title(&change.title);
-            let source_refresh =
-                source_refresh_trigger(&normalized_title, &source_title_normalized, &request_pages);
+            let source_refresh = source_refresh_trigger(
+                &normalized_title,
+                &source_title_normalized,
+                &self.request_pages_normalized,
+            );
             let trigger_revid = change.revid;
             if self.processed.contains(change.revid) {
                 if let Some(trigger_kind) = source_refresh {
@@ -711,14 +730,19 @@ impl Daemon {
 
         self.state.last_successful_poll_at = Some(end);
         self.state.latest_error = None;
-        self.persist_state()?;
+        let routine_checkpoint_due = catchup || end >= self.next_routine_checkpoint_at;
+        if routine_checkpoint_due {
+            self.persist_state()?;
+            self.next_routine_checkpoint_at =
+                end + TimeDelta::seconds(ROUTINE_CHECKPOINT_INTERVAL_SECONDS);
+        }
         if watched_count > 0 {
             info!(
                 source_label,
                 watched_count, "processed watched recentchanges"
             );
         }
-        Ok(())
+        Ok(routine_checkpoint_due)
     }
 
     async fn handle_watched_change(
@@ -733,17 +757,6 @@ impl Daemon {
             source_label,
             "matched watched revision"
         );
-        self.write_status(
-            "healthy",
-            "hiding watched revision",
-            None,
-            Some(CurrentTaskSnapshot {
-                task_kind: "hide".to_string(),
-                label: format!("hiding watched edit {}", change.revid),
-                started_at: Some(Utc::now()),
-                ..CurrentTaskSnapshot::default()
-            }),
-        )?;
         let target = HideTarget {
             title: change.title,
             revid: change.revid,

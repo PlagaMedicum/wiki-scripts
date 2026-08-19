@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -489,12 +489,11 @@ impl ProcessedRevidsState {
         if self.contains(revid) {
             return;
         }
-        let mut queue = VecDeque::from(self.revids.clone());
-        queue.push_back(revid);
-        while self.capacity > 0 && queue.len() > self.capacity {
-            let _ = queue.pop_front();
+        self.revids.push(revid);
+        if self.capacity > 0 && self.revids.len() > self.capacity {
+            let excess = self.revids.len() - self.capacity;
+            self.revids.drain(..excess);
         }
-        self.revids = queue.into_iter().collect();
     }
 }
 

@@ -8,13 +8,15 @@ ARGS ?=
 REVID ?=
 SERVER_TARGET ?= aarch64-unknown-linux-musl
 SERVER_BINARY ?= target/$(SERVER_TARGET)/release/suppressor
+TOOLFORGE_TARGET ?= x86_64-unknown-linux-musl
+TOOLFORGE_BINARY ?= target/$(TOOLFORGE_TARGET)/release/suppressor
 LOG_LEVEL ?= warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn
 LOG_FORMAT ?= text
 TEST_ARGS ?= -- --test-threads=1
 
 RUN_ENV = RUST_LOG=$(LOG_LEVEL) WIKI_LOG_FORMAT=$(LOG_FORMAT) WIKI_ENV_FILE=$(ENV_FILE)
 
-.PHONY: help env-check run dry-run status health last-edits perf check-auth reload-cache catch-up-now hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server release test fmt lint audit check
+.PHONY: help env-check run dry-run status health last-edits perf check-auth reload-cache catch-up-now hide-revid smoke-test emergency-catchup coverage-report nightly-sweep-now print-effective-config build build-server build-toolforge release test fmt lint audit check
 
 define REQUIRE_CONFIG
 	@if [ -f "$(CONFIG)" ]; then :; else \
@@ -48,6 +50,7 @@ help:
 		'Developer commands:' \
 		'  make build' \
 		'  make build-server' \
+		'  make build-toolforge' \
 		'  make release' \
 		'  make test [ARGS="..."]' \
 		'  make fmt' \
@@ -59,6 +62,7 @@ help:
 		'  CONFIG=/path/to/a-wiki.toml (required)' \
 		'  ENV_FILE=./.env' \
 		'  SERVER_TARGET=aarch64-unknown-linux-musl' \
+		'  TOOLFORGE_TARGET=x86_64-unknown-linux-musl' \
 		'  LOG_LEVEL=warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn' \
 		'  LOG_FORMAT=text' \
 		'  TEST_ARGS=-- --test-threads=1'
@@ -139,6 +143,10 @@ build:
 build-server:
 	$(ZIGBUILD) --release --target "$(SERVER_TARGET)" $(ARGS)
 	@printf 'server binary: %s\n' "$(SERVER_BINARY)"
+
+build-toolforge:
+	$(ZIGBUILD) --release --target "$(TOOLFORGE_TARGET)" $(ARGS)
+	@printf 'Toolforge binary: %s\n' "$(TOOLFORGE_BINARY)"
 
 release:
 	$(CARGO) build --workspace --release $(ARGS)

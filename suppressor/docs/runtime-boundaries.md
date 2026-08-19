@@ -16,7 +16,7 @@ That shape is intentional:
 
 - `app.rs` / `cli.rs`: CLI parsing and dispatch
 - `command_context.rs`: shared command config/path loading interface
-- `commands.rs`: direct auth, hide, signal, and effective-config command controllers
+- `commands.rs`: direct auth, hide, shared-control, and effective-config command controllers
 - `coverage_command.rs`: bounded emergency catch-up, coverage, and command-report controller
 - `server_start.rs`: detached supervisor controller and startup proof checks
 - `status_command.rs`: read-only operator status, health, performance, and recent-edit inspection
@@ -32,7 +32,7 @@ That shape is intentional:
 - `worker.rs`: queued RevDel execution
 - `cache/`: watched-title cache loading and persistence
 - `state.rs`: local durable state
-- status/control commands read state and send bounded operator signals; they do not own daemon
+- status/control commands read state and write bounded shared control requests; they do not own daemon
   logic
 
 ## Service Shape

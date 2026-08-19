@@ -46,8 +46,6 @@ pub(crate) const SERVER_START_LAUNCH_KIND: &str = "server-start";
 const LIVE_POLL_INTERVAL_SECONDS: u64 = 1;
 const QUARANTINE_VERIFY_INTERVAL_SECONDS: i64 = 300;
 const QUARANTINE_VERIFY_PER_PASS: usize = 25;
-const SMOKE_TEST_PAGE: &str = "Удзельнік:Plaga_med_Bot/suppressor/tests";
-
 pub async fn run_daemon(config_path: PathBuf, dry_run: bool, verbose: bool) -> Result<()> {
     let mut daemon = Daemon::bootstrap(config_path, dry_run, verbose).await?;
     daemon.run().await
@@ -59,7 +57,7 @@ pub async fn run_smoke_test(
     verbose: bool,
 ) -> Result<()> {
     let mut daemon = Daemon::bootstrap(config_path, false, verbose).await?;
-    let page = page.unwrap_or_else(|| SMOKE_TEST_PAGE.to_string());
+    let page = page.context("smoke-test requires --page <bot-owned sandbox page>")?;
     let marker = format!(
         "\n* suppressor smoke test {} UTC\n",
         Utc::now().format("%Y-%m-%d %H:%M:%S")
@@ -228,9 +226,9 @@ impl Daemon {
             Some(idle_task_snapshot()),
         )?;
 
-        // Legacy operator commands use Unix signals. The daemon must install
-        // handlers before entering the steady loop so SIGHUP/SIGUSR1 are
-        // commands, not fatal default actions.
+        // Standalone operators may still use Unix signals directly. Install
+        // handlers before the steady loop so SIGHUP/SIGUSR1 are commands, not
+        // fatal default actions; CLI control uses shared files below.
         let mut reload_signal = signals::install_reload_listener().await?;
         let mut manual_sweep_signal = signals::install_manual_sweep_listener().await?;
         let mut terminate_signal =
@@ -254,6 +252,7 @@ impl Daemon {
                     self.handle_manual_sweep_signal().await;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(LIVE_POLL_INTERVAL_SECONDS)) => {
+                    self.process_control_requests().await;
                     self.drain_background_events().await;
                     self.tick().await;
                     self.drain_background_events().await;
@@ -386,6 +385,40 @@ impl Daemon {
             SourceRefreshTriggerKind::SuppressionList,
             CacheRefreshMode::Forced,
         );
+    }
+
+    async fn process_control_requests(&mut self) {
+        let reload_request = self.paths.control_command_file(signals::RELOAD_COMMAND);
+        match signals::claim_control_command(&reload_request) {
+            Ok(Some(claim)) => {
+                info!(command = signals::RELOAD_COMMAND, request = %reload_request.display(), "processing shared control request");
+                self.handle_reload_signal().await;
+                if let Err(error) = claim.acknowledge() {
+                    error!(command = signals::RELOAD_COMMAND, error = %error, "failed to acknowledge shared control request");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                error!(command = signals::RELOAD_COMMAND, error = %error, "failed to claim shared control request")
+            }
+        }
+
+        let sweep_request = self
+            .paths
+            .control_command_file(signals::MANUAL_SWEEP_COMMAND);
+        match signals::claim_control_command(&sweep_request) {
+            Ok(Some(claim)) => {
+                info!(command = signals::MANUAL_SWEEP_COMMAND, request = %sweep_request.display(), "processing shared control request");
+                self.handle_manual_sweep_signal().await;
+                if let Err(error) = claim.acknowledge() {
+                    error!(command = signals::MANUAL_SWEEP_COMMAND, error = %error, "failed to acknowledge shared control request");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                error!(command = signals::MANUAL_SWEEP_COMMAND, error = %error, "failed to claim shared control request")
+            }
+        }
     }
 
     async fn handle_manual_sweep_signal(&mut self) {

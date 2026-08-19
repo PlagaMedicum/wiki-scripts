@@ -117,7 +117,7 @@ revision by id before counting it as visible exposure. Already-hidden revisions 
   receipt rendering.
 - `coverage_command.rs`: bounded coverage and emergency catch-up command orchestration plus
   `command_report.json` persistence.
-- `commands.rs`: direct operator commands for auth, one-revision hiding, daemon signals, and
+- `commands.rs`: direct operator commands for auth, one-revision hiding, shared control requests, and
   effective config rendering.
 - `daemon_backlog.rs`: production daemon pending/quarantine state, retry timing, unresolved
   summaries, and processed-revision defaults.

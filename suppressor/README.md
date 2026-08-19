@@ -128,4 +128,5 @@ same thing as daemon-owned realtime health.
 - [`docs/runtime-boundaries.md`](docs/runtime-boundaries.md)
 - [`docs/testing-strategy.md`](docs/testing-strategy.md)
 - [`docs/operations.md`](docs/operations.md)
+- [`docs/toolforge.md`](docs/toolforge.md)
 - [`docs/implementation.md`](docs/implementation.md)

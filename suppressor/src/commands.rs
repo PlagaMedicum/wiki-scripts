@@ -75,21 +75,22 @@ pub async fn run_hide_revid(config_path: PathBuf, revid: u64, verbose: bool) -> 
 
 pub fn run_reload_cache(config_path: PathBuf) -> Result<()> {
     let command = CommandContext::load(&config_path)?;
-    signals::send_reload(&command.paths.pid_file)?;
-    println!(
-        "reload-cache.requested signal=SIGHUP pid_file={}",
-        command.paths.pid_file.display()
-    );
+    let request = command.paths.control_command_file(signals::RELOAD_COMMAND);
+    signals::request_control_command(&request)?;
+    println!("reload-cache.requested request_file={}", request.display());
     Ok(())
 }
 
 pub fn run_manual_sweep(config_path: PathBuf, command_name: &str) -> Result<()> {
     let command = CommandContext::load(&config_path)?;
-    signals::send_manual_sweep(&command.paths.pid_file)?;
+    let request = command
+        .paths
+        .control_command_file(signals::MANUAL_SWEEP_COMMAND);
+    signals::request_control_command(&request)?;
     println!(
-        "{}.requested signal=SIGUSR1 pid_file={}",
+        "{}.requested request_file={}",
         command_name,
-        command.paths.pid_file.display()
+        request.display()
     );
     Ok(())
 }

@@ -3,6 +3,7 @@ name = "suppressor-core"
 version = "0.1.0"
 edition = "2024"
 description = "domain types and pure helpers for the suppressor daemon"
+license = "MIT"
 publish = false
 
 [dependencies]

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
@@ -47,7 +48,7 @@ pub struct SuppressionListConfig {
     pub title: String,
     pub cache_file: String,
     pub metadata_recheck_seconds: u64,
-    #[serde(default = "default_request_pages")]
+    #[serde(default)]
     pub request_pages: Vec<String>,
 }
 
@@ -181,10 +182,6 @@ const DEFAULT_LOG_FILTER: &str =
 const DEFAULT_VERBOSE_LOG_FILTER: &str =
     "warn,suppressor=debug,hyper=warn,hyper_util=warn,h2=warn,reqwest=info";
 
-fn default_request_pages() -> Vec<String> {
-    vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()]
-}
-
 fn default_warning_sample_limit() -> usize {
     5
 }
@@ -264,48 +261,90 @@ impl AppConfig {
             .with_context(|| format!("Failed to read config file {}", path.display()))?;
         let config: AppConfig = toml::from_str(&raw)
             .with_context(|| format!("Failed to parse config file {}", path.display()))?;
-        if config.queue.capacity == 0 {
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_required("wiki.api_url", &self.wiki.api_url)?;
+        validate_url("wiki.api_url", &self.wiki.api_url)?;
+        validate_required("wiki.stream_url", &self.wiki.stream_url)?;
+        validate_url("wiki.stream_url", &self.wiki.stream_url)?;
+        validate_required("wiki.server_name", &self.wiki.server_name)?;
+        if self.wiki.server_name.contains("//") || self.wiki.server_name.contains('/') {
+            bail!("wiki.server_name must be a hostname, not a URL");
+        }
+        validate_required("wiki.wiki_code", &self.wiki.wiki_code)?;
+        validate_required("wiki.user_agent", &self.wiki.user_agent)?;
+        validate_required("auth.username_env", &self.auth.username_env)?;
+        validate_required("auth.password_env", &self.auth.password_env)?;
+        validate_required("suppression_list.title", &self.suppression_list.title)?;
+        if self
+            .suppression_list
+            .request_pages
+            .iter()
+            .any(|title| title.trim().is_empty())
+        {
+            bail!("suppression_list.request_pages must not contain empty page titles");
+        }
+        if self.suppression_list.request_pages.is_empty() {
+            bail!("suppression_list.request_pages must contain at least one configured page title");
+        }
+        validate_required("revdel.reason", &self.revdel.reason)?;
+        let valid_hide = ["user", "comment"];
+        if self.revdel.hide.len() != valid_hide.len()
+            || !valid_hide
+                .iter()
+                .all(|value| self.revdel.hide.iter().any(|hide| hide == value))
+        {
+            bail!("revdel.hide must contain exactly [\"user\", \"comment\"]");
+        }
+        if self.revdel.suppress {
+            bail!(
+                "revdel.suppress must be false; this service only performs public revision deletion"
+            );
+        }
+        if self.queue.capacity == 0 {
             bail!("queue.capacity must be greater than zero");
         }
-        if config.daytime_verification.min_delay_seconds
-            > config.daytime_verification.max_delay_seconds
+        if self.daytime_verification.min_delay_seconds > self.daytime_verification.max_delay_seconds
         {
             bail!("daytime_verification min_delay_seconds must be <= max_delay_seconds");
         }
-        if config.daytime_verification.window_hours == 0 {
+        if self.daytime_verification.window_hours == 0 {
             bail!("daytime_verification.window_hours must be greater than zero");
         }
-        if config.realtime.stale_threshold_seconds == 0 {
+        if self.realtime.stale_threshold_seconds == 0 {
             bail!("realtime.stale_threshold_seconds must be greater than zero");
         }
-        if config.realtime.stream_read_timeout_seconds == 0 {
+        if self.realtime.stream_read_timeout_seconds == 0 {
             bail!("realtime.stream_read_timeout_seconds must be greater than zero");
         }
-        if config.catchup.default_window_seconds <= 0 {
+        if self.catchup.default_window_seconds <= 0 {
             bail!("catchup.default_window_seconds must be greater than zero");
         }
-        if config.catchup.max_window_seconds < config.catchup.default_window_seconds {
+        if self.catchup.max_window_seconds < self.catchup.default_window_seconds {
             bail!("catchup.max_window_seconds must be >= catchup.default_window_seconds");
         }
-        if config.catchup.max_revisions_per_run == 0 {
+        if self.catchup.max_revisions_per_run == 0 {
             bail!("catchup.max_revisions_per_run must be greater than zero");
         }
-        if config.catchup.warning_sample_limit == 0 {
+        if self.catchup.warning_sample_limit == 0 {
             bail!("catchup.warning_sample_limit must be greater than zero");
         }
-        if config.catchup.source_refresh_title_scope_limit == 0 {
+        if self.catchup.source_refresh_title_scope_limit == 0 {
             bail!("catchup.source_refresh_title_scope_limit must be greater than zero");
         }
-        if config.catchup.rate_limit_backoff_default_seconds == 0 {
+        if self.catchup.rate_limit_backoff_default_seconds == 0 {
             bail!("catchup.rate_limit_backoff_default_seconds must be greater than zero");
         }
-        if config.catchup.rate_limit_stop_after_failures == 0 {
+        if self.catchup.rate_limit_stop_after_failures == 0 {
             bail!("catchup.rate_limit_stop_after_failures must be greater than zero");
         }
-        if config.catchup.unresolved_sample_limit == 0 {
+        if self.catchup.unresolved_sample_limit == 0 {
             bail!("catchup.unresolved_sample_limit must be greater than zero");
         }
-        Ok(config)
+        Ok(())
     }
 
     pub fn resolve_path(config_path: &Path, value: &str) -> PathBuf {
@@ -321,6 +360,21 @@ impl AppConfig {
     pub fn state_dir(&self, config_path: &Path) -> PathBuf {
         Self::resolve_path(config_path, &self.state.dir)
     }
+}
+
+fn validate_required(field: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{field} must not be empty");
+    }
+    Ok(())
+}
+
+fn validate_url(field: &str, value: &str) -> Result<()> {
+    let url = Url::parse(value).with_context(|| format!("{field} must be a valid URL"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        bail!("{field} must be an absolute http(s) URL");
+    }
+    Ok(())
 }
 
 impl RuntimePaths {
@@ -353,6 +407,10 @@ impl RuntimePaths {
 
     pub fn command_report_file(&self) -> PathBuf {
         self.state_dir.join("command_report.json")
+    }
+
+    pub fn control_command_file(&self, command: &str) -> PathBuf {
+        self.state_dir.join("commands").join(command)
     }
 }
 
@@ -725,7 +783,9 @@ mod tests {
     }
 
     #[test]
-    fn old_configs_load_new_recovery_defaults() {
+    fn missing_request_pages_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
         let raw = include_str!("../config.bewiki.toml")
             .lines()
             .filter(|line| {
@@ -738,18 +798,10 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        fs::write(&config_path, raw).unwrap();
 
-        let config: AppConfig = toml::from_str(&raw).unwrap();
-
-        assert_eq!(
-            config.suppression_list.request_pages,
-            vec!["Вікіпедыя:Запыты да схавальнікаў".to_string()]
-        );
-        assert_eq!(config.catchup.warning_sample_limit, 5);
-        assert_eq!(config.catchup.source_refresh_title_scope_limit, 250);
-        assert_eq!(config.catchup.rate_limit_backoff_default_seconds, 30);
-        assert_eq!(config.catchup.rate_limit_stop_after_failures, 3);
-        assert_eq!(config.catchup.unresolved_sample_limit, 25);
+        let error = AppConfig::load(&config_path).unwrap_err().to_string();
+        assert!(error.contains("request_pages"));
     }
 
     #[test]
@@ -793,5 +845,55 @@ mod tests {
         let error = AppConfig::load(&config_path).unwrap_err().to_string();
 
         assert!(error.contains("catchup.unresolved_sample_limit"));
+    }
+
+    #[test]
+    fn rejects_empty_required_fields_invalid_urls_and_unsafe_revdel() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        let cases = [
+            (
+                "api_url = \"https://be.wikipedia.org/w/api.php\"",
+                "api_url = \"\"",
+                "wiki.api_url",
+            ),
+            (
+                "server_name = \"be.wikipedia.org\"",
+                "server_name = \"\"",
+                "wiki.server_name",
+            ),
+            (
+                "api_url = \"https://be.wikipedia.org/w/api.php\"",
+                "api_url = \"not a URL\"",
+                "wiki.api_url",
+            ),
+            (
+                "hide = [\"user\", \"comment\"]",
+                "hide = [\"text\"]",
+                "revdel.hide",
+            ),
+        ];
+        for (from, to, field) in cases {
+            fs::write(
+                &config_path,
+                include_str!("../config.bewiki.toml").replace(from, to),
+            )
+            .unwrap();
+            let error = AppConfig::load(&config_path).unwrap_err().to_string();
+            assert!(error.contains(field), "{error}");
+        }
+    }
+
+    #[test]
+    fn generic_example_has_no_belarusian_runtime_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("config.toml");
+        fs::write(&config_path, include_str!("../config.example.toml")).unwrap();
+
+        let config = AppConfig::load(&config_path).unwrap();
+        assert_eq!(
+            config.suppression_list.request_pages,
+            vec!["Project:Suppression requests".to_string()]
+        );
     }
 }

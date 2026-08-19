@@ -74,19 +74,17 @@ Keep these manual operator tools available:
 Those commands are bounded operator actions. They do not prove the daemon is currently protecting
 live edits, and they must not be used to excuse a failing live path.
 
-## 2026-05-31 Signal And RevDel Retry Lesson
+## Operator Control And RevDel Retry
 
-The daemon must install handlers for the operator signals before entering its main loop:
+`reload-cache`, `catch-up-now`, and the `nightly-sweep-now` compatibility alias write atomic
+requests under `state/commands/`. The daemon consumes and removes them on its next loop, so
+operator commands work when the daemon is in another Toolforge job/process namespace.
 
-- `reload-cache` sends `SIGHUP` and means "force a watched-page cache reload"
-- `catch-up-now` sends `SIGUSR1` and means "run bounded manual recovery"
-- `nightly-sweep-now` remains a compatibility alias for the same signal while old operator scripts
-  are retired
-- `SIGTERM` means graceful stop
+The daemon also keeps `SIGHUP` for a watched-page reload, `SIGUSR1` for bounded manual recovery,
+and `SIGTERM` for graceful stop when a traditional standalone operator uses Unix signals directly.
+Those handlers must remain installed before the main loop: the Unix default for `SIGHUP` and
+`SIGUSR1` is process termination.
 
-Do not remove these handlers while the CLI uses signal delivery. The Unix default for `SIGHUP` and
-`SIGUSR1` is process termination, so an unhandled operator command can look like a random crash
-followed by supervisor restart.
 
 Per-revision RevDel denials such as `permissiondenied` or `cantdelete` are terminal for that target.
 The daemon quarantines them in `daemon_state.json`, reports degraded status with a manual
@@ -268,7 +266,7 @@ still the external hide evidence in the feature spec.
 
 Operator actions run as plain commands:
 
-- `catch-up-now` sends bounded manual recovery to the running daemon
+- `catch-up-now` requests bounded manual recovery from the running daemon
 - `emergency-catchup` runs a bounded recovery command
 - `coverage-last-24h --report-only` runs the rolling daily verification preset
 

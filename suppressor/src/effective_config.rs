@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn effective_config_redacts_password() {
-        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.bewiki.toml")).unwrap();
         let env = EnvConfig {
             api_url: "https://example.invalid/w/api.php".to_string(),
             stream_url: "https://stream.example.invalid/recentchange".to_string(),

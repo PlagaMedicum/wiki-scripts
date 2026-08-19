@@ -1,0 +1,79 @@
+[wiki]
+api_url = "https://example.wikipedia.org/w/api.php"
+stream_url = "https://stream.wikimedia.org/v2/stream/recentchange"
+wiki_code = "examplewiki"
+server_name = "example.wikipedia.org"
+user_agent = "wiki-suppressor/1.0 (contact on-wiki)"
+
+[auth]
+username_env = "WIKI_BOT_USERNAME"
+password_env = "WIKI_BOT_PASSWORD"
+
+[suppression_list]
+title = "User:Example/SuppressionList"
+cache_file = "./state/suppression_list_cache.json"
+metadata_recheck_seconds = 600
+request_pages = ["Project:Suppression requests"]
+
+[matching]
+drop_canary = true
+exact_title_match = true
+
+[revdel]
+hide = ["user", "comment"]
+suppress = false
+reason = "Hide public revision metadata for edits matched by the configured suppression list."
+
+[queue]
+capacity = 100
+
+[state]
+dir = "./state"
+last_event_id_file = "./state/last_event_id.txt"
+processed_revids_file = "./state/processed_revids.json"
+nightly_sweep_progress_file = "./state/nightly_sweep_progress.json"
+runtime_status_file = "./state/runtime_status.json"
+pid_file = "./state/daemon.pid"
+
+[retry]
+stream_backoff_initial_ms = 1000
+stream_backoff_max_ms = 30000
+api_max_retries = 3
+since_recovery_seconds = 60
+
+[realtime]
+stale_threshold_seconds = 10
+stream_read_timeout_seconds = 10
+freshness_probe_seconds = 30
+
+[catchup]
+default_window_seconds = 1800
+max_window_seconds = 7200
+max_revisions_per_run = 5000
+warning_sample_limit = 5
+source_refresh_title_scope_limit = 250
+rate_limit_backoff_default_seconds = 30
+rate_limit_stop_after_failures = 3
+unresolved_sample_limit = 25
+
+[nightly_sweep]
+enabled = false
+timezone = "UTC"
+start_time = "02:00"
+randomized_window_minutes = 180
+page_concurrency = 2
+batch_sleep_ms = 250
+
+[daytime_verification]
+enabled = false
+min_delay_seconds = 3600
+max_delay_seconds = 21600
+window_hours = 24
+
+[logging]
+level = "info"
+format = "json"
+
+[metrics]
+enabled = true
+bind = "127.0.0.1:9808"

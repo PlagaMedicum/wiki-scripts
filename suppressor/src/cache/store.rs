@@ -315,7 +315,7 @@ mod tests {
     async fn load_or_bootstrap_uses_cached_snapshot_without_fetching() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
-        std::fs::write(&config_path, include_str!("../../config.toml")).unwrap();
+        std::fs::write(&config_path, include_str!("../../config.bewiki.toml")).unwrap();
         let config = AppConfig::load(&config_path).unwrap();
         let paths = RuntimePaths::resolve(&config_path, &config);
         let client = MediaWikiClient::new(&crate::config::EnvConfig {

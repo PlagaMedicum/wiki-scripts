@@ -6,8 +6,8 @@ server_name = "be.wikipedia.org"
 user_agent = "bewiki-revdel-daemon/1.0 (contact on-wiki)"
 
 [auth]
-username_env = "BEWIKI_BOT_USERNAME"
-password_env = "BEWIKI_BOT_PASSWORD"
+username_env = "WIKI_BOT_USERNAME"
+password_env = "WIKI_BOT_PASSWORD"
 
 [suppression_list]
 title = "Удзельнік:Wizardist/SuppressionList"

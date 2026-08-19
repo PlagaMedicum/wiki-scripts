@@ -53,7 +53,7 @@ reports, logs, and metrics. Services must not call controller rendering code.
 
 Human-owned config:
 
-- `config.toml`
+- an explicitly selected per-wiki TOML profile (for example `config.bewiki.toml`)
 
 Secrets and environment input:
 

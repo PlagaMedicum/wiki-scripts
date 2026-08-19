@@ -83,7 +83,7 @@
 
 Before deployment trust, rerun the serial suppressor test gate after daemon-critical edits, rerun
 `make build-server` after build-input edits, rsync the resulting binary, start it with
-`./suppressor --config ./config.toml server-start`, reconnect to prove terminal logout survival,
+`./suppressor --config ./config.bewiki.toml server-start`, reconnect to prove terminal logout survival,
 run one controlled live or dry-run watched-edit smoke check while background work is active or
 queued, and record at least one 10-minute deployment-host resource sample. Missing target-host
 evidence is a release blocker, not a CI substitute.

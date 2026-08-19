@@ -43,45 +43,50 @@ cross-build tooling is only needed for the current server artifact flow.
 Run from `suppressor/`:
 
 ```bash
+cp config.example.toml my-wiki.toml
 cp .env.example .env
-make env-check
+make env-check CONFIG=./my-wiki.toml
 ```
 
-The example environment file includes:
+Every invocation requires `CONFIG=/path/to/wiki.toml`. `config.bewiki.toml` is the existing
+Belarusian production profile; `config.example.toml` is the starting point for another wiki.
+
+The optional environment file includes:
 
 ```dotenv
-BEWIKI_API_URL=https://be.wikipedia.org/w/api.php
-BEWIKI_STREAM_URL=https://stream.wikimedia.org/v2/stream/recentchange
-BEWIKI_BOT_USERNAME=YourBot@revdel-watch
-BEWIKI_BOT_PASSWORD=REDACTED
-BEWIKI_USER_AGENT="bewiki-revdel-daemon/1.0 (contact on-wiki)"
+WIKI_BOT_USERNAME=YourBot@revdel-watch
+WIKI_BOT_PASSWORD=REDACTED
 ```
 
-`BEWIKI_BOT_USERNAME` must use the full BotPasswords login in the form `username@label`.
+`WIKI_BOT_USERNAME` must use the full BotPasswords login in the form `username@label`.
+Process environment values take precedence over `.env`; `.env` remains optional for Toolforge
+and local deployments. Endpoint and user-agent overrides are optional `WIKI_API_URL`,
+`WIKI_STREAM_URL`, and `WIKI_USER_AGENT` values.
 
-Review `config.toml` before running against any real wiki.
+Set the selected TOML profile's wiki URLs, wiki code, watched pages, RevDel reason, and user
+agent before running against any real wiki.
 
 ## Basic Usage
 
 Recommended first steps:
 
 ```bash
-make check-auth
-make smoke-test
-make dry-run
+make check-auth CONFIG=./my-wiki.toml
+make smoke-test CONFIG=./my-wiki.toml
+make dry-run CONFIG=./my-wiki.toml
 ```
 
 Common commands:
 
-- `make run`
-- `make status`
-- `make health`
-- `make last-edits ARGS="--limit 20"`
-- `make perf`
-- `make reload-cache`
-- `make catch-up-now`
-- `make emergency-catchup ARGS="--dry-run"`
-- `make coverage-report ARGS="--start 2026-04-24T00:00:00Z --report-only"`
+- `make run CONFIG=./my-wiki.toml`
+- `make status CONFIG=./my-wiki.toml`
+- `make health CONFIG=./my-wiki.toml`
+- `make last-edits CONFIG=./my-wiki.toml ARGS="--limit 20"`
+- `make perf CONFIG=./my-wiki.toml`
+- `make reload-cache CONFIG=./my-wiki.toml`
+- `make catch-up-now CONFIG=./my-wiki.toml`
+- `make emergency-catchup CONFIG=./my-wiki.toml ARGS="--dry-run"`
+- `make coverage-report CONFIG=./my-wiki.toml ARGS="--start 2026-04-24T00:00:00Z --report-only"`
 
 Development and release commands:
 
@@ -96,7 +101,7 @@ For the current detached server deployment path:
 
 ```bash
 make build-server
-./suppressor --config ./config.toml server-start
+./suppressor --config ./config.bewiki.toml server-start
 ```
 
 `server-start` launches the daemon detached from the terminal, writes a PID/runtime-status/log

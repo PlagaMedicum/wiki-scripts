@@ -3,11 +3,11 @@
 
 ## First Run
 
-1. Copy `.env.example` to `.env`.
-2. Review `config.toml`.
-3. Run `make env-check`.
-4. Run `make check-auth`.
-5. Run `make dry-run`.
+1. Copy `config.example.toml` to a private per-wiki TOML profile and edit it.
+2. Copy `.env.example` to `.env`, or provide the same values through the process environment.
+3. Run `make env-check CONFIG=/path/to/wiki.toml`.
+4. Run `make check-auth CONFIG=/path/to/wiki.toml`.
+5. Run `make dry-run CONFIG=/path/to/wiki.toml`.
 6. Move to `make run`, `systemd`, or the rsynced binary `server-start` path only after
    the dry run is clean and the actual launch path has its own evidence.
 
@@ -33,7 +33,7 @@ running.
 
 - The normal local operator workflow is `make run` for an attached daemon, or `server-start` for
   detached server deployment.
-- The rsync server workflow is `./suppressor --config ./config.toml server-start` from the deployed
+- The rsync server workflow is `./suppressor --config ./config.bewiki.toml server-start` from the deployed
   directory. It starts a detached supervisor, which starts and restarts the daemon child it
   verifies.
 - `systemd` remains supported as an optional launch path, but it is not the default verification
@@ -69,7 +69,7 @@ Keep these manual operator tools available:
 
 - `make catch-up-now`
 - `make emergency-catchup ARGS="--dry-run"`
-- `./suppressor --config ./config.toml coverage-last-24h --report-only`
+- `./suppressor --config ./config.bewiki.toml coverage-last-24h --report-only`
 
 Those commands are bounded operator actions. They do not prove the daemon is currently protecting
 live edits, and they must not be used to excuse a failing live path.
@@ -96,18 +96,18 @@ decode, rate-limit, and server errors remain retryable through the pending queue
 
 ## Auth Contract
 
-Required variables:
+Required variables (from the process environment or optional `.env`):
 
 ```dotenv
-BEWIKI_BOT_USERNAME=YourBot@revdel-watch
-BEWIKI_BOT_PASSWORD=REDACTED
+WIKI_BOT_USERNAME=YourBot@revdel-watch
+WIKI_BOT_PASSWORD=REDACTED
 ```
 
 Notes:
 
 - use the full BotPasswords login shown by MediaWiki, including the `@label` suffix
 - do not commit `.env`
-- current internal env names still use the `BEWIKI_` prefix
+- `WIKI_BOT_USERNAME` and `WIKI_BOT_PASSWORD` are the only supported credential names
 
 ## Required Rights
 
@@ -122,7 +122,9 @@ grants needed for that setup.
 
 ## Current Config Baseline
 
-The checked-in `config.toml` is the current be.wiki production baseline for:
+`config.bewiki.toml` is the current be.wiki production baseline. `config.example.toml` is a
+separate template for another wiki, and operators must pass their chosen config explicitly.
+The Belarusian profile defines:
 
 - API URL
 - EventStreams URL, retained only for non-authoritative observer/fallback code in this release
@@ -195,11 +197,11 @@ stat -c '%n %s %y' ./suppressor
 
 That tuple is non-secret and should be recorded alongside the `server-start` receipt and live PID.
 
-After copying the binary, `config.toml`, and the operator-managed `.env` or equivalent secret input
+After copying the binary, `config.bewiki.toml`, and the operator-managed `.env` or equivalent secret input
 to the server, start the daemon with one binary command:
 
 ```bash
-./suppressor --config ./config.toml server-start
+./suppressor --config ./config.bewiki.toml server-start
 ```
 
 The receipt must include mode, daemon PID, supervisor PID, binary path, config path, PID file,
@@ -333,7 +335,7 @@ protection rows.
 4. If the report is correct and auth is healthy, run `make emergency-catchup` to queue unresolved
    eligible edits for hiding.
 5. For a known accident window, run `make coverage-report ARGS="--start <RFC3339> --end <RFC3339> --report-only"`.
-6. For the routine rolling window, use `./suppressor --config ./config.toml coverage-last-24h --report-only`.
+6. For the routine rolling window, use `./suppressor --config ./config.bewiki.toml coverage-last-24h --report-only`.
 7. Treat unresolved items as open exposure until each one has a reason, owner, and next action.
 
 Reports include page title, revision ID, age, reason, and next action. They must not include hidden

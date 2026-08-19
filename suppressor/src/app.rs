@@ -12,23 +12,24 @@ use crate::status_command::{run_health, run_last_edits, run_perf, run_status};
 
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
+    let config = cli.required_config()?;
     match cli.command {
-        Command::Run => run_daemon(cli.config, false, cli.verbose).await,
-        Command::Status { json } => run_status(cli.config, json),
+        Command::Run => run_daemon(config, false, cli.verbose).await,
+        Command::Status { json } => run_status(config, json),
         Command::Health { json } => {
-            let exit_code = run_health(cli.config, json)?;
+            let exit_code = run_health(config, json)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
             Ok(())
         }
-        Command::LastEdits { limit, json } => run_last_edits(cli.config, limit, json).await,
-        Command::Perf { json } => run_perf(cli.config, json),
-        Command::DryRun => run_daemon(cli.config, true, cli.verbose).await,
-        Command::CheckAuth => run_check_auth(cli.config, cli.verbose).await,
-        Command::HideRevid { id } => run_hide_revid(cli.config, id, cli.verbose).await,
+        Command::LastEdits { limit, json } => run_last_edits(config, limit, json).await,
+        Command::Perf { json } => run_perf(config, json),
+        Command::DryRun => run_daemon(config, true, cli.verbose).await,
+        Command::CheckAuth => run_check_auth(config, cli.verbose).await,
+        Command::HideRevid { id } => run_hide_revid(config, id, cli.verbose).await,
         Command::SmokeTest { page } => {
-            crate::daemon::run_smoke_test(cli.config, page, cli.verbose).await
+            crate::daemon::run_smoke_test(config, page, cli.verbose).await
         }
         Command::EmergencyCatchup {
             start,
@@ -38,7 +39,7 @@ pub async fn run() -> Result<()> {
             report_only,
         } => {
             run_emergency_catchup(
-                cli.config,
+                config,
                 start,
                 end,
                 allow_large_window,
@@ -56,7 +57,7 @@ pub async fn run() -> Result<()> {
             report_only,
         } => {
             run_coverage_report(
-                cli.config,
+                config,
                 start,
                 end,
                 allow_large_window,
@@ -69,24 +70,24 @@ pub async fn run() -> Result<()> {
         Command::CoverageLast24h {
             dry_run,
             report_only,
-        } => run_coverage_last_24h(cli.config, dry_run, report_only, cli.verbose).await,
+        } => run_coverage_last_24h(config, dry_run, report_only, cli.verbose).await,
         Command::ServerStart {
             dry_run,
             status_timeout_seconds,
             log_file,
         } => run_server_start(
-            cli.config,
+            config,
             dry_run,
             status_timeout_seconds,
             log_file,
             cli.verbose,
         ),
         Command::SupervisorRun { dry_run, log_file } => {
-            run_supervisor(cli.config, dry_run, log_file, cli.verbose)
+            run_supervisor(config, dry_run, log_file, cli.verbose)
         }
-        Command::ReloadCache => run_reload_cache(cli.config),
-        Command::CatchUpNow => run_manual_sweep(cli.config, "catch-up-now"),
-        Command::NightlySweepNow => run_manual_sweep(cli.config, "nightly-sweep-now"),
-        Command::PrintEffectiveConfig => run_print_effective_config(cli.config, cli.verbose),
+        Command::ReloadCache => run_reload_cache(config),
+        Command::CatchUpNow => run_manual_sweep(config, "catch-up-now"),
+        Command::NightlySweepNow => run_manual_sweep(config, "nightly-sweep-now"),
+        Command::PrintEffectiveConfig => run_print_effective_config(config, cli.verbose),
     }
 }

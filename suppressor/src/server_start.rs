@@ -269,9 +269,9 @@ fn spawn_server_start_supervisor(
     supervisor_command
         .arg("--config")
         .arg(&paths.config_path)
-        .env("BEWIKI_ENV_FILE", &paths.env_file)
+        .env("WIKI_ENV_FILE", &paths.env_file)
         .env("RUST_LOG", log_filter)
-        .env("BEWIKI_LOG_FORMAT", "text")
+        .env("WIKI_LOG_FORMAT", "text")
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
@@ -324,9 +324,9 @@ fn spawn_daemon_child(
     child_command
         .arg("--config")
         .arg(&paths.config_path)
-        .env("BEWIKI_ENV_FILE", &paths.env_file)
+        .env("WIKI_ENV_FILE", &paths.env_file)
         .env("RUST_LOG", log_filter)
-        .env("BEWIKI_LOG_FORMAT", "text")
+        .env("WIKI_LOG_FORMAT", "text")
         .env("NO_COLOR", "1")
         .env(LAUNCH_KIND_ENV, SERVER_START_LAUNCH_KIND)
         .env(LAUNCH_LOG_PATH_ENV, log_path)

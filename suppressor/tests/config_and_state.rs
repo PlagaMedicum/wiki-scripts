@@ -12,7 +12,7 @@ use tempfile::{TempDir, tempdir};
 
 fn runtime_paths_for_tempdir(temp: &TempDir) -> RuntimePaths {
     let config_path = temp.path().join("config.toml");
-    fs::write(&config_path, include_str!("../config.toml")).unwrap();
+    fs::write(&config_path, include_str!("../config.bewiki.toml")).unwrap();
     let config = AppConfig::load(&config_path).unwrap();
     RuntimePaths::resolve(&config_path, &config)
 }
@@ -63,13 +63,13 @@ fn older_command_report_fixture() -> &'static str {
 }
 
 fn legacy_current_day_config() -> String {
-    include_str!("../config.toml").replace("[daytime_verification]", "[current_day_recheck]")
+    include_str!("../config.bewiki.toml").replace("[daytime_verification]", "[current_day_recheck]")
 }
 
 fn legacy_config_without_realtime_and_catchup() -> String {
     let mut rendered = String::new();
     let mut skipped_section = false;
-    for line in include_str!("../config.toml").lines() {
+    for line in include_str!("../config.bewiki.toml").lines() {
         if matches!(line, "[realtime]" | "[catchup]") {
             skipped_section = true;
             continue;
@@ -101,12 +101,19 @@ fn write_stale_supervisor_artifacts(paths: &RuntimePaths) {
 }
 
 #[test]
-fn loads_tracked_config() {
-    let config = AppConfig::load(std::path::Path::new("config.toml")).unwrap();
+fn loads_belarusian_profile() {
+    let config = AppConfig::load(std::path::Path::new("config.bewiki.toml")).unwrap();
     assert_eq!(config.wiki.wiki_code, "bewiki");
     assert_eq!(config.queue.capacity, 100);
     assert_eq!(config.realtime.stale_threshold_seconds, 10);
     assert_eq!(config.catchup.default_window_seconds, 1800);
+}
+
+#[test]
+fn loads_example_profile() {
+    let config = AppConfig::load(std::path::Path::new("config.example.toml")).unwrap();
+    assert_eq!(config.wiki.wiki_code, "examplewiki");
+    assert_eq!(config.auth.username_env, "WIKI_BOT_USERNAME");
 }
 
 #[test]

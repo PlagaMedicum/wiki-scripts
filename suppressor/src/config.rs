@@ -173,9 +173,9 @@ pub struct RuntimePaths {
 }
 
 static LOGGING_INIT: OnceLock<()> = OnceLock::new();
-const DEFAULT_API_URL_ENV: &str = "BEWIKI_API_URL";
-const DEFAULT_STREAM_URL_ENV: &str = "BEWIKI_STREAM_URL";
-const DEFAULT_USER_AGENT_ENV: &str = "BEWIKI_USER_AGENT";
+const DEFAULT_API_URL_ENV: &str = "WIKI_API_URL";
+const DEFAULT_STREAM_URL_ENV: &str = "WIKI_STREAM_URL";
+const DEFAULT_USER_AGENT_ENV: &str = "WIKI_USER_AGENT";
 const DEFAULT_LOG_FILTER: &str =
     "warn,suppressor=info,hyper=warn,hyper_util=warn,h2=warn,reqwest=warn";
 const DEFAULT_VERBOSE_LOG_FILTER: &str =
@@ -402,7 +402,7 @@ pub fn load_env(config_path: &Path) -> Result<EnvConfig> {
 
 pub fn resolve_env_file(config_path: &Path) -> PathBuf {
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    std::env::var("BEWIKI_ENV_FILE")
+    std::env::var("WIKI_ENV_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| base.join(".env"))
 }
@@ -453,7 +453,7 @@ pub fn init_logging(config: &LoggingConfig, verbose: bool) {
     LOGGING_INIT.get_or_init(|| {
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(default_log_filter(verbose)));
-        let format = std::env::var("BEWIKI_LOG_FORMAT").unwrap_or_else(|_| config.format.clone());
+        let format = std::env::var("WIKI_LOG_FORMAT").unwrap_or_else(|_| config.format.clone());
         if format.eq_ignore_ascii_case("json") {
             let subscriber = tracing_subscriber::fmt()
                 .with_env_filter(filter)
@@ -552,9 +552,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
         let env_path = temp.path().join(".env");
-        let config = include_str!("../config.toml")
-            .replace("BEWIKI_BOT_USERNAME", "TEST_BOT_USERNAME")
-            .replace("BEWIKI_BOT_PASSWORD", "TEST_BOT_PASSWORD");
+        let config = include_str!("../config.bewiki.toml")
+            .replace("WIKI_BOT_USERNAME", "TEST_BOT_USERNAME")
+            .replace("WIKI_BOT_PASSWORD", "TEST_BOT_PASSWORD");
         fs::write(&config_path, config).unwrap();
         fs::write(
             &env_path,
@@ -572,7 +572,7 @@ mod tests {
                 (DEFAULT_USER_AGENT_ENV, None),
                 ("TEST_BOT_USERNAME", None),
                 ("TEST_BOT_PASSWORD", None),
-                ("BEWIKI_ENV_FILE", None),
+                ("WIKI_ENV_FILE", None),
             ],
             || {
                 let loaded = load_env(&config_path).unwrap();
@@ -608,16 +608,16 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
         let env_path = temp.path().join(".env");
-        let config = include_str!("../config.toml")
-            .replace("BEWIKI_BOT_USERNAME", "TEST_BOT_USERNAME")
-            .replace("BEWIKI_BOT_PASSWORD", "TEST_BOT_PASSWORD");
+        let config = include_str!("../config.bewiki.toml")
+            .replace("WIKI_BOT_USERNAME", "TEST_BOT_USERNAME")
+            .replace("WIKI_BOT_PASSWORD", "TEST_BOT_PASSWORD");
         fs::write(&config_path, config).unwrap();
         fs::write(
             &env_path,
             concat!(
-                "BEWIKI_API_URL=https://dotenv.example/w/api.php\n",
-                "BEWIKI_STREAM_URL=https://dotenv.example/stream\n",
-                "BEWIKI_USER_AGENT=bewiki-revdel-daemon/1.0 (from-dotenv)\n",
+                "WIKI_API_URL=https://dotenv.example/w/api.php\n",
+                "WIKI_STREAM_URL=https://dotenv.example/stream\n",
+                "WIKI_USER_AGENT=bewiki-revdel-daemon/1.0 (from-dotenv)\n",
                 "TEST_BOT_USERNAME=Bot@dotenv\n",
                 "TEST_BOT_PASSWORD=dotenv-secret\n",
             ),
@@ -637,7 +637,7 @@ mod tests {
                 ),
                 ("TEST_BOT_USERNAME", None),
                 ("TEST_BOT_PASSWORD", None),
-                ("BEWIKI_ENV_FILE", None),
+                ("WIKI_ENV_FILE", None),
             ],
             || {
                 let loaded = load_env(&config_path).unwrap();
@@ -654,9 +654,9 @@ mod tests {
     fn loads_env_without_dotenv_when_process_env_supplies_auth() {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
-        let config = include_str!("../config.toml")
-            .replace("BEWIKI_BOT_USERNAME", "TEST_BOT_USERNAME")
-            .replace("BEWIKI_BOT_PASSWORD", "TEST_BOT_PASSWORD");
+        let config = include_str!("../config.bewiki.toml")
+            .replace("WIKI_BOT_USERNAME", "TEST_BOT_USERNAME")
+            .replace("WIKI_BOT_PASSWORD", "TEST_BOT_PASSWORD");
         fs::write(&config_path, config).unwrap();
 
         with_env_vars(
@@ -666,7 +666,7 @@ mod tests {
                 (DEFAULT_USER_AGENT_ENV, None),
                 ("TEST_BOT_USERNAME", Some("Bot@process")),
                 ("TEST_BOT_PASSWORD", Some("process-secret")),
-                ("BEWIKI_ENV_FILE", None),
+                ("WIKI_ENV_FILE", None),
             ],
             || {
                 let loaded = load_env(&config_path).unwrap();
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn runtime_paths_resolve_from_config_once() {
-        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.bewiki.toml")).unwrap();
         let config_path = Path::new("/tmp/suppressor/config.toml");
         let paths = RuntimePaths::resolve(config_path, &config);
 
@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn production_config_includes_bounded_recovery_defaults() {
-        let config: AppConfig = toml::from_str(include_str!("../config.toml")).unwrap();
+        let config: AppConfig = toml::from_str(include_str!("../config.bewiki.toml")).unwrap();
 
         assert_eq!(
             config.suppression_list.request_pages,
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn old_configs_load_new_recovery_defaults() {
-        let raw = include_str!("../config.toml")
+        let raw = include_str!("../config.bewiki.toml")
             .lines()
             .filter(|line| {
                 !line.starts_with("request_pages")
@@ -756,7 +756,7 @@ mod tests {
     fn rejects_unbounded_warning_sample_defaults() {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
-        let raw = include_str!("../config.toml")
+        let raw = include_str!("../config.bewiki.toml")
             .replace("warning_sample_limit = 5", "warning_sample_limit = 0");
         fs::write(&config_path, raw).unwrap();
 
@@ -769,7 +769,7 @@ mod tests {
     fn rejects_zero_rate_limit_stop_after_failures() {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
-        let raw = include_str!("../config.toml").replace(
+        let raw = include_str!("../config.bewiki.toml").replace(
             "rate_limit_stop_after_failures = 3",
             "rate_limit_stop_after_failures = 0",
         );
@@ -784,7 +784,7 @@ mod tests {
     fn rejects_zero_unresolved_sample_limit() {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
-        let raw = include_str!("../config.toml").replace(
+        let raw = include_str!("../config.bewiki.toml").replace(
             "unresolved_sample_limit = 25",
             "unresolved_sample_limit = 0",
         );

@@ -169,7 +169,7 @@ mod tests {
     fn command_context_resolves_pid_path() {
         let temp = tempfile::tempdir().unwrap();
         let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+        std::fs::write(&config_path, include_str!("../config.bewiki.toml")).unwrap();
 
         let command = CommandContext::load(config_path.as_path()).unwrap();
         assert_eq!(

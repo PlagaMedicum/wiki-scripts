@@ -1094,7 +1094,7 @@ pub(crate) fn build_test_runtime_harness(
     runtime_status_surface_mode: RuntimeStatusSurfaceMode,
 ) -> TestRuntimeHarness {
     let config_path = temp.path().join("config.toml");
-    std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+    std::fs::write(&config_path, include_str!("../config.bewiki.toml")).unwrap();
     let config = AppConfig::load(&config_path).unwrap();
     let env = default_test_env(temp, &config);
     build_test_runtime_harness_with_env(temp, runtime_status_surface_mode, env)
@@ -1123,7 +1123,7 @@ pub(crate) fn build_test_runtime_harness_with_env_and_dry_run(
     use crate::cache::{RuntimeCache, SuppressionListCache};
 
     let config_path = temp.path().join("config.toml");
-    std::fs::write(&config_path, include_str!("../config.toml")).unwrap();
+    std::fs::write(&config_path, include_str!("../config.bewiki.toml")).unwrap();
     let config = AppConfig::load(&config_path).unwrap();
     let paths = RuntimePaths::resolve(&config_path, &config);
     let client = MediaWikiClient::new(&env).unwrap();

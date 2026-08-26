@@ -12,6 +12,7 @@ mod daemon_backlog;
 mod daemon_windows;
 pub(crate) mod effective_config;
 pub mod locks;
+pub mod memory;
 pub mod metrics;
 pub mod mw_api;
 pub mod reconcile;

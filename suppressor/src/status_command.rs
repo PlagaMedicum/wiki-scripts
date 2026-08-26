@@ -6,6 +6,7 @@ use chrono::{TimeDelta, Utc};
 use crate::cache::{RuntimeCache, load_cached_snapshot};
 use crate::command_context::CommandContext;
 use crate::config::RuntimePaths;
+use crate::memory::MemorySnapshot;
 use crate::mw_api::MediaWikiClient;
 use crate::state::{ExecutionLaneSnapshot, LatencyMetricStatus, RuntimeStatus, load_json};
 use suppressor_core::titles::normalize_title;
@@ -163,8 +164,78 @@ pub fn run_perf(config_path: PathBuf, json: bool) -> Result<()> {
             "resource.state_bytes_recent={}",
             resource.state_bytes_recent
         );
+        for line in memory_perf_lines(
+            resource.memory.as_ref(),
+            resource
+                .previous_generation
+                .as_ref()
+                .and_then(|previous| previous.memory.as_ref()),
+        ) {
+            println!("{line}");
+        }
     }
     Ok(())
+}
+
+fn memory_perf_lines(
+    current: Option<&MemorySnapshot>,
+    previous: Option<&MemorySnapshot>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    append_memory_perf_lines(&mut lines, "memory", current);
+    append_memory_perf_lines(&mut lines, "previous_memory", previous);
+    lines
+}
+
+fn append_memory_perf_lines(
+    lines: &mut Vec<String>,
+    prefix: &str,
+    memory: Option<&MemorySnapshot>,
+) {
+    let Some(memory) = memory else {
+        return;
+    };
+    if let Some(sampled_at) = memory.sampled_at {
+        lines.push(format!("{prefix}.sampled_at={}", sampled_at.to_rfc3339()));
+    }
+    if let Some(value) = memory.process.vm_rss_bytes {
+        lines.push(format!("{prefix}.vm_rss_bytes={value}"));
+    }
+    if let Some(value) = memory.process.vm_hwm_bytes {
+        lines.push(format!("{prefix}.vm_hwm_bytes={value}"));
+    }
+    if let Some(error) = &memory.process.error {
+        lines.push(format!("{prefix}.process_error={error}"));
+    }
+    if let Some(value) = memory.cgroup.current_bytes {
+        lines.push(format!("{prefix}.cgroup.current_bytes={value}"));
+    }
+    if let Some(value) = memory.cgroup.peak_bytes {
+        lines.push(format!("{prefix}.cgroup.peak_bytes={value}"));
+    }
+    if let Some(value) = memory.cgroup.max_bytes {
+        lines.push(format!("{prefix}.cgroup.max_bytes={value}"));
+    }
+    if memory.cgroup.max_is_unlimited {
+        lines.push(format!("{prefix}.cgroup.max=unlimited"));
+    }
+    if let Some(events) = &memory.cgroup.events {
+        lines.push(format!("{prefix}.cgroup.events.low={}", events.low));
+        lines.push(format!("{prefix}.cgroup.events.high={}", events.high));
+        lines.push(format!("{prefix}.cgroup.events.max={}", events.max));
+        lines.push(format!("{prefix}.cgroup.events.oom={}", events.oom));
+        lines.push(format!(
+            "{prefix}.cgroup.events.oom_kill={}",
+            events.oom_kill
+        ));
+        lines.push(format!(
+            "{prefix}.cgroup.events.oom_group_kill={}",
+            events.oom_group_kill
+        ));
+    }
+    if let Some(error) = &memory.cgroup.error {
+        lines.push(format!("{prefix}.cgroup_error={error}"));
+    }
 }
 
 fn load_runtime_status(paths: &RuntimePaths) -> Result<RuntimeStatus> {
@@ -345,8 +416,10 @@ fn print_latency(label: &str, metric: &LatencyMetricStatus) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{MemorySnapshot, ProcessMemorySnapshot};
     use crate::state::{
-        CurrentTaskSnapshot, ExecutionLaneSnapshot, LaunchPathSnapshot, RealtimeRuntimeStatus,
+        CurrentTaskSnapshot, ExecutionLaneSnapshot, LaunchPathSnapshot, PreviousGenerationSnapshot,
+        RealtimeRuntimeStatus, ResourceEconomySnapshot,
     };
 
     fn test_runtime_paths(temp: &tempfile::TempDir) -> RuntimePaths {
@@ -462,5 +535,59 @@ mod tests {
         assert!(lines.iter().any(|line| line == "realtime_state=healthy"));
         assert!(lines.iter().any(|line| line == "current_lag_millis=120"));
         assert!(lines.iter().any(|line| line.starts_with("live_lane ")));
+    }
+
+    #[test]
+    fn perf_memory_lines_expose_current_and_previous_snapshots() {
+        let current = MemorySnapshot {
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(10),
+                vm_hwm_bytes: Some(20),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        let previous = MemorySnapshot {
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(30),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+
+        let lines = memory_perf_lines(Some(&current), Some(&previous));
+
+        assert!(lines.iter().any(|line| line == "memory.vm_rss_bytes=10"));
+        assert!(lines.iter().any(|line| line == "memory.vm_hwm_bytes=20"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "previous_memory.vm_rss_bytes=30")
+        );
+    }
+
+    #[test]
+    fn perf_json_keeps_memory_under_resource_economy() {
+        let resource = ResourceEconomySnapshot {
+            memory: Some(MemorySnapshot {
+                process: ProcessMemorySnapshot {
+                    vm_rss_bytes: Some(10),
+                    ..ProcessMemorySnapshot::default()
+                },
+                ..MemorySnapshot::default()
+            }),
+            previous_generation: Some(PreviousGenerationSnapshot {
+                pid: Some(7),
+                ..PreviousGenerationSnapshot::default()
+            }),
+            ..ResourceEconomySnapshot::default()
+        };
+        let json = serde_json::json!({ "resource_economy": resource });
+
+        assert_eq!(
+            json["resource_economy"]["memory"]["process"]["vm_rss_bytes"],
+            10
+        );
+        assert_eq!(json["resource_economy"]["previous_generation"]["pid"], 7);
     }
 }

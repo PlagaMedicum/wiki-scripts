@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::memory::MemorySnapshot;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProcessedRevidsState {
@@ -309,6 +311,42 @@ pub struct ResourceEconomySnapshot {
     pub state_bytes_recent: u64,
     pub coalesced_warning_count_recent: usize,
     pub latest_measurement_at: Option<DateTime<Utc>>,
+    pub memory: Option<MemorySnapshot>,
+    pub previous_generation: Option<PreviousGenerationSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PreviousGenerationSnapshot {
+    pub daemon_started_at: Option<DateTime<Utc>>,
+    pub last_status_at: Option<DateTime<Utc>>,
+    pub launch_kind: Option<String>,
+    pub pid: Option<i32>,
+    pub memory: Option<MemorySnapshot>,
+}
+
+/// Extracts a non-recursive handoff summary before a restarted daemon overwrites status.
+pub fn previous_generation_snapshot(status: &RuntimeStatus) -> PreviousGenerationSnapshot {
+    PreviousGenerationSnapshot {
+        daemon_started_at: status
+            .launch_path
+            .as_ref()
+            .and_then(|launch_path| launch_path.started_at)
+            .or(status.realtime.daemon_started_at),
+        last_status_at: status.last_notice_at,
+        launch_kind: status
+            .launch_path
+            .as_ref()
+            .map(|launch_path| launch_path.kind.clone()),
+        pid: status
+            .launch_path
+            .as_ref()
+            .map(|launch_path| launch_path.pid),
+        memory: status
+            .resource_economy
+            .as_ref()
+            .and_then(|resource| resource.memory.clone()),
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -548,6 +586,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::memory::{MemorySnapshot, ProcessMemorySnapshot};
 
     #[test]
     fn processed_revids_respects_capacity() {
@@ -1071,5 +1110,101 @@ mod tests {
             )
         );
         assert!(notice.blocking);
+    }
+
+    #[test]
+    fn persisted_memory_status_replaces_the_previous_sample() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("runtime_status.json");
+        let first = MemorySnapshot {
+            sampled_at: Some(Utc::now()),
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(1),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        let second = MemorySnapshot {
+            sampled_at: Some(Utc::now()),
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(2),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        save_json_atomic(
+            &path,
+            &RuntimeStatus {
+                resource_economy: Some(ResourceEconomySnapshot {
+                    memory: Some(first),
+                    ..ResourceEconomySnapshot::default()
+                }),
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+        save_json_atomic(
+            &path,
+            &RuntimeStatus {
+                resource_economy: Some(ResourceEconomySnapshot {
+                    memory: Some(second),
+                    ..ResourceEconomySnapshot::default()
+                }),
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+        let loaded: RuntimeStatus = load_json(&path).unwrap().unwrap();
+
+        assert_eq!(
+            loaded
+                .resource_economy
+                .as_ref()
+                .and_then(|resource| resource.memory.as_ref())
+                .and_then(|memory| memory.process.vm_rss_bytes),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn previous_generation_snapshot_keeps_only_one_generation() {
+        let old_memory = MemorySnapshot {
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(42),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        let status = RuntimeStatus {
+            launch_path: Some(LaunchPathSnapshot {
+                kind: "foreground".to_string(),
+                pid: 7,
+                started_at: Some(Utc::now()),
+                ..LaunchPathSnapshot::default()
+            }),
+            last_notice_at: Some(Utc::now()),
+            resource_economy: Some(ResourceEconomySnapshot {
+                memory: Some(old_memory),
+                previous_generation: Some(PreviousGenerationSnapshot {
+                    pid: Some(6),
+                    ..PreviousGenerationSnapshot::default()
+                }),
+                ..ResourceEconomySnapshot::default()
+            }),
+            ..RuntimeStatus::default()
+        };
+
+        let previous = previous_generation_snapshot(&status);
+
+        assert_eq!(previous.pid, Some(7));
+        assert_eq!(
+            previous
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.process.vm_rss_bytes),
+            Some(42)
+        );
+        let serialized = serde_json::to_string(&previous).unwrap();
+        assert!(!serialized.contains("previous_generation"));
     }
 }

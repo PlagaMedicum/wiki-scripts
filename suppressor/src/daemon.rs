@@ -22,14 +22,15 @@ use crate::daemon_backlog::{
     next_pending_retry_at, should_retry_after_fresh_auth, unresolved_count,
     unresolved_item_from_pending, upsert_pending, upsert_quarantined,
 };
+use crate::memory::sample_memory_snapshot;
 use crate::mw_api::{MediaWikiClient, RecentChangeRecord, classify_api_failure, revision_url};
 use crate::runtime::{daemon_should_write_pid, launch_path_snapshot_from_paths};
 use crate::signals;
 use crate::state::{
     ActionableIssueSnapshot, ApiFailureSnapshot, CoverageSummary, CurrentTaskSnapshot,
     ExecutionLaneSnapshot, LaunchPathSnapshot, ProcessedRevidsState, RealtimeRuntimeStatus,
-    RuntimeStatus, SourceListRefresh, SuppressionOutcomeSnapshot, load_json, save_json_atomic,
-    save_text_atomic,
+    RuntimeStatus, SourceListRefresh, SuppressionOutcomeSnapshot, load_json,
+    previous_generation_snapshot, save_json_atomic, save_text_atomic,
 };
 use suppressor_core::titles::normalize_title;
 
@@ -109,6 +110,7 @@ struct Daemon {
     queued_history_titles: HashSet<String>,
     background_queue_depth: usize,
     background_active_task: Option<String>,
+    previous_generation: Option<crate::state::PreviousGenerationSnapshot>,
 }
 
 impl Daemon {
@@ -121,6 +123,18 @@ impl Daemon {
         let env = load_env(&paths.config_path)?;
         let client = MediaWikiClient::new_with_retry(&env, &config.retry)?;
         let state_file = paths.state_dir.join(STATE_FILE_NAME);
+        let previous_generation = match load_json::<RuntimeStatus>(&paths.runtime_status_file) {
+            Ok(Some(status)) => Some(previous_generation_snapshot(&status)),
+            Ok(None) => None,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    path = %paths.runtime_status_file.display(),
+                    "failed to read previous runtime status for memory handoff"
+                );
+                None
+            }
+        };
         let mut state: DaemonState = load_json(&state_file)?.unwrap_or_default();
         migrate_terminal_pending_to_quarantine(&mut state);
         let processed = load_processed_revids(&paths.processed_revids_file)?;
@@ -163,6 +177,7 @@ impl Daemon {
             queued_history_titles: HashSet::new(),
             background_queue_depth: 0,
             background_active_task: None,
+            previous_generation,
         };
 
         daemon
@@ -310,15 +325,15 @@ impl Daemon {
                 if let Err(error) = self.retry_pending_due().await {
                     self.record_error(error, "pending-retry", None, None);
                 }
-                if routine_checkpoint_due {
-                    if let Err(error) = self.write_status(
+                if routine_checkpoint_due
+                    && let Err(error) = self.write_status(
                         "healthy",
                         "recentchanges poll completed",
                         None,
                         Some(idle_task_snapshot()),
-                    ) {
-                        error!(error = %error, "failed to write runtime status");
-                    }
+                    )
+                {
+                    error!(error = %error, "failed to write runtime status");
                 }
             }
             Err(error) => {
@@ -483,23 +498,24 @@ impl Daemon {
     }
 
     fn enqueue_history_sweep(&mut self, title: String) {
-        let normalized = normalize_title(&title);
-        if !self.queued_history_titles.insert(normalized) {
-            return;
-        }
-        self.enqueue_background_task(BackgroundTask::HistorySweep {
+        let _ = enqueue_history_sweep_transaction(
+            &mut self.queued_history_titles,
+            &self.background_tx,
+            &mut self.background_queue_depth,
             title,
-            processed_revids: self.processed.revids.clone(),
-        });
+            self.processed.revids.clone(),
+        );
     }
 
-    fn enqueue_background_task(&mut self, task: BackgroundTask) {
+    fn enqueue_background_task(&mut self, task: BackgroundTask) -> bool {
         match self.background_tx.try_send(task) {
             Ok(()) => {
                 self.background_queue_depth = self.background_queue_depth.saturating_add(1);
+                true
             }
             Err(error) => {
                 warn!(error = %error, "low-priority daemon task queue is full");
+                false
             }
         }
     }
@@ -528,7 +544,7 @@ impl Daemon {
                     self.background_active_task = None;
                 }
                 BackgroundEvent::HistorySweepFinished(title) => {
-                    self.queued_history_titles.remove(&normalize_title(&title));
+                    remove_queued_history_title(&mut self.queued_history_titles, &title);
                     self.background_active_task = None;
                 }
                 BackgroundEvent::SourceRefreshCompleted {
@@ -1182,6 +1198,12 @@ impl Daemon {
             launch_path: Some(self.launch_path.clone()),
             last_notice: Some(notice.to_string()),
             last_notice_at: Some(now),
+            resource_economy: Some(crate::state::ResourceEconomySnapshot {
+                latest_measurement_at: Some(now),
+                memory: Some(sample_memory_snapshot()),
+                previous_generation: self.previous_generation.clone(),
+                ..crate::state::ResourceEconomySnapshot::default()
+            }),
             realtime: RealtimeRuntimeStatus {
                 state: realtime_state,
                 last_state_changed_at: Some(now),
@@ -1344,6 +1366,37 @@ fn persistence_for(dry_run: bool) -> CachePersistence {
     }
 }
 
+fn enqueue_history_sweep_transaction(
+    queued_titles: &mut HashSet<String>,
+    tx: &mpsc::Sender<BackgroundTask>,
+    queue_depth: &mut usize,
+    title: String,
+    processed_revids: Vec<u64>,
+) -> bool {
+    let normalized = normalize_title(&title);
+    if !queued_titles.insert(normalized.clone()) {
+        return false;
+    }
+    match tx.try_send(BackgroundTask::HistorySweep {
+        title,
+        processed_revids,
+    }) {
+        Ok(()) => {
+            *queue_depth = queue_depth.saturating_add(1);
+            true
+        }
+        Err(error) => {
+            queued_titles.remove(&normalized);
+            warn!(error = %error, "low-priority daemon task queue is full");
+            false
+        }
+    }
+}
+
+fn remove_queued_history_title(queued_titles: &mut HashSet<String>, title: &str) {
+    queued_titles.remove(&normalize_title(title));
+}
+
 fn remove_file_if_exists(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1414,5 +1467,99 @@ mod tests {
             ),
             None
         );
+    }
+
+    fn fill_background_queue(tx: &mpsc::Sender<BackgroundTask>) {
+        tx.try_send(BackgroundTask::RecentWindow {
+            start: Utc::now(),
+            end: Utc::now(),
+            source_label: "fixture".to_string(),
+            processed_revids: Vec::new(),
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn rejected_history_sweep_does_not_leave_a_dedup_entry_when_full_or_closed() {
+        let (tx, _rx) = mpsc::channel(1);
+        fill_background_queue(&tx);
+        let mut queued = HashSet::new();
+        let mut depth = 1;
+
+        assert!(!enqueue_history_sweep_transaction(
+            &mut queued,
+            &tx,
+            &mut depth,
+            "Fixture Title".to_string(),
+            Vec::new(),
+        ));
+
+        assert!(!queued.contains("Fixture Title"));
+        assert_eq!(depth, 1);
+
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        assert!(!enqueue_history_sweep_transaction(
+            &mut queued,
+            &tx,
+            &mut depth,
+            "Closed Title".to_string(),
+            Vec::new(),
+        ));
+        assert!(!queued.contains("Closed Title"));
+        assert_eq!(depth, 1);
+    }
+
+    #[test]
+    fn queued_history_sweep_stays_deduplicated_until_completion() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut queued = HashSet::new();
+        let mut depth = 0;
+
+        assert!(enqueue_history_sweep_transaction(
+            &mut queued,
+            &tx,
+            &mut depth,
+            "Fixture Title".to_string(),
+            Vec::new(),
+        ));
+        assert!(!enqueue_history_sweep_transaction(
+            &mut queued,
+            &tx,
+            &mut depth,
+            "Fixture Title".to_string(),
+            Vec::new(),
+        ));
+        assert!(queued.contains("Fixture Title"));
+
+        remove_queued_history_title(&mut queued, "Fixture Title");
+
+        assert!(!queued.contains("Fixture Title"));
+    }
+
+    #[test]
+    fn rejected_history_sweep_can_be_queued_after_capacity_returns() {
+        let (tx, mut rx) = mpsc::channel(1);
+        fill_background_queue(&tx);
+        let mut queued = HashSet::new();
+        let mut depth = 1;
+
+        assert!(!enqueue_history_sweep_transaction(
+            &mut queued,
+            &tx,
+            &mut depth,
+            "Fixture Title".to_string(),
+            Vec::new(),
+        ));
+        let _ = rx.try_recv().unwrap();
+
+        assert!(enqueue_history_sweep_transaction(
+            &mut queued,
+            &tx,
+            &mut depth,
+            "Fixture Title".to_string(),
+            Vec::new(),
+        ));
+        assert!(queued.contains("Fixture Title"));
     }
 }

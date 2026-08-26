@@ -10,6 +10,9 @@ use crate::config::MetricsConfig;
 
 static METRICS_INIT: OnceLock<()> = OnceLock::new();
 static RUNTIME_LATENCY_METRICS: OnceLock<Mutex<RuntimeLatencyMetrics>> = OnceLock::new();
+#[cfg(test)]
+static RUNTIME_LATENCY_METRICS_TEST_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
 const RECENT_LATENCY_SAMPLE_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -174,6 +177,16 @@ pub fn reset_runtime_latency_metrics_for_tests() {
 }
 
 #[cfg(test)]
+pub async fn lock_runtime_latency_metrics_for_tests() -> tokio::sync::MutexGuard<'static, ()> {
+    RUNTIME_LATENCY_METRICS_TEST_LOCK.lock().await
+}
+
+#[cfg(test)]
+pub fn blocking_lock_runtime_latency_metrics_for_tests() -> tokio::sync::MutexGuard<'static, ()> {
+    RUNTIME_LATENCY_METRICS_TEST_LOCK.blocking_lock()
+}
+
+#[cfg(test)]
 pub fn latency_sample_limit_for_tests() -> usize {
     RECENT_LATENCY_SAMPLE_LIMIT
 }
@@ -215,6 +228,7 @@ mod tests {
 
     #[test]
     fn runtime_latency_snapshot_reports_live_path_percentiles() {
+        let _metrics_guard = blocking_lock_runtime_latency_metrics_for_tests();
         reset_runtime_latency_metrics_for_tests();
 
         for value in [1_u64, 2, 3, 4, 5] {

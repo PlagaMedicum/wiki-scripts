@@ -3356,7 +3356,8 @@ mod tests {
         RetryConfig, RevDelConfig, StateConfig, SuppressionListConfig, WikiConfig,
     };
     use crate::metrics::{
-        reset_runtime_latency_metrics_for_tests, snapshot_runtime_latency_metrics,
+        lock_runtime_latency_metrics_for_tests, reset_runtime_latency_metrics_for_tests,
+        snapshot_runtime_latency_metrics,
     };
     use crate::state::RuntimeStatus;
 
@@ -3557,6 +3558,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_action_records_live_queue_timestamps_and_current_task() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -3656,6 +3658,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_action_records_duplicate_live_revision_as_skipped() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -3702,6 +3705,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_lane_processes_while_background_lane_is_not_drained() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         reset_runtime_latency_metrics_for_tests();
         let temp = tempdir().unwrap();
         let mut harness =
@@ -3839,6 +3843,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_dispatch_sets_deadline_and_lane_status() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -3874,6 +3879,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_burst_records_bounded_latency_percentiles_and_duplicate_skip() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         reset_runtime_latency_metrics_for_tests();
         let temp = tempdir().unwrap();
         let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -3944,6 +3950,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_action_completed_surfaces_blocked_and_retrying_live_outcomes() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -4006,6 +4013,7 @@ mod tests {
 
     #[tokio::test]
     async fn background_actions_do_not_mask_live_failure_outcome() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -4078,6 +4086,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_background_hide_keeps_recovery_anchor_on_revision_time() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -4249,6 +4258,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_refresh_status_does_not_overwrite_active_live_hide_task() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);

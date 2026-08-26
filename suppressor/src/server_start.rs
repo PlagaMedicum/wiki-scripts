@@ -962,6 +962,23 @@ mod tests {
             .arg("60")
             .spawn()
             .unwrap();
+        let child_pid = child.id() as i32;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let child_exe = loop {
+            if process_is_running(child_pid)
+                && let Ok(exe) = std::fs::read_link(format!("/proc/{child_pid}/exe"))
+                && exe.file_name() != current_exe.file_name()
+            {
+                break exe;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("sleep child PID {child_pid} never exposed a live executable");
+            }
+            thread::yield_now();
+        };
+        assert_ne!(child_exe.file_name(), current_exe.file_name());
         save_text_atomic(&paths.pid_file, &child.id().to_string()).unwrap();
 
         reject_or_clear_existing_pid(&paths, &current_exe).unwrap();

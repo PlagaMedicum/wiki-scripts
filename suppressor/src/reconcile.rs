@@ -795,6 +795,7 @@ mod tests {
 
     use super::*;
     use crate::config::EnvConfig;
+    use crate::metrics::lock_runtime_latency_metrics_for_tests;
     use crate::runtime::{
         ExecutionLaneKind, RuntimeStatusSurfaceMode, build_test_runtime_harness,
         build_test_runtime_harness_with_env, build_test_runtime_harness_with_env_and_dry_run,
@@ -1103,6 +1104,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconciliation_stops_early_on_repeated_auth_session_failures() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/w/api.php"))

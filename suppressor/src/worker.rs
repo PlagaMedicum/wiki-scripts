@@ -285,7 +285,9 @@ mod tests {
 
     use super::*;
     use crate::config::EnvConfig;
-    use crate::metrics::snapshot_runtime_latency_metrics;
+    use crate::metrics::{
+        lock_runtime_latency_metrics_for_tests, snapshot_runtime_latency_metrics,
+    };
     use crate::runtime::{
         ExecutionLaneKind, RevDelDispatch, RevDelMode, RuntimeStatusSurfaceMode,
         build_test_runtime_harness, build_test_runtime_harness_with_env_and_dry_run,
@@ -311,6 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_marks_live_action_hidden_and_updates_last_successful_hide() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let harness = build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
         let runtime = Arc::clone(&harness.runtime);
@@ -391,6 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_defers_expired_live_action_deadline_without_api_wait() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let temp = tempdir().unwrap();
         let mut harness =
             build_test_runtime_harness(&temp, RuntimeStatusSurfaceMode::DetachedCommand);
@@ -442,6 +446,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_blocks_permission_failure_without_exiting_process() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/w/api.php"))
@@ -517,6 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn background_permission_failure_surfaces_reconciliation_source() {
+        let _metrics_guard = lock_runtime_latency_metrics_for_tests().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/w/api.php"))

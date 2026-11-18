@@ -30,8 +30,11 @@ def get_file_suffix_for_page(title: str) -> str:
 
 
 def confirm_publication(console: Console, proposal: Proposal) -> bool | None:
-    if proposal.status not in {"pending", "approved"}:
-        console.print("[red]Reopen the proposal before publishing.[/red]")
+    if proposal.status != "approved":
+        if proposal.status == "pending":
+            console.print("[yellow]Proposal must be approved before publishing.[/yellow]")
+        else:
+            console.print("[red]Reopen the proposal before publishing.[/red]")
         return None
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         console.print("[red]Publication requires an interactive terminal.[/red]")
@@ -79,6 +82,9 @@ def sync_proposal_with_wiki(
     wiki: WikiClient | None,
 ) -> tuple[str, Proposal]:
     """Fetch latest live wiki revision; auto-rebase if clean, flag conflict if not."""
+    if proposal.status != "pending":
+        return "synced", proposal
+
     if wiki is None:
         try:
             wiki = WikiClient(
@@ -249,6 +255,7 @@ def render_dashboard_table(
             f"{format_badge('↑/↓', 'Navigate', 'cyan')}   "
             f"{format_badge('Enter', 'Open', 'green')}   "
             f"{format_badge('f', f'Filter: {filter_status.upper()}', 'magenta')}   "
+            f"{format_badge('a', 'Approve', 'green')}   "
             f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
             f"{format_badge('p', 'Publish', 'cyan')}   "
             f"{format_badge('d', 'Decline', 'red')}   "
@@ -432,6 +439,7 @@ def render_proposal_view(
     toolbar_row = (
         f"{format_badge('↑/↓', 'Scroll', 'cyan')}   "
         f"{format_badge('v', 'View', 'magenta')}   "
+        f"{format_badge('a', 'Approve', 'green')}   "
         f"{format_badge('p', 'Publish', 'cyan')}   "
         f"{format_badge('d', 'Decline', 'red')}   "
         f"{format_badge('e', 'Vim Edit', 'yellow')}   "
@@ -535,6 +543,16 @@ def review_proposal_interactive(
             url = f"https://{proposal.page.wiki}/wiki/{proposal.page.title}"
             console.print(f"[cyan]Opening {url} in browser...[/cyan]")
             webbrowser.open(url)
+            continue
+
+        # Approve
+        if key == "a":
+            if (
+                proposal.status == "pending"
+                and "<<<<<<<" not in proposal.proposed_content
+                and ">>>>>>>" not in proposal.proposed_content
+            ):
+                proposal = store.set_status(proposal.id, "approved", reason="Approved in review")
             continue
 
         # Decline
@@ -725,6 +743,18 @@ def interactive_dashboard_loop(
             # Toggle bot flag from dashboard
             if key == "t":
                 store.toggle_mark_as_bot(current_proposal.id)
+                continue
+
+            # Approve from dashboard
+            if key == "a":
+                if (
+                    current_proposal.status == "pending"
+                    and "<<<<<<<" not in current_proposal.proposed_content
+                    and ">>>>>>>" not in current_proposal.proposed_content
+                ):
+                    store.set_status(
+                        current_proposal.id, "approved", reason="Approved in dashboard"
+                    )
                 continue
 
             # Open proposal: auto-fetch latest version from wiki

@@ -77,6 +77,60 @@ def test_update_summary(tmp_store: ProposalStore, sample_snapshot: PageSnapshot)
     ) == "Updated summary"
 
 
+def test_update_summary_resets_approved_to_pending(
+    tmp_store: ProposalStore, sample_snapshot: PageSnapshot
+):
+    tmp_store.create(
+        page=sample_snapshot,
+        proposed_content="Content",
+        edit_summary="Initial summary",
+        rationale="R",
+        issue="Test",
+    )
+    tmp_store.set_status("001", "approved")
+    updated = tmp_store.update_summary("001", "New summary")
+    assert updated.status == "pending"
+    assert tmp_store.load("001").status == "pending"
+
+
+def test_toggle_bot_flag_resets_approved_to_pending(
+    tmp_store: ProposalStore, sample_snapshot: PageSnapshot
+):
+    tmp_store.create(
+        page=sample_snapshot,
+        proposed_content="Content",
+        edit_summary="Summary",
+        rationale="R",
+        issue="Test",
+    )
+    tmp_store.set_status("001", "approved")
+    toggled = tmp_store.toggle_mark_as_bot("001")
+    assert toggled.status == "pending"
+    assert tmp_store.load("001").status == "pending"
+
+
+def test_disk_modification_invalidates_approved_status(
+    tmp_store: ProposalStore, sample_snapshot: PageSnapshot
+):
+    tmp_store.create(
+        page=sample_snapshot,
+        proposed_content="Content",
+        edit_summary="Summary",
+        rationale="R",
+        issue="Test",
+    )
+    tmp_store.set_status("001", "approved")
+    assert tmp_store.load("001").status == "approved"
+
+    # Modify proposed.txt on disk
+    p_dir = tmp_store.root_dir / "001"
+    (p_dir / "proposed.txt").write_text("Modified content on disk", encoding="utf-8")
+
+    loaded = tmp_store.load("001")
+    assert loaded.status == "pending"
+    assert any(d.action == "invalidate_approval" for d in loaded.decisions)
+
+
 def test_status_transitions_and_decisions(tmp_store: ProposalStore, sample_snapshot: PageSnapshot):
     tmp_store.create(
         page=sample_snapshot,

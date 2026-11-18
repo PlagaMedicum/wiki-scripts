@@ -123,12 +123,29 @@ def cmd_approve(args: argparse.Namespace, store: ProposalStore, console: Console
         console.print("[red]Approval requires an interactive terminal.[/red]")
         return 1
     try:
-        proposal = store.set_status(args.id, "approved", reason="Approved via CLI")
-        console.print(f"[green]Proposal #{proposal.id} marked as APPROVED.[/green]")
-        return 0
+        proposal = store.load(args.id)
     except FileNotFoundError as exc:
         console.print(f"[bold red]Error: {exc}[/bold red]")
         return 1
+
+    if proposal.status == "approved":
+        console.print(f"[green]Proposal #{proposal.id} is already APPROVED.[/green]")
+        return 0
+    if proposal.status != "pending":
+        console.print(
+            f"[red]Cannot approve proposal #{proposal.id} in '{proposal.status}' state. "
+            "Reopen it first.[/red]"
+        )
+        return 1
+    if "<<<<<<<" in proposal.proposed_content or ">>>>>>>" in proposal.proposed_content:
+        console.print(
+            f"[bold red]Cannot approve proposal #{proposal.id}: unresolved merge conflict markers.[/bold red]"
+        )
+        return 1
+
+    proposal = store.set_status(args.id, "approved", reason="Approved via CLI")
+    console.print(f"[green]Proposal #{proposal.id} marked as APPROVED.[/green]")
+    return 0
 
 
 def cmd_decline(args: argparse.Namespace, store: ProposalStore, console: Console) -> int:
@@ -158,14 +175,14 @@ def cmd_publish(args: argparse.Namespace, store: ProposalStore, console: Console
         console.print(f"[bold red]Error: {exc}[/bold red]")
         return 1
 
-    if proposal.status not in {"pending", "approved"}:
-        console.print("[red]Reopen the proposal before publishing.[/red]")
-        return 1
-    if proposal.status == "pending" and not args.force:
-        console.print(
-            f"[yellow]Proposal #{proposal.id} is pending. "
-            "Approve it first or use --force with interactive confirmation.[/yellow]"
-        )
+    if proposal.status != "approved":
+        if proposal.status == "pending":
+            console.print(
+                f"[yellow]Proposal #{proposal.id} is pending. "
+                "Approve it first before publishing.[/yellow]"
+            )
+        else:
+            console.print("[red]Reopen the proposal before publishing.[/red]")
         return 1
     if not args.dry_run:
         confirmed = confirm_publication(console, proposal)

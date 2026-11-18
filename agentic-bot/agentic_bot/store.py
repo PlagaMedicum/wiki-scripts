@@ -134,21 +134,39 @@ class ProposalStore:
 
         if proposed_path.exists() and proposal.versions:
             current_v = proposal.versions[-1]
+            disk_content = proposed_path.read_text(encoding="utf-8")
+            disk_summary = (
+                summary_path.read_text(encoding="utf-8").strip()
+                if summary_path.exists()
+                else current_v.edit_summary
+            )
+            disk_rationale = (
+                rationale_path.read_text(encoding="utf-8")
+                if rationale_path.exists()
+                else current_v.rationale
+            )
+            content_changed = disk_content != current_v.proposed_content
+            summary_changed = disk_summary != current_v.edit_summary
+
             proposal.versions[-1] = ProposalVersion(
                 version=current_v.version,
-                proposed_content=proposed_path.read_text(encoding="utf-8"),
-                edit_summary=(
-                    summary_path.read_text(encoding="utf-8").strip()
-                    if summary_path.exists()
-                    else current_v.edit_summary
-                ),
-                rationale=(
-                    rationale_path.read_text(encoding="utf-8")
-                    if rationale_path.exists()
-                    else current_v.rationale
-                ),
+                proposed_content=disk_content,
+                edit_summary=disk_summary,
+                rationale=disk_rationale,
                 created_at=current_v.created_at,
             )
+
+            if (content_changed or summary_changed) and proposal.status == "approved":
+                proposal.status = "pending"
+                proposal.updated_at = now_iso()
+                proposal.decisions.append(
+                    DecisionRecord(
+                        action="invalidate_approval",
+                        timestamp=proposal.updated_at,
+                        reason="Content or summary changed after approval",
+                    )
+                )
+                self.save_metadata(proposal)
 
         return proposal
 
@@ -234,6 +252,7 @@ class ProposalStore:
                 created_at=current_v.created_at,
             )
 
+        proposal.status = "pending"
         proposal.updated_at = now_iso()
         proposal.decisions.append(
             DecisionRecord(
@@ -303,6 +322,8 @@ class ProposalStore:
     def toggle_mark_as_bot(self, proposal_id: str) -> Proposal:
         proposal = self.load(proposal_id)
         proposal.mark_as_bot = not proposal.mark_as_bot
+        if proposal.status == "approved":
+            proposal.status = "pending"
         proposal.updated_at = now_iso()
         state_label = "bot" if proposal.mark_as_bot else "human/critical"
         proposal.decisions.append(

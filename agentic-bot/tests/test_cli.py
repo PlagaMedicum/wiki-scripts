@@ -71,10 +71,30 @@ def test_cli_publish_requires_terminal_even_with_force(tmp_path):
         wiki.assert_not_called()
 
 
-def test_cli_pending_publish_requires_positive_confirmation(tmp_path):
+def test_cli_pending_publish_rejected_even_with_force(tmp_path):
     store = ProposalStore(tmp_path)
     snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
     store.create(snap, "New text", "Summary", "Rationale", "Issue")
+
+    with (
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("agentic_bot.cli.WikiClient") as wiki,
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("rich.prompt.Confirm.ask", return_value=True) as confirm,
+    ):
+        wiki.return_value.publish_page.return_value = (101, "2026-01-01T00:01:00Z")
+        assert main(["publish", "001", "--force"]) == 1
+        confirm.assert_not_called()
+        wiki.return_value.publish_page.assert_not_called()
+        assert store.load("001").status == "pending"
+
+
+def test_cli_approved_publish_requires_positive_confirmation(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
+    store.create(snap, "New text", "Summary", "Rationale", "Issue")
+    store.set_status("001", "approved")
 
     with (
         patch("agentic_bot.cli.ProposalStore", return_value=store),
@@ -84,16 +104,17 @@ def test_cli_pending_publish_requires_positive_confirmation(tmp_path):
         patch("rich.prompt.Confirm.ask", return_value=False) as confirm,
     ):
         wiki.return_value.publish_page.return_value = (101, "2026-01-01T00:01:00Z")
-        assert main(["publish", "001", "--force"]) == 0
+        assert main(["publish", "001"]) == 0
         confirm.assert_called_once()
-        wiki.assert_not_called()
-        assert store.load("001").status == "pending"
+        wiki.return_value.publish_page.assert_not_called()
+        assert store.load("001").status == "approved"
 
 
-def test_cli_pending_publish_allows_confirmed_human(tmp_path):
+def test_cli_approved_publish_allows_confirmed_human(tmp_path):
     store = ProposalStore(tmp_path)
     snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
     store.create(snap, "New text", "Summary", "Rationale", "Issue")
+    store.set_status("001", "approved")
 
     with (
         patch("agentic_bot.cli.ProposalStore", return_value=store),
@@ -103,7 +124,7 @@ def test_cli_pending_publish_allows_confirmed_human(tmp_path):
         patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         wiki.return_value.publish_page.return_value = (101, "2026-01-01T00:01:00Z")
-        assert main(["publish", "001", "--force"]) == 0
+        assert main(["publish", "001"]) == 0
         wiki.return_value.publish_page.assert_called_once()
         assert store.load("001").status == "published"
 
@@ -186,3 +207,31 @@ def test_cli_propose_bot_and_critical_flags(tmp_path):
         assert exit_code == 0
         p2 = store.load("002")
         assert p2.mark_as_bot is True
+
+
+def test_cli_approve_validation(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
+    p1 = store.create(snap, "clean text", "Summary", "R", "I")
+    p2 = store.create(snap, "conflict <<<<<<< text", "Summary", "R", "I")
+
+    with (
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+    ):
+        # Conflict markers rejected
+        assert main(["approve", p2.id]) == 1
+        assert store.load(p2.id).status == "pending"
+
+        # Clean pending proposal approved
+        assert main(["approve", p1.id]) == 0
+        assert store.load(p1.id).status == "approved"
+
+        # Already approved is a clean success no-op
+        assert main(["approve", p1.id]) == 0
+
+        # Non-pending (e.g. declined or published) cannot be directly approved
+        store.set_status(p1.id, "declined")
+        assert main(["approve", p1.id]) == 1
+        assert store.load(p1.id).status == "declined"

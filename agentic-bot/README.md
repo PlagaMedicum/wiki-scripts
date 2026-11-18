@@ -12,7 +12,7 @@ Designed for supervised AI workflows where an assistant (Codex) investigates iss
 - **Durable History**: Declined proposals are never deleted. Rejection rationale and complete version histories are preserved.
 - **Fail-Closed Verification**: Publication checks page freshness and blocks unresolved merge markers.
 - **Interface Rights Guard**: Editing `MediaWiki:` JavaScript and CSS requires the corresponding interface-administrator rights.
-- **Explicit Confirmation**: Every publication requires an interactive terminal and confirmation (`[y/N]`). Pending proposals can be published directly after confirmation; declined, conflicted, and published proposals must first be reopened.
+- **Explicit Confirmation & Approval**: Every publication requires an interactive terminal, prior explicit approval, and confirmation (`[y/N]`). Only approved, unchanged proposals can be published; pending proposals must be approved before publication, and declined, conflicted, and published proposals must first be reopened.
 - **Unicode & Wikitext Preservation**: Full preservation of Belarusian Cyrillic characters (e.g. `і`, `ў`, `'`), wikitext syntax, and indentation.
 
 ## Workflow
@@ -46,7 +46,7 @@ make run                   # Launches interactive dashboard directly
 
 When started with no arguments, `agentic-bot` presents the **Interactive Proposals Dashboard**:
 - Previews proposal IDs, status, diff line counts, test-status claims from rationale text, page titles, and agent rationale notes. Test badges are not independently verified.
-- Use arrow keys to select a proposal, Enter to inspect it, `p` to publish with confirmation, `d` to decline, `e` to edit, `o` to open its page, and `q` to quit.
+- Use arrow keys to select a proposal, Enter to inspect it, `a` to approve, `p` to publish approved proposals with confirmation, `d` to decline, `e` to edit, `o` to open its page, and `q` to quit.
 
 ## Vim Editing (Pull & Merge)
 
@@ -59,7 +59,8 @@ When inspecting a proposal, pressing `[e]` to edit in Vim:
 
 ## Proposal Detail Actions
 
-- `[p]` Publish / apply to Wikipedia (verifies freshness and interface permissions, requires explicit `[y/N]` confirmation).
+- `[a]` Approve proposal for publication.
+- `[p]` Publish / apply to Wikipedia (verifies approval, freshness, and interface permissions, requires explicit `[y/N]` confirmation).
 - `[d]` Discard / decline (prompts for optional rejection rationale, keeps durable history).
 - `[e]` Edit in Vim with automatic pull-and-merge.
 - `[m]` Edit edit summary in Vim.

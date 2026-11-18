@@ -1,0 +1,43 @@
+[source]
+id = "belarusian-language-1994"
+name = "Беларуская мова: энцыклапедыя"
+site_lang = "be"
+family = "wikipedia"
+
+[search]
+insource_terms = ["5-85700-126-9"]
+
+[candidate]
+must_contain_all = ["Беларуская мова", "5-85700-126-9"]
+
+[replacement]
+template_name = "Крыніцы/Беларуская мова: энцыклапедыя"
+without_pages = "{{Крыніцы/Беларуская мова: энцыклапедыя|{entry}}}"
+with_pages = "{{Крыніцы/Беларуская мова: энцыклапедыя|{entry}|с={pages}}}"
+
+[normalization]
+resolve_wikilinks = false
+strip_formatting = false
+
+[summary]
+default_format = "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}"
+
+
+[[regex_rules]]
+name = "article_with_pages"
+pattern = '''(?x)
+^(?P<prefix>{{LIST_PREFIX}})\{\{\s*Артыкул
+(?=[^{}]*\|\s*загаловак\s*=\s*(?P<entry>[^|{}\[\]<>]+?)\s*(?:\||\}\}))
+(?=[^{}]*\|\s*выданне\s*=\s*Беларуская\ мова\s*:\s*энцыклапедыя\s*(?:\||\}\}))
+(?=[^{}]*\|\s*месца\s*=\s*Минск\s*(?:\||\}\}))
+(?=[^{}]*\|\s*выдавецтва\s*=\s*Беларуская\ Энцыклапедыя\s*(?:\||\}\}))
+(?=[^{}]*\|\s*год\s*=\s*1994\s*(?:\||\}\}))
+(?=[^{}]*\|\s*старонкі\s*=\s*(?P<pages>{{PAGES}})\s*(?:\||\}\}))
+(?=[^{}]*\|\s*isbn\s*=\s*5-85700-126-9\s*(?:\||\}\}))
+(?:\|\s*(?:загаловак|выданне|месца|выдавецтва|год|старонкі|isbn)\s*=\s*[^|{}\[\]<>]*){7}
+\s*\}\}$
+'''
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE"
+review_required = true
+review_note = "Confirm article, pages, and target reference anchor before saving."

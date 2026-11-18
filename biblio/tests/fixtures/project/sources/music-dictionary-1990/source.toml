@@ -1,0 +1,40 @@
+[source]
+id = "music-dictionary-1990"
+name = "Музыкальный энциклопедический словарь"
+site_lang = "be"
+family = "wikipedia"
+
+[search]
+insource_terms = ["Музыкальный энциклопедический словарь"]
+
+[candidate]
+must_contain_all = ["Музыкальный энциклопедический словарь"]
+
+[replacement]
+template_name = "Крыніцы/Музыкальный энциклопедический словарь"
+without_pages = "{{Крыніцы/Музыкальный энциклопедический словарь}}"
+with_pages = "{{Крыніцы/Музыкальный энциклопедический словарь|||{pages}}}"
+
+[normalization]
+resolve_wikilinks = false
+strip_formatting = false
+
+[summary]
+default_format = "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}"
+
+
+[[regex_rules]]
+name = "plain_citation_with_pages"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})Музыкальный энциклопедический словарь\s*/\s*Гл\.\s*ред\.\s*Г\.\s*В\.\s*Келдыш\.\s*—\s*М\.\s*:\s*Советская энциклопедия,\s*1990\.\s*—\s*С\.\s*(?P<pages>{{PAGES}})\.\s*—\s*ISBN\s*5-85270-033-9\.?$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE"
+review_required = true
+review_note = "Confirm the 1990 edition, pages, and target reference anchor before saving."
+
+[[regex_rules]]
+name = "plain_full_book"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})Музыкальный энциклопедический словарь\.\s*М\.\s*[:,]\s*«?Советская энциклопедия»?,\s*1990\.?$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE"
+review_required = true
+review_note = "Confirm the 1990 edition and target reference anchor before saving."

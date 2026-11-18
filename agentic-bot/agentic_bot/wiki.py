@@ -122,39 +122,65 @@ class WikiClient:
         self.base_dir = Path(base_dir) if base_dir is not None else None
         self._site: Any = None
         self._pywikibot: Any = None
+        self._authenticated: bool = False
 
     def _init_pywikibot(self) -> None:
         if self._site is not None:
+            return
+        logger = logging.getLogger("pywiki")
+        previous_level = logger.level
+        logger.setLevel(max(logger.getEffectiveLevel(), logging.INFO))
+        try:
+            pywikibot = _load_pywikibot(self.base_dir)
+            self._pywikibot = pywikibot
+            self._site = pywikibot.Site(self.site_lang, self.family)
+        finally:
+            logger.setLevel(previous_level)
+
+    def _ensure_authenticated(self) -> None:
+        if self._authenticated:
+            return
+        if self._site is None:
+            self._init_pywikibot()
+
+        # If site is already logged in (or mocked with logged_in() in tests)
+        if getattr(self._site, "logged_in", lambda: False)():
+            self._authenticated = True
             return
 
         username, password, _ = load_credentials_from_env(self.env_path)
         norm_username, suffix = split_bot_password_login(username)
 
-        pywikibot = _load_pywikibot(self.base_dir)
         logger = logging.getLogger("pywiki")
         previous_level = logger.level
         logger.setLevel(max(logger.getEffectiveLevel(), logging.INFO))
         try:
-            site = pywikibot.Site(self.site_lang, self.family, user=norm_username)
+            site = self._site
+            site._username = norm_username
+            manager = self._pywikibot.login.ClientLoginManager(
+                site=site, user=f"{norm_username}@{suffix}", password=password
+            )
+            manager.login_to_site()
+            del site.userinfo
+            _ = site.userinfo
             if not site.logged_in():
-                manager = pywikibot.login.ClientLoginManager(
-                    site=site, user=f"{norm_username}@{suffix}", password=password
-                )
-                manager.login_to_site()
-                del site.userinfo
-                _ = site.userinfo
-                if not site.logged_in():
-                    raise WikiError("Wiki authentication did not establish the expected account.")
-                site.login(cookie_only=True)
+                self._site = None
+                raise WikiError("Wiki authentication did not establish the expected account.")
+            site.login(cookie_only=True)
         except WikiError:
+            self._site = None
             raise
         except Exception as exc:
+            self._site = None
             raise WikiError(f"Wiki authentication failed ({type(exc).__name__}).") from None
         finally:
             logger.setLevel(previous_level)
         site.login = _reject_implicit_login
-        self._pywikibot = pywikibot
-        self._site = site
+        self._authenticated = True
+
+    def authenticate(self) -> None:
+        """Authenticate with MediaWiki credentials for write operations."""
+        self._ensure_authenticated()
 
     @property
     def site(self) -> Any:
@@ -162,6 +188,7 @@ class WikiClient:
         return self._site
 
     def get_user_rights(self) -> set[str]:
+        self._ensure_authenticated()
         userinfo = getattr(self.site, "userinfo", {})
         if callable(userinfo):
             userinfo = userinfo()
@@ -169,6 +196,7 @@ class WikiClient:
 
     def check_permissions_for_page(self, title: str) -> None:
         """Verify the authenticated bot account has rights to edit the page."""
+        self._ensure_authenticated()
         rights = self.get_user_rights()
         is_mediawiki_js = title.startswith("MediaWiki:") and title.endswith(".js")
         is_mediawiki_css = title.startswith("MediaWiki:") and title.endswith(".css")

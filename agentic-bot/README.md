@@ -46,7 +46,7 @@ make run                   # Launches interactive dashboard directly
 
 When started with no arguments, `agentic-bot` presents the **Interactive Proposals Dashboard**:
 - Previews proposal IDs, status, diff line counts, test-status claims from rationale text, page titles, and agent rationale notes. Test badges are not independently verified.
-- Use arrow keys to select a proposal, Enter to inspect it, `a` to approve, `p` to publish approved proposals with confirmation, `d` to decline, `e` to edit, `o` to open its page, and `q` to quit.
+- Use arrow keys to select a proposal, Enter to inspect it (and approve with `a`), `p` to publish approved proposals with confirmation, `d` to decline, `e` to edit, `o` to open its page, and `q` to quit.
 
 ## Vim Editing (Pull & Merge)
 

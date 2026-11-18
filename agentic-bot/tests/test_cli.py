@@ -24,6 +24,7 @@ def test_cli_create_and_show(tmp_path):
         with (
             patch("sys.stdin.isatty", return_value=True),
             patch("sys.stdout.isatty", return_value=True),
+            patch("rich.prompt.Confirm.ask", return_value=True),
         ):
             assert main(["approve", "001"]) == 0
         assert store.load("001").status == "approved"
@@ -219,6 +220,7 @@ def test_cli_approve_validation(tmp_path):
         patch("agentic_bot.cli.ProposalStore", return_value=store),
         patch("sys.stdin.isatty", return_value=True),
         patch("sys.stdout.isatty", return_value=True),
+        patch("rich.prompt.Confirm.ask", return_value=True),
     ):
         # Conflict markers rejected
         assert main(["approve", p2.id]) == 1
@@ -235,3 +237,35 @@ def test_cli_approve_validation(tmp_path):
         store.set_status(p1.id, "declined")
         assert main(["approve", p1.id]) == 1
         assert store.load(p1.id).status == "declined"
+
+
+def test_cli_approve_requires_review_and_confirmation(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
+    p = store.create(snap, "clean text", "Summary", "R", "I")
+
+    with (
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("agentic_bot.cli.render_proposal_card") as mock_render,
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("rich.prompt.Confirm.ask", return_value=False) as mock_confirm,
+    ):
+        # Rejected confirmation does not approve
+        assert main(["approve", p.id]) == 0
+        mock_render.assert_called_once()
+        mock_confirm.assert_called_once()
+        assert store.load(p.id).status == "pending"
+
+    with (
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("agentic_bot.cli.render_proposal_card") as mock_render,
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("rich.prompt.Confirm.ask", return_value=True) as mock_confirm,
+    ):
+        # Accepted confirmation approves
+        assert main(["approve", p.id]) == 0
+        mock_render.assert_called_once()
+        mock_confirm.assert_called_once()
+        assert store.load(p.id).status == "approved"

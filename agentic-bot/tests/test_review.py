@@ -96,14 +96,12 @@ def test_sync_proposal_with_wiki_synced(tmp_path):
     assert updated_p.page.revid == 100
 
 
-def test_sync_proposal_with_wiki_clean_rebase(tmp_path):
+def test_sync_proposal_with_wiki_outdated_does_not_rebase(tmp_path):
     store = ProposalStore(tmp_path)
     base_text = "line 1\nline 2\nline 3\nline 4\nline 5\n"
     snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", base_text)
-    # Proposal modifies line 5
     p = store.create(snap, "line 1\nline 2\nline 3\nline 4\nline 5 proposed\n", "Summary", "R", "I")
 
-    # Live wiki modified line 1 (separated by 3 context lines -> clean 3-way merge)
     live_snap = PageSnapshot(
         "Page", 105, "2026-01-02T00:00:00Z", "line 1 live\nline 2\nline 3\nline 4\nline 5\n"
     )
@@ -111,25 +109,27 @@ def test_sync_proposal_with_wiki_clean_rebase(tmp_path):
     wiki.fetch_page.return_value = live_snap
 
     status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert status.startswith("rebased:105")
-    assert updated_p.page.revid == 105
-    assert "line 1 live" in updated_p.proposed_content
-    assert "line 5 proposed" in updated_p.proposed_content
+    assert status.startswith("outdated:105")
+    assert updated_p.status == "pending"
+    assert updated_p.page.revid == 100
+    assert updated_p.current_version == 1
+    assert store.load(p.id).status == "pending"
+    assert store.load(p.id).current_version == 1
 
 
-def test_sync_proposal_with_wiki_conflict(tmp_path):
+def test_sync_proposal_with_wiki_failure_returns_unknown(tmp_path):
     store = ProposalStore(tmp_path)
     snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "line1\nline2\n")
-    # Both proposal and live edit line 2 differently -> conflict
     p = store.create(snap, "line1\nline2 proposal\n", "Summary", "R", "I")
 
-    live_snap = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "line1\nline2 live\n")
     wiki = MagicMock()
-    wiki.fetch_page.return_value = live_snap
+    wiki.fetch_page.side_effect = RuntimeError("Network error")
 
     status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert status.startswith("conflict:105")
-    assert updated_p.status == "conflict"
+    assert status == "unknown"
+    assert updated_p.status == "pending"
+    assert updated_p.page.revid == 100
+    assert store.load(p.id).status == "pending"
 
 
 def test_sync_proposal_with_wiki_declined_preserves_status(tmp_path):
@@ -263,7 +263,7 @@ def test_dashboard_does_not_publish_declined_proposal(tmp_path):
     wiki.publish_page.assert_not_called()
 
 
-def test_dashboard_press_a_approves_pending_proposal(tmp_path):
+def test_dashboard_has_no_approve_shortcut(tmp_path):
     store = ProposalStore(tmp_path)
     snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
     proposal = store.create(snap, "Proposed", "Summary", "R", "I")
@@ -275,21 +275,37 @@ def test_dashboard_press_a_approves_pending_proposal(tmp_path):
     ):
         interactive_dashboard_loop(Console(), store)
 
-    assert store.load(proposal.id).status == "approved"
+    # Status must NOT be approved from dashboard shortcut
+    assert store.load(proposal.id).status == "pending"
 
 
-def test_review_press_a_approves_pending_proposal(tmp_path):
+def test_review_press_a_requires_confirmation(tmp_path):
     store = ProposalStore(tmp_path)
     snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
     proposal = store.create(snap, "Proposed", "Summary", "R", "I")
     assert proposal.status == "pending"
 
+    # Declining confirmation -> remains pending
     with (
         patch("agentic_bot.review.read_key", side_effect=["a", "b"]),
         patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)),
+        patch("rich.prompt.Confirm.ask", return_value=False) as mock_confirm,
     ):
         result = review_proposal_interactive(Console(), proposal, store)
         assert result == "back"
+        mock_confirm.assert_called_once()
+
+    assert store.load(proposal.id).status == "pending"
+
+    # Accepting confirmation -> approved
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["a", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)),
+        patch("rich.prompt.Confirm.ask", return_value=True) as mock_confirm,
+    ):
+        result = review_proposal_interactive(Console(), proposal, store)
+        assert result == "back"
+        mock_confirm.assert_called_once()
 
     assert store.load(proposal.id).status == "approved"
 

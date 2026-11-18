@@ -143,6 +143,20 @@ def cmd_approve(args: argparse.Namespace, store: ProposalStore, console: Console
         )
         return 1
 
+    # Display exact proposed diff and edit summary before confirmation
+    render_proposal_card(console, proposal)
+
+    from rich.prompt import Confirm
+
+    confirmed = Confirm.ask(
+        f"[bold green]Approve proposal #{proposal.id} for publication?[/bold green]",
+        default=False,
+        console=console,
+    )
+    if not confirmed:
+        console.print(f"[yellow]Approval cancelled for proposal #{proposal.id}.[/yellow]")
+        return 0
+
     proposal = store.set_status(args.id, "approved", reason="Approved via CLI")
     console.print(f"[green]Proposal #{proposal.id} marked as APPROVED.[/green]")
     return 0

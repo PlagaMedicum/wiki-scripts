@@ -81,10 +81,7 @@ def sync_proposal_with_wiki(
     store: ProposalStore,
     wiki: WikiClient | None,
 ) -> tuple[str, Proposal]:
-    """Fetch latest live wiki revision; auto-rebase if clean, flag conflict if not."""
-    if proposal.status != "pending":
-        return "synced", proposal
-
+    """Check live wiki revision strictly read-only; never rebase or mutate proposal."""
     if wiki is None:
         try:
             wiki = WikiClient(
@@ -92,39 +89,17 @@ def sync_proposal_with_wiki(
                 family=proposal.page.family,
             )
         except Exception:
-            return "offline", proposal
+            return "unknown", proposal
 
     try:
         live = wiki.fetch_page(proposal.page.title)
     except Exception:
-        return "offline", proposal
+        return "unknown", proposal
 
     if live.revid == proposal.page.revid:
         return "synced", proposal
 
-    merged_text, has_conflicts = three_way_merge(
-        base_text=proposal.page.content,
-        proposed_text=proposal.proposed_content,
-        live_text=live.content,
-        base_label=f"rev-{proposal.page.revid}",
-        proposed_label=f"proposal-v{proposal.current_version}",
-        live_label=f"live-rev-{live.revid}",
-    )
-
-    if has_conflicts:
-        proposal = store.set_status(
-            proposal.id,
-            "conflict",
-            reason=f"Merge conflict with live wiki rev {live.revid}",
-        )
-        return f"conflict:{live.revid}", proposal
-
-    proposal = store.rebase_base_page(
-        proposal.id,
-        new_snapshot=live,
-        new_proposed_content=merged_text,
-    )
-    return f"rebased:{live.revid}", proposal
+    return f"outdated:{live.revid}", proposal
 
 
 def pull_and_merge_for_edit(
@@ -255,7 +230,6 @@ def render_dashboard_table(
             f"{format_badge('↑/↓', 'Navigate', 'cyan')}   "
             f"{format_badge('Enter', 'Open', 'green')}   "
             f"{format_badge('f', f'Filter: {filter_status.upper()}', 'magenta')}   "
-            f"{format_badge('a', 'Approve', 'green')}   "
             f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
             f"{format_badge('p', 'Publish', 'cyan')}   "
             f"{format_badge('d', 'Decline', 'red')}   "
@@ -372,12 +346,17 @@ def render_proposal_view(
         else "[bold yellow]CRITICAL (Watchlist Visible)[/bold yellow]"
     )
 
-    if sync_status.startswith("rebased"):
+    if sync_status.startswith("outdated"):
+        live_revid = sync_status.split(":", 1)[1] if ":" in sync_status else "newer"
+        sync_badge = f"[bold yellow]OUTDATED (live rev {live_revid})[/bold yellow]"
+    elif sync_status.startswith("rebased"):
         sync_badge = f"[bold yellow]REBASED to live rev {page.revid}[/bold yellow]"
     elif sync_status.startswith("conflict"):
         sync_badge = "[bold red]CONFLICT WITH LIVE WIKI[/bold red]"
     elif sync_status == "synced":
         sync_badge = f"[green]SYNCHRONIZED (rev {page.revid})[/green]"
+    elif sync_status == "unknown":
+        sync_badge = "[bold yellow]UNKNOWN[/bold yellow]"
     else:
         sync_badge = f"[dim]LOCAL BASE (rev {page.revid})[/dim]"
 
@@ -552,7 +531,23 @@ def review_proposal_interactive(
                 and "<<<<<<<" not in proposal.proposed_content
                 and ">>>>>>>" not in proposal.proposed_content
             ):
-                proposal = store.set_status(proposal.id, "approved", reason="Approved in review")
+                if sys.stdout.isatty():
+                    sys.stdout.write("\033[?1049l\033[?25h")
+                    sys.stdout.flush()
+                try:
+                    confirmed = Confirm.ask(
+                        f"[bold green]Approve proposal #{proposal.id} for publication?[/bold green]",
+                        default=False,
+                        console=console,
+                    )
+                    if confirmed:
+                        proposal = store.set_status(
+                            proposal.id, "approved", reason="Approved in review"
+                        )
+                finally:
+                    if sys.stdout.isatty():
+                        sys.stdout.write("\033[?1049h\033[?25l")
+                        sys.stdout.flush()
             continue
 
         # Decline
@@ -743,18 +738,6 @@ def interactive_dashboard_loop(
             # Toggle bot flag from dashboard
             if key == "t":
                 store.toggle_mark_as_bot(current_proposal.id)
-                continue
-
-            # Approve from dashboard
-            if key == "a":
-                if (
-                    current_proposal.status == "pending"
-                    and "<<<<<<<" not in current_proposal.proposed_content
-                    and ">>>>>>>" not in current_proposal.proposed_content
-                ):
-                    store.set_status(
-                        current_proposal.id, "approved", reason="Approved in dashboard"
-                    )
                 continue
 
             # Open proposal: auto-fetch latest version from wiki

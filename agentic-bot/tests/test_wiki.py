@@ -55,6 +55,7 @@ def test_login_keeps_bot_password_out_of_files(tmp_path, monkeypatch):
         ),
     ):
         client = WikiClient(base_dir=tmp_path)
+        client.authenticate()
         assert client.site is site
 
     assert not (tmp_path / "user-password.cfg").exists()
@@ -81,12 +82,36 @@ def test_expired_session_never_uses_implicit_login(tmp_path, monkeypatch):
         ),
     ):
         client = WikiClient(base_dir=tmp_path)
-        client._init_pywikibot()
+        client.authenticate()
         with pytest.raises(WikiError, match="session expired"):
             client.site.login()
 
     assert not list(tmp_path.rglob("user-password.cfg"))
     assert not list(tmp_path.rglob("*.lwp"))
+
+
+def test_fetch_page_works_without_credentials(tmp_path, monkeypatch):
+    site = MagicMock()
+    page = MagicMock()
+    page.exists.return_value = True
+    page.latest_revision_id = 42
+    page.latest_revision.timestamp.isoformat.return_value = "2026-01-01T00:00:00Z"
+    page.text = "Hello world"
+    fake_pywikibot = SimpleNamespace(
+        Site=MagicMock(return_value=site),
+        Page=MagicMock(return_value=page),
+    )
+    monkeypatch.setattr("agentic_bot.wiki._PYWIKIBOT_HOME", object(), raising=False)
+    empty_env = tmp_path / "empty.env"
+    with (
+        patch.dict(sys.modules, {"pywikibot": fake_pywikibot}),
+        patch.dict(os.environ, {"WIKI_BOT_USERNAME": "", "WIKI_BOT_PASSWORD": ""}, clear=True),
+    ):
+        client = WikiClient(base_dir=tmp_path, env_path=empty_env)
+        snap = client.fetch_page("Test Page")
+        assert snap.title == "Test Page"
+        assert snap.content == "Hello world"
+        assert snap.revid == 42
 
 
 def test_login_refreshes_userinfo_before_verifying_identity(tmp_path, monkeypatch):
@@ -148,7 +173,7 @@ def test_login_rejects_unverified_identity_without_exposing_password(tmp_path, m
     ):
         client = WikiClient(base_dir=tmp_path)
         with pytest.raises(WikiError, match="expected account") as exc:
-            client._init_pywikibot()
+            client.authenticate()
 
     assert "synthetic-password" not in str(exc.value)
     assert client._site is None
@@ -192,7 +217,7 @@ def test_login_does_not_emit_password_in_debug_logs(tmp_path, monkeypatch, caplo
             return_value=("Example bot@local", "synthetic-password", "https://example.invalid"),
         ),
     ):
-        WikiClient(base_dir=tmp_path)._init_pywikibot()
+        WikiClient(base_dir=tmp_path).authenticate()
 
     assert not any("synthetic-password" in record.getMessage() for record in caplog.records)
     assert not any("Example bot" in record.getMessage() for record in caplog.records)
@@ -216,7 +241,7 @@ def test_login_error_does_not_expose_password(tmp_path, monkeypatch):
         ),
     ):
         with pytest.raises(WikiError, match="authentication failed") as exc:
-            WikiClient(base_dir=tmp_path)._init_pywikibot()
+            WikiClient(base_dir=tmp_path).authenticate()
 
     assert "synthetic-password" not in str(exc.value)
     assert "synthetic-password" not in "".join(traceback.format_exception(exc.value))
@@ -288,7 +313,9 @@ with (
     patch("agentic_bot.wiki.load_credentials_from_env",
           return_value=("Example bot@local", "synthetic-password", "https://example.invalid")),
 ):
-    actual_site = wiki.WikiClient().site
+    client = wiki.WikiClient()
+    client.authenticate()
+    actual_site = client.site
     assert actual_site.logged_in()
     save.assert_not_called()
     try:

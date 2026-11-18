@@ -1,7 +1,8 @@
 # Repository Maintenance Plan
 
-_AI-assisted review. This file owns pending work; project documentation owns
-current behavior. Earlier implementation proposals remain in Git history._
+_AI-assisted review. This file owns the work record and pending work; project
+documentation owns current behavior. Earlier implementation proposals are
+superseded by this record._
 
 ## Review Findings
 
@@ -78,7 +79,7 @@ claiming coverage. Existing merged/legacy state is not changed.
 Completion: tested reusable rules for supported publications and observed
 reviewable proposals; report coverage, untested cases, and local-only files.
 Existing per-volume state, credentials, other projects, and wiki pages remain
-untouched. Historical investigation details remain in Git.
+untouched.
 
 ### Biblio Citation Safety
 
@@ -129,7 +130,7 @@ to satisfy a former architecture target.
 
 ## Completed Record
 
-Historical task IDs remain reserved; detailed execution history belongs in Git.
+Historical task IDs remain reserved; the table below is the summary record.
 
 | IDs | Completed scope |
 | --- | --- |

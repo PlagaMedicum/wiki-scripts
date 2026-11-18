@@ -1,0 +1,54 @@
+[importlinter]
+root_package = biblio
+
+[importlinter:contract:backend-no-ui]
+name = Backend modules must not import UI or controllers
+type = forbidden
+source_modules =
+    biblio.bootstrap
+    biblio.engine
+    biblio.models
+    biblio.observability
+    biblio.page_analysis
+    biblio.page_execution
+    biblio.page_save
+    biblio.query
+    biblio.runtime
+    biblio.runtime_json
+    biblio.session
+    biblio.source_templates
+    biblio.specs
+    biblio.state
+    biblio.text
+    biblio.transport
+    biblio.workflow
+forbidden_modules =
+    biblio.cli
+    biblio.manage
+    biblio.manage_import
+    biblio.manage_questions
+    biblio.manage_render
+    biblio.manage_reports
+    biblio.manage_tui
+    biblio.manage_write
+    biblio.runner
+    biblio.startup
+    biblio.ui
+
+[importlinter:contract:management-is-independent]
+name = Source-management controllers must not import run workflow
+type = forbidden
+source_modules =
+    biblio.manage
+    biblio.manage_import
+    biblio.manage_questions
+    biblio.manage_render
+    biblio.manage_reports
+    biblio.manage_tui
+    biblio.manage_write
+forbidden_modules =
+    biblio.workflow
+    biblio.runner
+    biblio.page_analysis
+    biblio.page_execution
+    biblio.page_save

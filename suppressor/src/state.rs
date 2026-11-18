@@ -1,0 +1,1210 @@
+use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::memory::MemorySnapshot;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProcessedRevidsState {
+    pub capacity: usize,
+    pub revids: Vec<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NightlySweepProgress {
+    pub pages: BTreeMap<String, PageCheckpoint>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RuntimeStatus {
+    pub daemon_state: String,
+    pub dry_run: bool,
+    pub launch_path: Option<LaunchPathSnapshot>,
+    pub last_notice: Option<String>,
+    pub last_notice_at: Option<DateTime<Utc>>,
+    pub resource_economy: Option<ResourceEconomySnapshot>,
+    pub compatibility_notice: Option<CompatibilityNotice>,
+    pub realtime: RealtimeRuntimeStatus,
+    pub reconciliation: ReconciliationRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct LaunchPathSnapshot {
+    pub kind: String,
+    pub pid: i32,
+    pub binary_path: Option<String>,
+    pub config_path: String,
+    pub pid_file: String,
+    pub runtime_status_file: String,
+    pub log_path: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CompatibilityNotice {
+    pub scope: String,
+    pub severity: String,
+    pub detected_at: Option<DateTime<Utc>>,
+    pub previous_value: Option<String>,
+    pub expected_value: Option<String>,
+    pub summary: String,
+    pub operator_action: String,
+    pub approval_text: Option<String>,
+    pub rollback_path: Option<String>,
+    pub blocking: bool,
+}
+
+pub fn compatibility_notice_for_unreadable_surface(
+    scope: &str,
+    path: &Path,
+    expected_value: &str,
+    operator_action: &str,
+    approval_text: &str,
+    rollback_path: &str,
+) -> CompatibilityNotice {
+    CompatibilityNotice {
+        scope: scope.to_string(),
+        severity: "migration-required".to_string(),
+        detected_at: Some(Utc::now()),
+        previous_value: Some(path.display().to_string()),
+        expected_value: Some(expected_value.to_string()),
+        summary: format!("existing {scope} surface could not be parsed safely"),
+        operator_action: operator_action.to_string(),
+        approval_text: Some(approval_text.to_string()),
+        rollback_path: Some(rollback_path.to_string()),
+        blocking: true,
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RealtimeRuntimeStatus {
+    pub state: String,
+    pub last_state_changed_at: Option<DateTime<Utc>>,
+    pub stale_threshold_seconds: u64,
+    pub stream_read_timeout_seconds: u64,
+    pub last_stream_opened_at: Option<DateTime<Utc>>,
+    pub last_event_observed_at: Option<DateTime<Utc>>,
+    pub last_matching_edit_at: Option<DateTime<Utc>>,
+    pub last_matching_title: Option<String>,
+    pub last_matching_revid: Option<u64>,
+    pub last_matching_revid_url: Option<String>,
+    pub last_action_queued_at: Option<DateTime<Utc>>,
+    pub last_action_completed_at: Option<DateTime<Utc>>,
+    pub last_successful_hide_at: Option<DateTime<Utc>>,
+    pub last_successful_hide_title: Option<String>,
+    pub last_successful_hide_revid: Option<u64>,
+    pub last_successful_hide_url: Option<String>,
+    pub last_event_id: Option<String>,
+    pub current_lag_seconds: Option<i64>,
+    pub current_lag_millis: Option<i64>,
+    pub current_lag_source: Option<String>,
+    pub queue_depth: usize,
+    pub live_lane: ExecutionLaneSnapshot,
+    pub background_lane: ExecutionLaneSnapshot,
+    pub latency: RuntimeLatencyStatus,
+    pub daemon_started_at: Option<DateTime<Utc>>,
+    pub current_task: Option<CurrentTaskSnapshot>,
+    pub last_recovery_trigger: Option<String>,
+    pub last_recovery_started_at: Option<DateTime<Utc>>,
+    pub last_recovery_completed_at: Option<DateTime<Utc>>,
+    pub last_reconnect_reason: Option<String>,
+    pub last_offline_started_at: Option<DateTime<Utc>>,
+    pub last_offline_recovered_at: Option<DateTime<Utc>>,
+    pub last_freshness_probe_at: Option<DateTime<Utc>>,
+    pub last_freshness_probe_source: Option<String>,
+    pub catchup_active: bool,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub shared_backoff: Option<SharedBackoffSnapshot>,
+    pub latest_error_code: Option<String>,
+    pub latest_error: Option<ApiFailureSnapshot>,
+    pub latest_actionable_issue: Option<ActionableIssueSnapshot>,
+    pub latest_notice: Option<String>,
+    pub latest_outcome: Option<SuppressionOutcomeSnapshot>,
+    pub latest_recovery_warnings: Vec<WarningSummary>,
+    pub latest_recovery_summary: Option<CoverageSummary>,
+    pub last_source_refresh: Option<SourceListRefresh>,
+    pub last_daytime_verification_at: Option<DateTime<Utc>>,
+    pub last_daytime_verification_window_start: Option<DateTime<Utc>>,
+    pub last_daytime_verification_window_end: Option<DateTime<Utc>>,
+    pub last_daytime_verification_result: Option<String>,
+    pub last_nightly_full_recheck_at: Option<DateTime<Utc>>,
+    pub last_nightly_full_recheck_result: Option<String>,
+}
+
+impl Default for RealtimeRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            state: "unknown".to_string(),
+            last_state_changed_at: None,
+            stale_threshold_seconds: 10,
+            stream_read_timeout_seconds: 10,
+            last_stream_opened_at: None,
+            last_event_observed_at: None,
+            last_matching_edit_at: None,
+            last_matching_title: None,
+            last_matching_revid: None,
+            last_matching_revid_url: None,
+            last_action_queued_at: None,
+            last_action_completed_at: None,
+            last_successful_hide_at: None,
+            last_successful_hide_title: None,
+            last_successful_hide_revid: None,
+            last_successful_hide_url: None,
+            last_event_id: None,
+            current_lag_seconds: None,
+            current_lag_millis: None,
+            current_lag_source: None,
+            queue_depth: 0,
+            live_lane: ExecutionLaneSnapshot::default(),
+            background_lane: ExecutionLaneSnapshot::default(),
+            latency: RuntimeLatencyStatus::default(),
+            daemon_started_at: None,
+            current_task: None,
+            last_recovery_trigger: None,
+            last_recovery_started_at: None,
+            last_recovery_completed_at: None,
+            last_reconnect_reason: None,
+            last_offline_started_at: None,
+            last_offline_recovered_at: None,
+            last_freshness_probe_at: None,
+            last_freshness_probe_source: None,
+            catchup_active: false,
+            backoff_until: None,
+            shared_backoff: None,
+            latest_error_code: None,
+            latest_error: None,
+            latest_actionable_issue: None,
+            latest_notice: None,
+            latest_outcome: None,
+            latest_recovery_warnings: Vec::new(),
+            latest_recovery_summary: None,
+            last_source_refresh: None,
+            last_daytime_verification_at: None,
+            last_daytime_verification_window_start: None,
+            last_daytime_verification_window_end: None,
+            last_daytime_verification_result: None,
+            last_nightly_full_recheck_at: None,
+            last_nightly_full_recheck_result: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ExecutionLaneSnapshot {
+    pub queue_depth: usize,
+    pub queue_capacity: usize,
+    pub in_flight: usize,
+    pub concurrency_limit: usize,
+    pub latest_saturation_at: Option<DateTime<Utc>>,
+    pub latest_saturation_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RuntimeLatencyStatus {
+    pub observed_to_queue: LatencyMetricStatus,
+    pub queue_to_submit: LatencyMetricStatus,
+    pub submit_to_complete: LatencyMetricStatus,
+    pub observed_to_hidden: LatencyMetricStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct LatencyMetricStatus {
+    pub sample_count: usize,
+    pub latest_ms: Option<u64>,
+    pub min_ms: Option<u64>,
+    pub p50_ms: Option<u64>,
+    pub p95_ms: Option<u64>,
+    pub p99_ms: Option<u64>,
+    pub max_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CurrentTaskSnapshot {
+    pub task_kind: String,
+    pub label: String,
+    pub progress_done: Option<usize>,
+    pub progress_total: Option<usize>,
+    pub window_start: Option<DateTime<Utc>>,
+    pub window_end: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub expected_resume_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SharedBackoffSnapshot {
+    pub source: String,
+    pub reason: String,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub affected_paths: Vec<String>,
+    pub live_hiding_blocked: bool,
+    pub recorded_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ActionableIssueSnapshot {
+    pub source: String,
+    pub severity: String,
+    pub summary: String,
+    pub next_action: String,
+    pub detected_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ApiFailureSnapshot {
+    pub class: String,
+    pub api_code: Option<String>,
+    pub http_status: Option<u16>,
+    pub content_type: Option<String>,
+    pub retryable: bool,
+    pub retry_after_seconds: Option<u64>,
+    pub operation: String,
+    pub sample_title: Option<String>,
+    pub sample_revid: Option<u64>,
+    pub message: String,
+    pub occurred_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SourceListRefresh {
+    pub trigger_title: String,
+    pub trigger_revid: Option<u64>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub old_source_revid: Option<u64>,
+    pub new_source_revid: Option<u64>,
+    pub new_titles_count: usize,
+    pub removed_titles_count: usize,
+    pub redirects_reused: bool,
+    pub catchup_triggered: bool,
+    pub catchup_title_scope: Option<String>,
+    pub deferred_until: Option<DateTime<Utc>>,
+    pub outcome: String,
+    pub error: Option<ApiFailureSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ResourceEconomySnapshot {
+    pub queue_depth_max_recent: usize,
+    pub live_queue_depth_max_recent: usize,
+    pub background_queue_depth_max_recent: usize,
+    pub api_concurrency_max_recent: usize,
+    pub state_bytes_recent: u64,
+    pub coalesced_warning_count_recent: usize,
+    pub latest_measurement_at: Option<DateTime<Utc>>,
+    pub memory: Option<MemorySnapshot>,
+    pub previous_generation: Option<PreviousGenerationSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PreviousGenerationSnapshot {
+    pub daemon_started_at: Option<DateTime<Utc>>,
+    pub last_status_at: Option<DateTime<Utc>>,
+    pub launch_kind: Option<String>,
+    pub pid: Option<i32>,
+    pub memory: Option<MemorySnapshot>,
+}
+
+/// Extracts a non-recursive handoff summary before a restarted daemon overwrites status.
+pub fn previous_generation_snapshot(status: &RuntimeStatus) -> PreviousGenerationSnapshot {
+    PreviousGenerationSnapshot {
+        daemon_started_at: status
+            .launch_path
+            .as_ref()
+            .and_then(|launch_path| launch_path.started_at)
+            .or(status.realtime.daemon_started_at),
+        last_status_at: status.last_notice_at,
+        launch_kind: status
+            .launch_path
+            .as_ref()
+            .map(|launch_path| launch_path.kind.clone()),
+        pid: status
+            .launch_path
+            .as_ref()
+            .map(|launch_path| launch_path.pid),
+        memory: status
+            .resource_economy
+            .as_ref()
+            .and_then(|resource| resource.memory.clone()),
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SuppressionOutcomeSnapshot {
+    pub title: String,
+    pub revid: u64,
+    pub revision_url: Option<String>,
+    pub outcome: String,
+    pub reason_code: Option<String>,
+    pub mode: String,
+    pub source_label: String,
+    pub observed_at: Option<DateTime<Utc>>,
+    pub queued_at: Option<DateTime<Utc>>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub lane: Option<String>,
+    pub deadline_at: Option<DateTime<Utc>>,
+    pub attempt_count: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CoverageSummary {
+    pub scope_label: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub requested_by: String,
+    pub candidate_source: Option<String>,
+    pub candidate_count: usize,
+    pub watched_candidate_count: usize,
+    pub candidate_chunk_count: usize,
+    pub candidate_discovery_elapsed_ms: Option<u64>,
+    pub fallback_reason: Option<String>,
+    pub pages_checked: usize,
+    pub edits_checked: usize,
+    pub hidden_count: usize,
+    pub already_hidden_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+    pub unresolved_count: usize,
+    pub unresolved_items: Vec<UnresolvedExposureItem>,
+    pub stopped_early_reason: Option<String>,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub warning_summaries: Vec<WarningSummary>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct UnresolvedExposureItem {
+    pub title: String,
+    pub revid: u64,
+    pub revision_url: Option<String>,
+    pub age_seconds: Option<i64>,
+    pub reason: String,
+    pub next_action: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WarningSummary {
+    pub class: String,
+    pub api_code: Option<String>,
+    pub http_status: Option<u16>,
+    pub content_type: Option<String>,
+    pub retryable: bool,
+    pub retry_after_seconds: Option<u64>,
+    pub operation: String,
+    pub count: usize,
+    pub sample_titles: Vec<String>,
+    pub message: String,
+    pub stopped_early: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BenchmarkRun {
+    pub test_page_title: String,
+    pub run_id: String,
+    pub edit_count: usize,
+    pub bot_marked: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub smoke_only: bool,
+    pub unresolved_items: Vec<UnresolvedExposureItem>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CommandReportSurface {
+    pub command: String,
+    pub generated_at: Option<DateTime<Utc>>,
+    pub report_only: bool,
+    pub scope_label: Option<String>,
+    pub window: CommandReportWindow,
+    pub counts: CommandReportCounts,
+    #[serde(default, alias = "unresolved")]
+    pub unresolved_items: Vec<UnresolvedExposureItem>,
+    pub stopped_early_reason: Option<String>,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub next_action: Option<String>,
+    pub compatibility_notice: Option<CompatibilityNotice>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CommandReportWindow {
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CommandReportCounts {
+    #[serde(default, alias = "checked")]
+    pub checked: usize,
+    #[serde(default, alias = "hidden")]
+    pub hidden: usize,
+    #[serde(default, alias = "already_hidden")]
+    pub already_hidden: usize,
+    #[serde(default, alias = "skipped")]
+    pub skipped: usize,
+    #[serde(default, alias = "failed")]
+    pub failed: usize,
+    #[serde(default, alias = "unresolved")]
+    pub unresolved: usize,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReconciliationRuntimeStatus {
+    pub active: bool,
+    pub mode: Option<String>,
+    pub phase: Option<String>,
+    pub queued_mode: Option<String>,
+    pub stopped_early_reason: Option<String>,
+    pub backoff_until: Option<DateTime<Utc>>,
+    pub freshness: Option<RecheckFreshnessSnapshot>,
+    pub total_titles: usize,
+    pub completed_titles: usize,
+    pub phase_total: usize,
+    pub phase_completed: usize,
+    pub current_title: Option<String>,
+    pub last_started_at: Option<DateTime<Utc>>,
+    pub last_completed_at: Option<DateTime<Utc>>,
+    pub last_result: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RecheckFreshnessSnapshot {
+    pub target_hours: u64,
+    pub total_pages: usize,
+    pub pages_older_than_target: usize,
+    pub oldest_full_check_at: Option<DateTime<Utc>>,
+    pub oldest_full_check_title: Option<String>,
+    pub oldest_full_check_age_seconds: Option<i64>,
+    pub last_daytime_verification_result: Option<String>,
+    pub last_nightly_full_recheck_result: Option<String>,
+    pub computed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PageCheckpoint {
+    pub last_full_check_at: Option<DateTime<Utc>>,
+    pub last_reconciled_at: Option<DateTime<Utc>>,
+    pub last_reconciled_revision_timestamp: Option<DateTime<Utc>>,
+    pub last_reconciled_revid: Option<u64>,
+}
+
+impl ProcessedRevidsState {
+    pub fn contains(&self, revid: u64) -> bool {
+        self.revids.contains(&revid)
+    }
+
+    pub fn insert(&mut self, revid: u64) {
+        if self.contains(revid) {
+            return;
+        }
+        self.revids.push(revid);
+        if self.capacity > 0 && self.revids.len() > self.capacity {
+            let excess = self.revids.len() - self.capacity;
+            self.revids.drain(..excess);
+        }
+    }
+}
+
+pub fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let value = serde_json::from_str(&raw)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    Ok(Some(value))
+}
+
+pub fn save_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let raw = serde_json::to_vec_pretty(value).context("Failed to serialize JSON state")?;
+    save_bytes_atomic(path, &raw)
+}
+
+pub fn load_text(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    Ok(Some(raw.trim().to_string()))
+}
+
+pub fn save_text_atomic(path: &Path, value: &str) -> Result<()> {
+    save_bytes_atomic(path, value.as_bytes())
+}
+
+fn save_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    let tmp_path = path.with_extension("tmp");
+    let mut file = File::create(&tmp_path)
+        .with_context(|| format!("Failed to create {}", tmp_path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("Failed to flush {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("Failed to move {} into place", path.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::memory::{MemorySnapshot, ProcessMemorySnapshot};
+
+    #[test]
+    fn processed_revids_respects_capacity() {
+        let mut state = ProcessedRevidsState {
+            capacity: 3,
+            revids: vec![],
+        };
+        state.insert(1);
+        state.insert(2);
+        state.insert(3);
+        state.insert(4);
+        assert_eq!(state.revids, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn saves_and_loads_json_atomically() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("processed.json");
+        let state = ProcessedRevidsState {
+            capacity: 2,
+            revids: vec![10, 20],
+        };
+        save_json_atomic(&path, &state).unwrap();
+        let loaded: ProcessedRevidsState = load_json(&path).unwrap().unwrap();
+        assert_eq!(loaded.revids, vec![10, 20]);
+    }
+
+    #[test]
+    fn runtime_status_loads_with_missing_new_fields() {
+        let raw = r#"{
+          "daemon_state": "running",
+          "dry_run": false,
+          "last_notice": "received manual nightly reconciliation signal",
+          "reconciliation": {
+            "active": true,
+            "mode": "nightly",
+            "queued_mode": null,
+            "total_titles": 1425,
+            "completed_titles": 0,
+            "current_title": null,
+            "last_started_at": "2026-04-08T14:02:59Z",
+            "last_completed_at": null,
+            "last_result": null
+          }
+        }"#;
+
+        let loaded: RuntimeStatus = serde_json::from_str(raw).unwrap();
+        assert_eq!(loaded.daemon_state, "running");
+        assert!(loaded.reconciliation.active);
+        assert_eq!(loaded.reconciliation.mode.as_deref(), Some("nightly"));
+        assert_eq!(loaded.reconciliation.total_titles, 1425);
+        assert_eq!(loaded.reconciliation.completed_titles, 0);
+        assert_eq!(loaded.reconciliation.phase_total, 0);
+        assert_eq!(loaded.reconciliation.phase_completed, 0);
+        assert_eq!(loaded.reconciliation.phase, None);
+        assert_eq!(loaded.realtime.state, "unknown");
+        assert_eq!(loaded.realtime.stale_threshold_seconds, 10);
+        assert!(loaded.realtime.latest_recovery_warnings.is_empty());
+        assert!(loaded.realtime.backoff_until.is_none());
+    }
+
+    #[test]
+    fn runtime_status_round_trips_realtime_fields() {
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            dry_run: false,
+            launch_path: None,
+            last_notice: Some("ok".to_string()),
+            last_notice_at: Some(Utc::now()),
+            resource_economy: None,
+            compatibility_notice: None,
+            realtime: RealtimeRuntimeStatus {
+                state: "healthy".to_string(),
+                queue_depth: 3,
+                latest_notice: Some("hidden revid 42".to_string()),
+                latest_outcome: Some(SuppressionOutcomeSnapshot {
+                    title: "Title".to_string(),
+                    revid: 42,
+                    revision_url: Some("https://example.invalid/wiki/Special:Diff/42".to_string()),
+                    outcome: "hidden".to_string(),
+                    mode: "live".to_string(),
+                    source_label: "live hiding".to_string(),
+                    ..SuppressionOutcomeSnapshot::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            reconciliation: ReconciliationRuntimeStatus::default(),
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(loaded.realtime.state, "healthy");
+        assert_eq!(loaded.realtime.queue_depth, 3);
+        let latest_outcome = loaded.realtime.latest_outcome.unwrap();
+        assert_eq!(latest_outcome.outcome, "hidden");
+        assert_eq!(
+            latest_outcome.revision_url.as_deref(),
+            Some("https://example.invalid/wiki/Special:Diff/42")
+        );
+        assert_eq!(latest_outcome.source_label, "live hiding");
+    }
+
+    #[test]
+    fn runtime_status_round_trips_lane_and_latency_fields() {
+        let detected_at = Utc::now();
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            realtime: RealtimeRuntimeStatus {
+                queue_depth: 1,
+                live_lane: ExecutionLaneSnapshot {
+                    queue_depth: 1,
+                    queue_capacity: 100,
+                    in_flight: 1,
+                    concurrency_limit: 1,
+                    latest_saturation_at: Some(detected_at),
+                    latest_saturation_reason: Some("live-queue-full".to_string()),
+                },
+                background_lane: ExecutionLaneSnapshot {
+                    queue_depth: 7,
+                    queue_capacity: 100,
+                    in_flight: 1,
+                    concurrency_limit: 1,
+                    ..ExecutionLaneSnapshot::default()
+                },
+                latency: RuntimeLatencyStatus {
+                    observed_to_queue: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(12),
+                        p95_ms: Some(20),
+                        p99_ms: Some(25),
+                        ..LatencyMetricStatus::default()
+                    },
+                    queue_to_submit: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(2),
+                        p95_ms: Some(4),
+                        p99_ms: Some(5),
+                        ..LatencyMetricStatus::default()
+                    },
+                    submit_to_complete: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(75),
+                        p95_ms: Some(140),
+                        p99_ms: Some(180),
+                        ..LatencyMetricStatus::default()
+                    },
+                    observed_to_hidden: LatencyMetricStatus {
+                        sample_count: 10,
+                        p50_ms: Some(90),
+                        p95_ms: Some(180),
+                        p99_ms: Some(250),
+                        ..LatencyMetricStatus::default()
+                    },
+                },
+                latest_outcome: Some(SuppressionOutcomeSnapshot {
+                    title: "Synthetic Sensitive Page".to_string(),
+                    revid: 42,
+                    outcome: "hidden".to_string(),
+                    mode: "live".to_string(),
+                    source_label: "live hiding".to_string(),
+                    submitted_at: Some(detected_at),
+                    lane: Some("live".to_string()),
+                    deadline_at: Some(detected_at),
+                    ..SuppressionOutcomeSnapshot::default()
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            resource_economy: Some(ResourceEconomySnapshot {
+                queue_depth_max_recent: 8,
+                live_queue_depth_max_recent: 1,
+                background_queue_depth_max_recent: 7,
+                api_concurrency_max_recent: 2,
+                ..ResourceEconomySnapshot::default()
+            }),
+            ..RuntimeStatus::default()
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(loaded.realtime.live_lane.queue_capacity, 100);
+        assert_eq!(
+            loaded
+                .realtime
+                .live_lane
+                .latest_saturation_reason
+                .as_deref(),
+            Some("live-queue-full")
+        );
+        assert_eq!(loaded.realtime.background_lane.queue_depth, 7);
+        assert_eq!(loaded.realtime.latency.queue_to_submit.p95_ms, Some(4));
+        assert_eq!(loaded.realtime.latency.observed_to_hidden.p99_ms, Some(250));
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_outcome
+                .as_ref()
+                .and_then(|outcome| outcome.lane.as_deref()),
+            Some("live")
+        );
+        assert_eq!(
+            loaded
+                .resource_economy
+                .as_ref()
+                .map(|resource| resource.background_queue_depth_max_recent),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn runtime_status_round_trips_recovery_error_and_resource_fields() {
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            dry_run: false,
+            launch_path: None,
+            last_notice: Some("source refresh catchup-started".to_string()),
+            last_notice_at: Some(Utc::now()),
+            resource_economy: Some(ResourceEconomySnapshot {
+                queue_depth_max_recent: 3,
+                coalesced_warning_count_recent: 42,
+                latest_measurement_at: Some(Utc::now()),
+                ..ResourceEconomySnapshot::default()
+            }),
+            compatibility_notice: Some(CompatibilityNotice {
+                scope: "command-report".to_string(),
+                severity: "warning".to_string(),
+                summary: "legacy report shape detected".to_string(),
+                operator_action: "trust the new report output".to_string(),
+                approval_text: Some(
+                    "confirm the current report format before trusting it".to_string(),
+                ),
+                rollback_path: Some("rerun the last trusted report workflow".to_string()),
+                ..CompatibilityNotice::default()
+            }),
+            realtime: RealtimeRuntimeStatus {
+                latest_error: Some(ApiFailureSnapshot {
+                    class: "api-json-error".to_string(),
+                    api_code: Some("badtimestamp".to_string()),
+                    http_status: Some(200),
+                    retryable: false,
+                    retry_after_seconds: Some(30),
+                    operation: "fetch-revisions".to_string(),
+                    sample_title: Some("Title".to_string()),
+                    message: "invalid timestamp".to_string(),
+                    occurred_at: Some(Utc::now()),
+                    ..ApiFailureSnapshot::default()
+                }),
+                last_source_refresh: Some(SourceListRefresh {
+                    trigger_title: "Удзельнік:Wizardist/SuppressionList".to_string(),
+                    new_titles_count: 2,
+                    catchup_triggered: true,
+                    catchup_title_scope: Some("new-titles".to_string()),
+                    outcome: "catchup-started".to_string(),
+                    ..SourceListRefresh::default()
+                }),
+                latest_recovery_summary: Some(CoverageSummary {
+                    stopped_early_reason: Some("rate-limited".to_string()),
+                    warning_summaries: vec![WarningSummary {
+                        class: "api-json-error".to_string(),
+                        api_code: Some("badtimestamp".to_string()),
+                        operation: "fetch-revisions".to_string(),
+                        retry_after_seconds: Some(30),
+                        count: 1427,
+                        sample_titles: vec!["Title".to_string()],
+                        stopped_early: true,
+                        ..WarningSummary::default()
+                    }],
+                    ..CoverageSummary::default()
+                }),
+                latest_recovery_warnings: vec![WarningSummary {
+                    class: "api-json-error".to_string(),
+                    api_code: Some("badtimestamp".to_string()),
+                    operation: "fetch-revisions".to_string(),
+                    retry_after_seconds: Some(30),
+                    count: 1427,
+                    sample_titles: vec!["Title".to_string()],
+                    stopped_early: true,
+                    ..WarningSummary::default()
+                }],
+                ..RealtimeRuntimeStatus::default()
+            },
+            reconciliation: ReconciliationRuntimeStatus::default(),
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_error
+                .as_ref()
+                .and_then(|error| error.api_code.as_deref()),
+            Some("badtimestamp")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_error
+                .as_ref()
+                .and_then(|error| error.retry_after_seconds),
+            Some(30)
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .last_source_refresh
+                .as_ref()
+                .map(|refresh| refresh.new_titles_count),
+            Some(2)
+        );
+        assert_eq!(
+            loaded
+                .resource_economy
+                .as_ref()
+                .map(|snapshot| snapshot.coalesced_warning_count_recent),
+            Some(42)
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.scope.as_str()),
+            Some("command-report")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref()),
+            Some("confirm the current report format before trusting it")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref()),
+            Some("rerun the last trusted report workflow")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_recovery_summary
+                .as_ref()
+                .and_then(|summary| summary.warning_summaries.first())
+                .map(|warning| warning.count),
+            Some(1427)
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_recovery_warnings
+                .first()
+                .and_then(|warning| warning.retry_after_seconds),
+            Some(30)
+        );
+    }
+
+    #[test]
+    fn runtime_status_round_trips_precise_lag_current_task_and_actionable_issue() {
+        let started_at = Utc::now();
+        let status = RuntimeStatus {
+            daemon_state: "running".to_string(),
+            dry_run: false,
+            launch_path: None,
+            compatibility_notice: Some(CompatibilityNotice {
+                scope: "runtime".to_string(),
+                severity: "warning".to_string(),
+                summary: "older runtime artifact detected".to_string(),
+                operator_action: "review compatibility guidance".to_string(),
+                approval_text: Some(
+                    "confirm the daemon is writing the current runtime shape".to_string(),
+                ),
+                rollback_path: Some("restart the last trusted daemon workflow".to_string()),
+                ..CompatibilityNotice::default()
+            }),
+            realtime: RealtimeRuntimeStatus {
+                state: "catching-up".to_string(),
+                current_lag_seconds: Some(1),
+                current_lag_millis: Some(284),
+                current_lag_source: Some("api-freshness-probe".to_string()),
+                current_task: Some(CurrentTaskSnapshot {
+                    task_kind: "catch-up".to_string(),
+                    label: "since last successful hide".to_string(),
+                    progress_done: Some(1),
+                    progress_total: Some(3),
+                    window_start: Some(started_at),
+                    window_end: Some(started_at),
+                    started_at: Some(started_at),
+                    expected_resume_at: None,
+                }),
+                latest_actionable_issue: Some(ActionableIssueSnapshot {
+                    source: "stream".to_string(),
+                    severity: "error".to_string(),
+                    summary: "stream stale while newer wiki edits exist".to_string(),
+                    next_action: "watch the recovery window".to_string(),
+                    detected_at: Some(started_at),
+                }),
+                ..RealtimeRuntimeStatus::default()
+            },
+            ..RuntimeStatus::default()
+        };
+
+        let raw = serde_json::to_string(&status).unwrap();
+        let loaded: RuntimeStatus = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(loaded.realtime.current_lag_millis, Some(284));
+        assert_eq!(
+            loaded.realtime.current_lag_source.as_deref(),
+            Some("api-freshness-probe")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .current_task
+                .as_ref()
+                .map(|task| task.label.as_str()),
+            Some("since last successful hide")
+        );
+        assert_eq!(
+            loaded
+                .realtime
+                .latest_actionable_issue
+                .as_ref()
+                .map(|issue| issue.summary.as_str()),
+            Some("stream stale while newer wiki edits exist")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .map(|notice| notice.summary.as_str()),
+            Some("older runtime artifact detected")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.approval_text.as_deref()),
+            Some("confirm the daemon is writing the current runtime shape")
+        );
+        assert_eq!(
+            loaded
+                .compatibility_notice
+                .as_ref()
+                .and_then(|notice| notice.rollback_path.as_deref()),
+            Some("restart the last trusted daemon workflow")
+        );
+    }
+
+    #[test]
+    fn command_report_surface_loads_older_shape_with_aliases() {
+        let raw = r#"{
+          "command": "coverage-report",
+          "generated_at": "2026-04-08T14:12:00Z",
+          "window": {
+            "start": "2026-04-08T13:30:00Z",
+            "end": "2026-04-08T14:00:00Z"
+          },
+          "counts": {
+            "checked": 12,
+            "hidden": 3,
+            "already_hidden": 6,
+            "skipped": 2,
+            "unresolved": 1
+          },
+          "unresolved": [
+            {
+              "title": "Fixture Page",
+              "revid": 42,
+              "reason": "throttled",
+              "next_action": "retry after backoff"
+            }
+          ]
+        }"#;
+
+        let loaded: CommandReportSurface = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(loaded.command, "coverage-report");
+        assert_eq!(loaded.counts.checked, 12);
+        assert_eq!(loaded.counts.hidden, 3);
+        assert_eq!(loaded.counts.already_hidden, 6);
+        assert_eq!(loaded.counts.failed, 0);
+        assert_eq!(loaded.counts.unresolved, 1);
+        assert_eq!(loaded.unresolved_items.len(), 1);
+        assert!(loaded.compatibility_notice.is_none());
+    }
+
+    #[test]
+    fn unreadable_surface_notice_is_blocking_and_migration_required() {
+        let notice = compatibility_notice_for_unreadable_surface(
+            "runtime-status",
+            Path::new("/tmp/runtime_status.json"),
+            "readable runtime_status.json surface",
+            "replace or remove the unreadable runtime status file before trusting suppressor status",
+            "trust healthy status again only after the active daemon rewrites a readable runtime_status.json surface",
+            "restart the last trusted daemon workflow and verify that it writes a readable runtime_status.json surface",
+        );
+
+        assert_eq!(notice.scope, "runtime-status");
+        assert_eq!(notice.severity, "migration-required");
+        assert_eq!(
+            notice.previous_value.as_deref(),
+            Some("/tmp/runtime_status.json")
+        );
+        assert_eq!(
+            notice.expected_value.as_deref(),
+            Some("readable runtime_status.json surface")
+        );
+        assert_eq!(
+            notice.approval_text.as_deref(),
+            Some(
+                "trust healthy status again only after the active daemon rewrites a readable runtime_status.json surface"
+            )
+        );
+        assert_eq!(
+            notice.rollback_path.as_deref(),
+            Some(
+                "restart the last trusted daemon workflow and verify that it writes a readable runtime_status.json surface"
+            )
+        );
+        assert!(notice.blocking);
+    }
+
+    #[test]
+    fn persisted_memory_status_replaces_the_previous_sample() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("runtime_status.json");
+        let first = MemorySnapshot {
+            sampled_at: Some(Utc::now()),
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(1),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        let second = MemorySnapshot {
+            sampled_at: Some(Utc::now()),
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(2),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        save_json_atomic(
+            &path,
+            &RuntimeStatus {
+                resource_economy: Some(ResourceEconomySnapshot {
+                    memory: Some(first),
+                    ..ResourceEconomySnapshot::default()
+                }),
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+        save_json_atomic(
+            &path,
+            &RuntimeStatus {
+                resource_economy: Some(ResourceEconomySnapshot {
+                    memory: Some(second),
+                    ..ResourceEconomySnapshot::default()
+                }),
+                ..RuntimeStatus::default()
+            },
+        )
+        .unwrap();
+        let loaded: RuntimeStatus = load_json(&path).unwrap().unwrap();
+
+        assert_eq!(
+            loaded
+                .resource_economy
+                .as_ref()
+                .and_then(|resource| resource.memory.as_ref())
+                .and_then(|memory| memory.process.vm_rss_bytes),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn previous_generation_snapshot_keeps_only_one_generation() {
+        let old_memory = MemorySnapshot {
+            process: ProcessMemorySnapshot {
+                vm_rss_bytes: Some(42),
+                ..ProcessMemorySnapshot::default()
+            },
+            ..MemorySnapshot::default()
+        };
+        let status = RuntimeStatus {
+            launch_path: Some(LaunchPathSnapshot {
+                kind: "foreground".to_string(),
+                pid: 7,
+                started_at: Some(Utc::now()),
+                ..LaunchPathSnapshot::default()
+            }),
+            last_notice_at: Some(Utc::now()),
+            resource_economy: Some(ResourceEconomySnapshot {
+                memory: Some(old_memory),
+                previous_generation: Some(PreviousGenerationSnapshot {
+                    pid: Some(6),
+                    ..PreviousGenerationSnapshot::default()
+                }),
+                ..ResourceEconomySnapshot::default()
+            }),
+            ..RuntimeStatus::default()
+        };
+
+        let previous = previous_generation_snapshot(&status);
+
+        assert_eq!(previous.pid, Some(7));
+        assert_eq!(
+            previous
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.process.vm_rss_bytes),
+            Some(42)
+        );
+        let serialized = serde_json::to_string(&previous).unwrap();
+        assert!(!serialized.contains("previous_generation"));
+    }
+}

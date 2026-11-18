@@ -1,0 +1,27 @@
+[source]
+id = "ethnography-1989"
+name = "Этнаграфія Беларусі: Энцыклапедыя"
+site_lang = "be"
+family = "wikipedia"
+
+[search]
+insource_terms = ["Этнаграфія Беларусі", "575"]
+
+[candidate]
+must_contain_all = ["Этнаграфія Беларусі", "575"]
+
+[replacement]
+template_name = "Крыніцы/Этнаграфія Беларусі"
+without_pages = "{{Крыніцы/Этнаграфія Беларусі}}"
+with_pages = "{{Крыніцы/Этнаграфія Беларусі|||{pages}}}"
+
+[summary]
+default_format = "Замена бібліяграфічнай спасылкі шаблонам {{{template_name}}}"
+
+[[regex_rules]]
+name = "full_book_1989"
+pattern = '^(?P<prefix>{{LIST_PREFIX}})Этнаграфія Беларусі : энцыклапедыя / рэдкал\. І\. П\. Шамякін \[і інш\.\]\. — Мінск : БелСЭ, 1989\. — 575 с\.$'
+replacement = "{prefix}{template}"
+flags = "IGNORECASE|UNICODE"
+review_required = true
+review_note = "Confirm the full-book citation and new reference anchor before saving."

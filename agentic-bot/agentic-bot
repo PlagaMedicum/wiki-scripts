@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -d "$DIR/agentic-bot" ]]; then
+    exec uv run --directory "$DIR/agentic-bot" agentic-bot "$@"
+else
+    exec uv run --directory "$DIR" agentic-bot "$@"
+fi

@@ -1,0 +1,19 @@
+[Unit]
+Description=suppressor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/repo/suppressor
+EnvironmentFile=/path/to/repo/suppressor/.env
+ExecStart=/path/to/repo/suppressor/target/release/suppressor run --config /path/to/repo/suppressor/config.toml
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/path/to/repo/suppressor/state
+
+[Install]
+WantedBy=multi-user.target

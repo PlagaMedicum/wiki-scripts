@@ -73,7 +73,9 @@ make svg-replacer-run
    (confirmation required).
 3. Separately propose the Commons file-description page of the raster first:
    add `{{Vector version available|Example.svg}}` on top and remove any stale
-   `{{SVG}}`/`{{Convert to SVG}}` conversion-request marker (one diff, one
+   conversion-request marker of the `{{Convert to SVG}}` family — every alias
+   spelling such as `{{SVG}}`, `{{ConvertToSVG|…}}`, `{{ToSVG}}`,
+   `{{Should be SVG}}`, `{{Vectorize}}`, `{{SVG request}}` (one diff, one
    approval). Existing equivalent notices are detected and never duplicated.
    Quitting at this step stops before any article work; skipping it leaves the
    article review untouched.
@@ -135,8 +137,11 @@ SVG_REPLACER_LIVE=1 make test ARGS="tests/test_live_readonly.py"
   by design; replace those manually if appropriate.
 - Duplicate-vector detection recognizes `{{Vector version available}}`,
   `{{VVA}}` and `{{subst:…}}` spellings only. The Commons cleanup removes only
-  the `{{SVG}}`/`{{Convert to SVG}}` marker family, outside comments and
-  literal-content tags.
+  the `{{Convert to SVG}}` template and its Commons redirect aliases
+  (`{{SVG}}`, `{{ConvertToSVG}}`, `{{ToSVG}}`, `{{Should be SVG}}`,
+  `{{Vectorize}}`, `{{SVG request}}`, `{{Cts}}`, …) in any casing or separator
+  spelling, outside comments and literal-content tags. Sibling templates
+  (`{{Convert to SVG animation}}`, `{{N2+SVG}}`) are never touched.
 - Transient HTTP 429/503 throttling is retried on reads (3 bounded retries);
   login and edit requests are never retried automatically. Missing revision
   acknowledgements and explicit no-change responses are not counted as published.

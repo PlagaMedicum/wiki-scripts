@@ -431,6 +431,27 @@ def test_vva_removes_stale_marker_even_when_notice_exists():
     assert "Adds" not in summary
 
 
+def test_vva_removes_all_convert_to_svg_alias_markers():
+    text = "{{Information|x}}\n{{ConvertToSVG|math}}\n{{ShouldBeSVG|flag}}\n{{ subst:ToSVG }}\n"
+    calls: list[tuple[str, str, str, int]] = []
+
+    outcome = propose_vva(
+        "File:Foo.png",
+        SVG,
+        text,
+        revid=9,
+        apply=True,
+        decide=scripted_decisions("approve"),
+        publish=recording_publish(calls),
+        out=[].append,
+    )
+
+    assert outcome == "published"
+    _, new_text, summary, _ = calls[0]
+    assert new_text == "{{Vector version available|Foo.svg}}\n{{Information|x}}\n"
+    assert "marker" in summary.lower()
+
+
 def test_vva_duplicate_detected_without_prompt_or_publish() -> None:
     text = "{{Vector version available|Foo.svg}}\n{{Information|x}}\n"
     calls: list[tuple[str, str, str, int]] = []

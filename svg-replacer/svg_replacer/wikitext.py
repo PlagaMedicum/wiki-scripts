@@ -26,8 +26,35 @@ _LITERAL = re.compile(
 
 _URL_JUNK = " \t\r\n).,;'\""
 
+# Every Commons redirect spelling of Template:Convert to SVG (canonical name,
+# {{SVG}}, {{ToSVG}}, {{ConvertToSVG}}, {{Should be SVG}}, {{Vectorize}}, …).
+# MediaWiki matches template names case-insensitively and treats spaces,
+# underscores (and editor-supplied hyphens) alike, so word separators are
+# optional; see Template:Convert to SVG's "shorthand" list and redirect table.
+_MARKER_SEPARATOR = r"[\s_-]*"
+_MARKER_NAMES = "|".join(
+    [
+        "svg",
+        rf"to{_MARKER_SEPARATOR}svg",
+        rf"convert{_MARKER_SEPARATOR}to{_MARKER_SEPARATOR}svg",
+        rf"convert{_MARKER_SEPARATOR}svg",
+        rf"should{_MARKER_SEPARATOR}be{_MARKER_SEPARATOR}(?:svg|vector)",
+        rf"could{_MARKER_SEPARATOR}be{_MARKER_SEPARATOR}(?:svg|vector)",
+        rf"better{_MARKER_SEPARATOR}as{_MARKER_SEPARATOR}svg",
+        rf"convert{_MARKER_SEPARATOR}to{_MARKER_SEPARATOR}vector",
+        r"vectori[sz]e",
+        rf"svg{_MARKER_SEPARATOR}possible",
+        rf"svg{_MARKER_SEPARATOR}request(?:ed|s)?",
+        rf"svg{_MARKER_SEPARATOR}tag(?:ged)?",
+        rf"convert{_MARKER_SEPARATOR}to{_MARKER_SEPARATOR}svg{_MARKER_SEPARATOR}"
+        rf"and{_MARKER_SEPARATOR}copy{_MARKER_SEPARATOR}to{_MARKER_SEPARATOR}"
+        rf"wikimedia{_MARKER_SEPARATOR}commons",
+        "cts",
+        "vvn",
+    ]
+)
 _SVG_MARKER = re.compile(
-    r"\{\{\s*(?:subst\s*:\s*)?(?:svg|convert[ _]+to[ _]+svg)\s*(?:\|[^{}]*)?\}\}",
+    rf"\{{\{{\s*(?:subst\s*:\s*)?(?:{_MARKER_NAMES})\s*(?:\|[^{{}}]*)?\}}\}}",
     re.IGNORECASE,
 )
 
@@ -274,7 +301,13 @@ def _raster_from_url(url: str, ns: FileNamespace) -> tuple[str, str] | None:
 
 
 def remove_svg_markers(text: str) -> str:
-    """Remove {{SVG|…}} / {{Convert to SVG|…}} vectorization-request markers."""
+    """Remove {{Convert to SVG|…}}-family vectorization-request markers.
+
+    Covers every Commons redirect spelling of Template:Convert to SVG
+    ({{SVG}}, {{ConvertToSVG}}, {{ToSVG}}, {{Should be SVG}}, {{Vectorize}},
+    {{SVG request}}, …) in any casing, separator or subst: form; sibling
+    templates ({{Convert to SVG animation}}, {{N2+SVG}}) are never touched.
+    """
     protected = [(match.start(), match.end()) for match in _LITERAL.finditer(text)]
     pieces: list[str] = []
     pos = 0

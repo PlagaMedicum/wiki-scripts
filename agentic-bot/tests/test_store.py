@@ -207,6 +207,34 @@ def test_rebase_base_page(tmp_store: ProposalStore, sample_snapshot: PageSnapsho
     assert rebased.status == "pending"
 
 
+def test_rebase_base_page_flags_unresolved_conflicts(
+    tmp_store: ProposalStore, sample_snapshot: PageSnapshot
+):
+    tmp_store.create(
+        page=sample_snapshot,
+        proposed_content="Old proposal",
+        edit_summary="Summary",
+        rationale="Rationale",
+        issue="Issue",
+    )
+    new_snap = PageSnapshot(
+        title=sample_snapshot.title,
+        revid=999999,
+        timestamp="2026-03-01T00:00:00Z",
+        content="New wiki content",
+    )
+    conflicted = tmp_store.rebase_base_page(
+        "001", new_snap, "<<<<<<< ours\nA\n=======\nB\n>>>>>>> theirs\n"
+    )
+    assert conflicted.status == "pending"
+    assert conflicted.decisions[-1].action == "rebase_with_conflicts"
+    assert "unresolved" in conflicted.decisions[-1].reason
+
+    resolved = tmp_store.rebase_base_page("001", new_snap, "Merged proposal content")
+    assert resolved.decisions[-1].action == "rebase"
+    assert "unresolved" not in resolved.decisions[-1].reason
+
+
 def test_mark_as_bot_autodetection_and_toggle(
     tmp_store: ProposalStore, sample_snapshot: PageSnapshot
 ):

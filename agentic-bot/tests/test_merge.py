@@ -42,6 +42,14 @@ def test_three_way_merge_unchanged():
     assert merged == "modified text\n"
 
 
+def test_has_conflict_markers():
+    from agentic_bot.merge import has_conflict_markers
+
+    assert not has_conflict_markers("line 1\nline 2\n")
+    assert has_conflict_markers("a\n<<<<<<< proposal-v3\nb\n=======\nc\n>>>>>>> live\n")
+    assert has_conflict_markers(">>>>>>> done\n")
+
+
 def test_three_way_merge_reports_command_failure():
     failed = CompletedProcess(args=["git", "merge-file"], returncode=255, stdout="", stderr="error")
     with patch("agentic_bot.merge.subprocess.run", return_value=failed):

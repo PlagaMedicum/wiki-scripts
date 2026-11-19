@@ -6,6 +6,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from agentic_bot.merge import has_conflict_markers
 from agentic_bot.models import (
     DecisionRecord,
     PageSnapshot,
@@ -309,11 +310,20 @@ class ProposalStore:
         proposal.current_version = next_version_num
         proposal.updated_at = now_iso()
         proposal.status = "pending"
+        if has_conflict_markers(new_proposed_content):
+            action = "rebase_with_conflicts"
+            reason = (
+                f"Rebased onto live revision {new_snapshot.revid} with unresolved "
+                "conflict markers (approval blocked until resolved)"
+            )
+        else:
+            action = "rebase"
+            reason = f"Rebased onto live revision {new_snapshot.revid}"
         proposal.decisions.append(
             DecisionRecord(
-                action="rebase",
+                action=action,
                 timestamp=proposal.updated_at,
-                reason=f"Rebased onto live revision {new_snapshot.revid}",
+                reason=reason,
             )
         )
         self.save_metadata(proposal)

@@ -332,3 +332,206 @@ def test_dashboard_open_declined_has_no_side_effects(tmp_path):
     assert loaded.status == "declined"
     assert loaded.current_version == 1
     assert len(loaded.versions) == 1
+
+
+def test_pull_and_merge_for_edit_reports_conflicts(tmp_path):
+    from agentic_bot.review import pull_and_merge_for_edit
+
+    store = ProposalStore(tmp_path)
+    base = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "original line\n")
+    proposal = store.create(base, "proposal line\n", "S", "R", "I")
+    wiki = MagicMock()
+    wiki.fetch_page.return_value = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "wiki line\n")
+
+    text, was_rebased, live, has_conflicts = pull_and_merge_for_edit(
+        Console(), proposal, store, wiki
+    )
+    assert was_rebased
+    assert has_conflicts
+    assert "<<<<<<<" in text
+    assert live.revid == 105
+
+    # Clean merge: live and proposal touch different, non-adjacent lines
+    store2 = ProposalStore(tmp_path / "s2")
+    base2 = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "a\nb\nc\nd\ne\n")
+    proposal2 = store2.create(base2, "a\nP\nc\nd\ne\n", "S", "R", "I")
+    wiki2 = MagicMock()
+    wiki2.fetch_page.return_value = PageSnapshot(
+        "Page", 105, "2026-01-02T00:00:00Z", "a\nb\nc\nd\nL\n"
+    )
+
+    text2, was_rebased2, live2, has_conflicts2 = pull_and_merge_for_edit(
+        Console(), proposal2, store2, wiki2
+    )
+    assert was_rebased2
+    assert not has_conflicts2
+    assert text2 == "a\nP\nc\nd\nL\n"
+
+
+def test_review_edit_conflicted_merge_is_flagged_not_silent(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "original line\n")
+    proposal = store.create(snap, "proposal line\n", "S", "R", "I")
+
+    wiki = MagicMock()
+    wiki.fetch_page.return_value = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "wiki line\n")
+
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["e", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+        patch(
+            "agentic_bot.review.edit_text_in_editor",
+            side_effect=lambda content, suffix: (content, False),
+        ),
+    ):
+        assert review_proposal_interactive(Console(), proposal, store, wiki=wiki) == "back"
+
+    loaded = store.load(proposal.id)
+    assert loaded.status == "pending"
+    assert loaded.decisions[-1].action == "rebase_with_conflicts"
+    assert "<<<<<<<" in loaded.proposed_content
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert any("conflict" in n.lower() for n in notices)
+
+
+def test_review_edit_resolved_conflict_records_clean_rebase(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "original line\n")
+    proposal = store.create(snap, "proposal line\n", "S", "R", "I")
+
+    wiki = MagicMock()
+    wiki.fetch_page.return_value = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "wiki line\n")
+
+    resolved = "combined line\n"
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["e", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)),
+        patch(
+            "agentic_bot.review.edit_text_in_editor",
+            side_effect=lambda content, suffix: (resolved, True),
+        ),
+    ):
+        assert review_proposal_interactive(Console(), proposal, store, wiki=wiki) == "back"
+
+    loaded = store.load(proposal.id)
+    assert loaded.proposed_content == resolved
+    assert loaded.decisions[-1].action == "rebase"
+    assert loaded.status == "pending"
+
+
+def test_review_blocked_approve_and_publish_explain_persistently(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
+    proposal = store.create(snap, "<<<<<<< ours\nA\n=======\nB\n>>>>>>> theirs\n", "S", "R", "I")
+
+    # [a] on conflicted content: blocked with explanation, no confirmation offered
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["a", "down", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+        patch("rich.prompt.Confirm.ask") as mock_confirm,
+    ):
+        assert review_proposal_interactive(Console(), proposal, store) == "back"
+
+    mock_confirm.assert_not_called()
+    assert store.load(proposal.id).status == "pending"
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    # The explanation persists across frames until replaced
+    assert sum("conflict markers" in n.lower() for n in notices) >= 2
+
+    # [p] on pending proposal: blocked with the approval explanation
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["p", "down", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+        patch("rich.prompt.Confirm.ask") as mock_confirm,
+    ):
+        assert review_proposal_interactive(Console(), proposal, store) == "back"
+
+    mock_confirm.assert_not_called()
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert sum("must be approved" in n.lower() for n in notices) >= 2
+
+
+def test_publication_block_reason_statuses(tmp_store: ProposalStore, sample_snapshot: PageSnapshot):
+    from agentic_bot.review import publication_block_reason
+
+    proposal = tmp_store.create(sample_snapshot, "Proposed", "S", "R", "I")
+    assert "approved" in publication_block_reason(proposal)
+
+    tmp_store.set_status(proposal.id, "declined")
+    assert "Reopen" in publication_block_reason(tmp_store.load(proposal.id))
+
+    tmp_store.set_status(proposal.id, "approved")
+    assert publication_block_reason(tmp_store.load(proposal.id)) is None
+
+    conflicted = tmp_store.create(
+        sample_snapshot, "<<<<<<< ours\nA\n=======\nB\n>>>>>>> theirs\n", "S", "R", "I"
+    )
+    tmp_store.set_status(conflicted.id, "approved")
+    reason = publication_block_reason(tmp_store.load(conflicted.id))
+    assert reason is not None
+    assert "conflict markers" in reason.lower()
+
+
+def test_dashboard_blocked_publish_explains_persistently(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
+    store.create(snap, "Proposed", "S", "R", "I")
+    wiki = MagicMock()
+
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("agentic_bot.review.read_key", side_effect=["p", "down", "q"]),
+        patch("agentic_bot.review.render_dashboard_table") as mock_render,
+        patch("rich.prompt.Confirm.ask") as mock_confirm,
+    ):
+        interactive_dashboard_loop(Console(), store, wiki)
+
+    mock_confirm.assert_not_called()
+    wiki.publish_page.assert_not_called()
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert sum("must be approved" in n.lower() for n in notices) >= 2
+
+
+def test_review_r_rebases_stale_proposal_exactly(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "a\nb\nc\nd\ne\n")
+    proposal = store.create(snap, "a\nP\nc\nd\ne\n", "S", "R", "I")
+    wiki = MagicMock()
+    wiki.fetch_page.return_value = PageSnapshot(
+        "Page", 105, "2026-01-02T00:00:00Z", "a\nb\nc\nd\nL\n"
+    )
+
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["r", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+    ):
+        assert review_proposal_interactive(Console(), proposal, store, wiki=wiki) == "back"
+
+    loaded = store.load(proposal.id)
+    assert loaded.page.revid == 105
+    assert loaded.proposed_content == "a\nP\nc\nd\nL\n"
+    assert loaded.status == "pending"  # renewed human approval required
+    assert loaded.decisions[-1].action == "rebase"
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert any("105" in n for n in notices)
+
+
+def test_review_r_on_current_revision_changes_nothing(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "base\n")
+    proposal = store.create(snap, "proposed\n", "S", "R", "I")
+    wiki = MagicMock()
+    wiki.fetch_page.return_value = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "base\n")
+
+    with (
+        patch("agentic_bot.review.read_key", side_effect=["r", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+    ):
+        assert review_proposal_interactive(Console(), proposal, store, wiki=wiki) == "back"
+
+    loaded = store.load(proposal.id)
+    assert loaded.current_version == 1
+    assert loaded.decisions == []
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert any("nothing to rebase" in n.lower() for n in notices)

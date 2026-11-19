@@ -4,6 +4,7 @@ import re
 import shutil
 import sys
 import webbrowser
+from functools import lru_cache
 from typing import Any
 
 from rich.console import Console
@@ -14,7 +15,7 @@ from rich.table import Table
 
 from agentic_bot.diff import compute_diff_stats, format_diff_lines
 from agentic_bot.editor import edit_text_in_editor
-from agentic_bot.merge import three_way_merge
+from agentic_bot.merge import has_conflict_markers, three_way_merge
 from agentic_bot.models import PageSnapshot, Proposal
 from agentic_bot.store import ProposalStore
 from agentic_bot.tui import alternate_screen, format_badge, read_key
@@ -29,12 +30,39 @@ def get_file_suffix_for_page(title: str) -> str:
     return ".txt"
 
 
-def confirm_publication(console: Console, proposal: Proposal) -> bool | None:
+def approval_block_reason(proposal: Proposal) -> str | None:
+    """Return why approval is blocked, or None when the proposal is approvable."""
+    if proposal.status != "pending":
+        return (
+            f"Only pending proposals can be approved (status: {proposal.status.upper()}) "
+            "— reopen it first."
+        )
+    if has_conflict_markers(proposal.proposed_content):
+        return (
+            "Unresolved conflict markers in the proposed content — "
+            "resolve them with [e] before approving."
+        )
+    return None
+
+
+def publication_block_reason(proposal: Proposal) -> str | None:
+    """Return why publication is blocked, or None when the proposal is publishable."""
+    if proposal.status == "pending":
+        return "Proposal must be approved before publishing."
     if proposal.status != "approved":
-        if proposal.status == "pending":
-            console.print("[yellow]Proposal must be approved before publishing.[/yellow]")
-        else:
-            console.print("[red]Reopen the proposal before publishing.[/red]")
+        return "Reopen the proposal before publishing."
+    if has_conflict_markers(proposal.proposed_content):
+        return (
+            "Unresolved conflict markers in the proposed content — "
+            "resolve them with [e] before publishing."
+        )
+    return None
+
+
+def confirm_publication(console: Console, proposal: Proposal) -> bool | None:
+    reason = publication_block_reason(proposal)
+    if reason:
+        console.print(f"[yellow]{reason}[/yellow]")
         return None
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         console.print("[red]Publication requires an interactive terminal.[/red]")
@@ -45,6 +73,46 @@ def confirm_publication(console: Console, proposal: Proposal) -> bool | None:
         default=False,
         console=console,
     )
+
+
+def attempt_publish(
+    console: Console,
+    proposal: Proposal,
+    store: ProposalStore,
+    wiki: WikiClient,
+) -> tuple[Proposal, str, bool]:
+    """Run the publication flow with explicit feedback.
+
+    Returns (proposal, notice, succeeded). Every outcome leaves a durable
+    notice string; the decision log records conflicts and publications.
+    """
+    try:
+        console.print("[cyan]Verifying page freshness and permissions...[/cyan]")
+        new_revid, ts = wiki.publish_page(
+            title=proposal.page.title,
+            text=proposal.proposed_content,
+            summary=proposal.edit_summary,
+            expected_revid=proposal.page.revid,
+            mark_as_bot=proposal.mark_as_bot,
+        )
+        proposal = store.record_publication(proposal.id, new_revid, ts)
+        console.print(
+            f"[bold green]SUCCESS: Proposal #{proposal.id} "
+            f"published as revision {new_revid}![/bold green]\n"
+        )
+        notice = f"Published as revision {new_revid}."
+    except EditConflictDetectedError as exc:
+        console.print(f"[bold red]CONFLICT: {exc}[/bold red]")
+        proposal = store.set_status(proposal.id, "conflict", reason=str(exc))
+        notice = f"Publication blocked — edit conflict: {exc}"
+    except InsufficientPermissionsError as exc:
+        console.print(f"[bold red]PERMISSION DENIED: {exc}[/bold red]")
+        notice = f"Publication blocked — insufficient permissions: {exc}"
+    except Exception as exc:
+        console.print(f"[bold red]PUBLICATION ERROR: {exc}[/bold red]\n")
+        notice = f"Publication failed: {exc}"
+    Prompt.ask("Press Enter to return", default="", console=console)
+    return proposal, notice, proposal.status == "published"
 
 
 def extract_test_status(rationale: str) -> str:
@@ -102,22 +170,15 @@ def sync_proposal_with_wiki(
     return f"outdated:{live.revid}", proposal
 
 
-def pull_and_merge_for_edit(
-    console: Console,
-    proposal: Proposal,
-    store: ProposalStore,
-    wiki: WikiClient,
-) -> tuple[str, bool, PageSnapshot]:
-    """Pull latest live revision and 3-way merge before opening editor."""
-    try:
-        live = wiki.fetch_page(proposal.page.title)
-    except Exception:
-        return proposal.proposed_content, False, proposal.page
+def merge_with_live(proposal: Proposal, live: PageSnapshot) -> tuple[str, bool]:
+    """3-way merge the proposal against a live snapshot.
 
+    Returns (text, has_conflicts). Without a newer live revision the
+    proposed text is returned unchanged.
+    """
     if live.revid == proposal.page.revid:
-        return proposal.proposed_content, False, live
-
-    merged_text, has_conflicts = three_way_merge(
+        return proposal.proposed_content, False
+    return three_way_merge(
         base_text=proposal.page.content,
         proposed_text=proposal.proposed_content,
         live_text=live.content,
@@ -125,7 +186,52 @@ def pull_and_merge_for_edit(
         proposed_label=f"proposal-v{proposal.current_version}",
         live_label=f"live-rev-{live.revid}",
     )
-    return merged_text, True, live
+
+
+def pull_and_merge_for_edit(
+    console: Console,
+    proposal: Proposal,
+    store: ProposalStore,
+    wiki: WikiClient,
+) -> tuple[str, bool, PageSnapshot, bool]:
+    """Pull latest live revision and 3-way merge before opening editor.
+
+    Returns (text, was_rebased, live, has_conflicts).
+    """
+    try:
+        live = wiki.fetch_page(proposal.page.title)
+    except Exception:
+        return proposal.proposed_content, False, proposal.page, False
+
+    if live.revid == proposal.page.revid:
+        return proposal.proposed_content, False, live, False
+
+    merged_text, has_conflicts = merge_with_live(proposal, live)
+    return merged_text, True, live, has_conflicts
+
+
+def apply_rebase(
+    store: ProposalStore,
+    proposal: Proposal,
+    live: PageSnapshot,
+    new_content: str,
+) -> tuple[Proposal, str, bool]:
+    """Persist a pull-and-merge result; never present unresolved conflicts as success.
+
+    Returns (proposal, message, conflicted). The decision log records
+    'rebase_with_conflicts' when markers remain in the saved content.
+    """
+    proposal = store.rebase_base_page(
+        proposal.id, new_snapshot=live, new_proposed_content=new_content
+    )
+    if has_conflict_markers(new_content):
+        message = (
+            f"Rebased onto live revision {live.revid} (v{proposal.current_version}) with "
+            "UNRESOLVED conflict markers — approval is blocked until they are resolved in the editor."
+        )
+        return proposal, message, True
+    message = f"Rebased onto live revision {live.revid} (v{proposal.current_version})."
+    return proposal, message, False
 
 
 def render_dashboard_table(
@@ -133,6 +239,7 @@ def render_dashboard_table(
     proposals: list[Proposal],
     selected_idx: int = 0,
     filter_status: str = "all",
+    notice: str = "",
 ) -> None:
     """Render proposals dashboard table with an active cursor row."""
 
@@ -152,6 +259,8 @@ def render_dashboard_table(
         )
         if conflict_count:
             summary_bar += f"  │  [bold red]Conflicts:[/bold red] {conflict_count}"
+        if notice:
+            summary_bar += f"\n[bold yellow]NOTICE:[/bold yellow] {escape(notice)}"
 
         c.print(
             Panel(
@@ -257,14 +366,19 @@ def render_dashboard(
     return proposals
 
 
-def build_proposal_content_lines(
-    proposal: Proposal,
-    view_mode: str = "all",
-    width: int = 80,
-    color_system: str = "auto",
-) -> list[str]:
-    """Build formatted, colorized content lines for the scrollable viewport."""
-    buf = Console(force_terminal=True, color_system=color_system or "auto", width=width)
+@lru_cache(maxsize=64)
+def _content_lines(
+    page_content: str,
+    proposed_content: str,
+    rationale: str,
+    edit_summary: str,
+    page_title: str,
+    view_mode: str,
+    width: int,
+    color_system: str,
+) -> tuple[str, ...]:
+    """Build content lines for a fixed set of proposal texts (cacheable)."""
+    buf = Console(force_terminal=True, color_system=color_system, width=width)
     lines: list[str] = []
 
     def _render(obj: Any) -> list[str]:
@@ -273,29 +387,25 @@ def build_proposal_content_lines(
         return cap.get().splitlines()
 
     # Rationale
-    if view_mode in ("all", "rationale") and proposal.rationale.strip():
+    if view_mode in ("all", "rationale") and rationale.strip():
         lines.extend(
             _render(
                 "[bold cyan]── Agent Rationale & Verification ──────────────────────────────────────[/bold cyan]"
             )
         )
-        for rl in proposal.rationale.strip().splitlines():
+        for rl in rationale.strip().splitlines():
             lines.extend(_render(escape(rl)))
         lines.append("")
 
     # Diff
     if view_mode in ("all", "diff"):
-        added, removed = compute_diff_stats(proposal.page.content, proposal.proposed_content)
+        added, removed = compute_diff_stats(page_content, proposed_content)
         lines.extend(
             _render(
                 f"[bold cyan]── Proposed Changes (Diff: [green]+{added}[/green] / [red]-{removed}[/red] lines) ──────────────────────────[/bold cyan]"
             )
         )
-        diff_lines = format_diff_lines(
-            proposal.page.content,
-            proposal.proposed_content,
-            title=proposal.page.title,
-        )
+        diff_lines = format_diff_lines(page_content, proposed_content, title=page_title)
         for dl in diff_lines:
             lines.extend(_render(dl))
         lines.append("")
@@ -307,9 +417,33 @@ def build_proposal_content_lines(
                 "[bold cyan]── Proposed Edit Summary ─────────────────────────────────────────────[/bold cyan]"
             )
         )
-        lines.extend(_render(f'[bold green]"{escape(proposal.edit_summary)}"[/bold green]'))
+        lines.extend(_render(f'[bold green]"{escape(edit_summary)}"[/bold green]'))
 
-    return lines
+    return tuple(lines)
+
+
+def build_proposal_content_lines(
+    proposal: Proposal,
+    view_mode: str = "all",
+    width: int = 80,
+    color_system: str = "auto",
+) -> list[str]:
+    """Build formatted, colorized content lines for the scrollable viewport.
+
+    Cached per content values so per-key frame redraws skip the recompute.
+    """
+    return list(
+        _content_lines(
+            proposal.page.content,
+            proposal.proposed_content,
+            proposal.rationale,
+            proposal.edit_summary,
+            proposal.page.title,
+            view_mode,
+            width,
+            color_system or "auto",
+        )
+    )
 
 
 def render_proposal_view(
@@ -318,6 +452,7 @@ def render_proposal_view(
     scroll_offset: int = 0,
     view_mode: str = "all",
     sync_status: str = "offline",
+    notice: str = "",
 ) -> tuple[int, int, int]:
     """Render proposal card with pinned header/footer and middle scrollable viewport.
 
@@ -371,6 +506,8 @@ def render_proposal_view(
         f"[bold]Version:[/bold] {proposal.current_version} of {len(proposal.versions)}\n"
         f"[bold]Issue:[/bold]    {proposal.issue}"
     )
+    if notice:
+        header_text += f"\n[bold yellow]NOTICE:[/bold yellow] {escape(notice)}"
 
     buf = Console(force_terminal=True, color_system=console.color_system or "auto", width=term_cols)
 
@@ -422,6 +559,7 @@ def render_proposal_view(
         f"{format_badge('p', 'Publish', 'cyan')}   "
         f"{format_badge('d', 'Decline', 'red')}   "
         f"{format_badge('e', 'Vim Edit', 'yellow')}   "
+        f"{format_badge('r', 'Rebase', 'yellow')}   "
         f"{format_badge('m', 'Summary', 'magenta')}   "
         f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
         f"{format_badge('o', 'Browser', 'blue')}   "
@@ -459,6 +597,7 @@ def review_proposal_interactive(
     scroll_offset = 0
     view_modes = ["all", "diff", "rationale"]
     view_idx = 0
+    notice = ""
 
     while True:
         current_view = view_modes[view_idx]
@@ -468,6 +607,7 @@ def review_proposal_interactive(
             scroll_offset=scroll_offset,
             view_mode=current_view,
             sync_status=sync_status,
+            notice=notice,
         )
 
         key = read_key()
@@ -526,28 +666,30 @@ def review_proposal_interactive(
 
         # Approve
         if key == "a":
-            if (
-                proposal.status == "pending"
-                and "<<<<<<<" not in proposal.proposed_content
-                and ">>>>>>>" not in proposal.proposed_content
-            ):
-                if sys.stdout.isatty():
-                    sys.stdout.write("\033[?1049l\033[?25h")
-                    sys.stdout.flush()
-                try:
-                    confirmed = Confirm.ask(
-                        f"[bold green]Approve proposal #{proposal.id} for publication?[/bold green]",
-                        default=False,
-                        console=console,
+            reason = approval_block_reason(proposal)
+            if reason:
+                notice = reason
+                continue
+            if sys.stdout.isatty():
+                sys.stdout.write("\033[?1049l\033[?25h")
+                sys.stdout.flush()
+            try:
+                confirmed = Confirm.ask(
+                    f"[bold green]Approve proposal #{proposal.id} for publication?[/bold green]",
+                    default=False,
+                    console=console,
+                )
+                if confirmed:
+                    proposal = store.set_status(
+                        proposal.id, "approved", reason="Approved in review"
                     )
-                    if confirmed:
-                        proposal = store.set_status(
-                            proposal.id, "approved", reason="Approved in review"
-                        )
-                finally:
-                    if sys.stdout.isatty():
-                        sys.stdout.write("\033[?1049h\033[?25l")
-                        sys.stdout.flush()
+                    notice = f"Proposal #{proposal.id} approved — press [p] to publish."
+                else:
+                    notice = "Approval cancelled."
+            finally:
+                if sys.stdout.isatty():
+                    sys.stdout.write("\033[?1049h\033[?25l")
+                    sys.stdout.flush()
             continue
 
         # Decline
@@ -578,7 +720,7 @@ def review_proposal_interactive(
                     wiki = None
 
             if wiki is not None:
-                text_to_edit, was_rebased, live = pull_and_merge_for_edit(
+                text_to_edit, was_rebased, live, _has_conflicts = pull_and_merge_for_edit(
                     console, proposal, store, wiki
                 )
             else:
@@ -602,17 +744,16 @@ def review_proposal_interactive(
 
             if modified or was_rebased:
                 if was_rebased:
-                    proposal = store.rebase_base_page(
-                        proposal.id,
-                        new_snapshot=live,
-                        new_proposed_content=new_content,
-                    )
+                    proposal, notice, _conflicted = apply_rebase(store, proposal, live, new_content)
                     sync_status = f"rebased:{live.revid}"
                 else:
                     proposal = store.update_content(
                         proposal.id,
                         new_content=new_content,
                         action="edit_content_vim",
+                    )
+                    notice = (
+                        f"Saved version v{proposal.current_version} — renewed approval required."
                     )
             continue
 
@@ -632,8 +773,42 @@ def review_proposal_interactive(
                 proposal = store.update_summary(proposal.id, new_summary.strip())
             continue
 
+        # Explicit rebase onto the live revision
+        if key == "r":
+            if has_conflict_markers(proposal.proposed_content):
+                notice = "Resolve the conflict markers with [e] before rebasing."
+                continue
+            if wiki is None:
+                try:
+                    wiki = WikiClient(
+                        site_lang=proposal.page.site_lang,
+                        family=proposal.page.family,
+                    )
+                except Exception:
+                    wiki = None
+            if wiki is None:
+                notice = "Cannot rebase: wiki client unavailable."
+                continue
+            try:
+                live = wiki.fetch_page(proposal.page.title)
+            except Exception as exc:
+                notice = f"Cannot rebase: failed to fetch the live page ({exc})."
+                continue
+            if live.revid == proposal.page.revid:
+                notice = f"Already on live revision {live.revid} — nothing to rebase."
+                continue
+            merged_text, _has_conflicts = merge_with_live(proposal, live)
+            proposal, notice, _conflicted = apply_rebase(store, proposal, live, merged_text)
+            sync_status = f"rebased:{live.revid}"
+            continue
+
         # Publish
         if key == "p":
+            reason = publication_block_reason(proposal)
+            if reason:
+                notice = reason
+                continue
+
             if sys.stdout.isatty():
                 sys.stdout.write("\033[?1049l\033[?25h")
                 sys.stdout.flush()
@@ -649,31 +824,9 @@ def review_proposal_interactive(
                         family=proposal.page.family,
                     )
 
-                try:
-                    console.print("[cyan]Verifying page freshness and permissions...[/cyan]")
-                    new_revid, ts = wiki.publish_page(
-                        title=proposal.page.title,
-                        text=proposal.proposed_content,
-                        summary=proposal.edit_summary,
-                        expected_revid=proposal.page.revid,
-                        mark_as_bot=proposal.mark_as_bot,
-                    )
-                    proposal = store.record_publication(proposal.id, new_revid, ts)
-                    console.print(
-                        f"[bold green]SUCCESS: Proposal #{proposal.id} published as revision {new_revid}![/bold green]\n"
-                    )
-                    Prompt.ask("Press Enter to return", default="", console=console)
+                proposal, notice, succeeded = attempt_publish(console, proposal, store, wiki)
+                if succeeded:
                     return "back"
-                except EditConflictDetectedError as exc:
-                    console.print(f"[bold red]CONFLICT: {exc}[/bold red]")
-                    proposal = store.set_status(proposal.id, "conflict", reason=str(exc))
-                    Prompt.ask("Press Enter to return", default="", console=console)
-                except InsufficientPermissionsError as exc:
-                    console.print(f"[bold red]PERMISSION DENIED: {exc}[/bold red]")
-                    Prompt.ask("Press Enter to return", default="", console=console)
-                except Exception as exc:
-                    console.print(f"[bold red]PUBLICATION ERROR: {exc}[/bold red]\n")
-                    Prompt.ask("Press Enter to return", default="", console=console)
             finally:
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[?1049h\033[?25l")
@@ -689,6 +842,7 @@ def interactive_dashboard_loop(
     filter_cycles = ["all", "pending", "approved", "declined"]
     filter_idx = 0
     selected_idx = 0
+    notice = ""
 
     with alternate_screen():
         while True:
@@ -705,6 +859,7 @@ def interactive_dashboard_loop(
                 proposals,
                 selected_idx=selected_idx,
                 filter_status=current_filter,
+                notice=notice,
             )
 
             key = read_key()
@@ -740,7 +895,7 @@ def interactive_dashboard_loop(
                 store.toggle_mark_as_bot(current_proposal.id)
                 continue
 
-            # Open proposal: auto-fetch latest version from wiki
+            # Open proposal: read-only live-revision check (rebase explicitly with [r])
             if key in ("enter", "space", "right"):
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[2J\033[H")
@@ -793,7 +948,7 @@ def interactive_dashboard_loop(
                         wiki = None
 
                 if wiki is not None:
-                    text_to_edit, was_rebased, live = pull_and_merge_for_edit(
+                    text_to_edit, was_rebased, live, _has_conflicts = pull_and_merge_for_edit(
                         console, current_proposal, store, wiki
                     )
                 else:
@@ -817,10 +972,8 @@ def interactive_dashboard_loop(
 
                 if modified or was_rebased:
                     if was_rebased:
-                        store.rebase_base_page(
-                            current_proposal.id,
-                            new_snapshot=live,
-                            new_proposed_content=new_content,
+                        _, notice, _conflicted = apply_rebase(
+                            store, current_proposal, live, new_content
                         )
                     else:
                         store.update_content(
@@ -828,9 +981,15 @@ def interactive_dashboard_loop(
                             new_content=new_content,
                             action="edit_content_vim",
                         )
+                        notice = "Content saved — renewed approval required."
                 continue
 
             if key == "p":
+                reason = publication_block_reason(current_proposal)
+                if reason:
+                    notice = reason
+                    continue
+
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[?1049l\033[?25h")
                     sys.stdout.flush()
@@ -842,24 +1001,9 @@ def interactive_dashboard_loop(
                                 site_lang=current_proposal.page.site_lang,
                                 family=current_proposal.page.family,
                             )
-                        try:
-                            console.print(
-                                "[cyan]Verifying page freshness and permissions...[/cyan]"
-                            )
-                            new_revid, ts = wiki.publish_page(
-                                title=current_proposal.page.title,
-                                text=current_proposal.proposed_content,
-                                summary=current_proposal.edit_summary,
-                                expected_revid=current_proposal.page.revid,
-                                mark_as_bot=current_proposal.mark_as_bot,
-                            )
-                            store.record_publication(current_proposal.id, new_revid, ts)
-                            console.print(
-                                f"[bold green]SUCCESS: Proposal #{current_proposal.id} published as revision {new_revid}![/bold green]"
-                            )
-                        except Exception as exc:
-                            console.print(f"[bold red]Publication error: {exc}[/bold red]")
-                        Prompt.ask("Press Enter to continue", default="", console=console)
+                        _, notice, _succeeded = attempt_publish(
+                            console, current_proposal, store, wiki
+                        )
                 finally:
                     if sys.stdout.isatty():
                         sys.stdout.write("\033[?1049h\033[?25l")

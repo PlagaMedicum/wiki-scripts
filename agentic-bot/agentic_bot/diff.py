@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+from functools import lru_cache
 
 from rich.console import Console
 from rich.markup import escape
@@ -20,8 +21,11 @@ def generate_unified_diff(original: str, proposed: str, title: str = "page") -> 
     return "".join(diff)
 
 
+@lru_cache(maxsize=64)
 def compute_diff_stats(original: str, proposed: str) -> tuple[int, int]:
     """Calculate the number of added and removed lines in the diff.
+
+    Cached by content: TUI frames recompute badges from unchanged texts.
 
     Returns:
         tuple[int, int]: (added_lines, removed_lines)

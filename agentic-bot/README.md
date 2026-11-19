@@ -63,6 +63,7 @@ When inspecting a proposal, pressing `[e]` to edit in Vim:
 - `[p]` Publish / apply to Wikipedia (verifies approval, freshness, and interface permissions, requires explicit `[y/N]` confirmation).
 - `[d]` Discard / decline (prompts for optional rejection rationale, keeps durable history).
 - `[e]` Edit in Vim with automatic pull-and-merge.
+- `[r]` Rebase onto the latest live revision (3-way merge without editing; unresolved conflicts must be fixed with `[e]`).
 - `[m]` Edit edit summary in Vim.
 - `[o]` Open the affected Wikipedia page URL in your default browser.
 - `[b]` Back to dashboard.

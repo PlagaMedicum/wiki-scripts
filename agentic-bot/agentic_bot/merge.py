@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+_CONFLICT_MARKER_RE = re.compile(r"(?m)^(?:<{7}(?:\s|$)|={7}\s*$|>{7}(?:\s|$))")
+
+
+def has_conflict_markers(text: str) -> bool:
+    """Return True when text carries unresolved merge conflict markers."""
+    return bool(_CONFLICT_MARKER_RE.search(text))
 
 
 def three_way_merge(

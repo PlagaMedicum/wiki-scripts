@@ -8,6 +8,7 @@ from rich.console import Console
 
 from agentic_bot.editor import edit_text_in_editor
 from agentic_bot.review import (
+    apply_rebase,
     confirm_publication,
     get_file_suffix_for_page,
     interactive_dashboard_loop,
@@ -71,7 +72,7 @@ def cmd_edit(args: argparse.Namespace, store: ProposalStore, console: Console) -
         wiki = None
 
     if wiki is not None:
-        text_to_edit, was_rebased, live_snapshot = pull_and_merge_for_edit(
+        text_to_edit, was_rebased, live_snapshot, _has_conflicts = pull_and_merge_for_edit(
             console, proposal, store, wiki
         )
     else:
@@ -82,15 +83,11 @@ def cmd_edit(args: argparse.Namespace, store: ProposalStore, console: Console) -
 
     if modified or was_rebased:
         if was_rebased:
-            proposal = store.rebase_base_page(
-                proposal.id,
-                new_snapshot=live_snapshot,
-                new_proposed_content=new_content,
+            proposal, message, conflicted = apply_rebase(
+                store, proposal, live_snapshot, new_content
             )
-            console.print(
-                f"[bold green]Rebased proposal #{proposal.id} onto live revision "
-                f"{live_snapshot.revid} (v{proposal.current_version})![/bold green]"
-            )
+            style = "bold red" if conflicted else "bold green"
+            console.print(f"[{style}]{message}[/{style}]")
         else:
             proposal = store.update_content(proposal.id, new_content, action="cli_edit")
             console.print(

@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
-from svg_replacer.api import ApiError, EditConflict, PageRevision
+from svg_replacer.api import ApiError, EditConflict, EditWarning, PageRevision
 from svg_replacer.wikitext import (
     Assessment,
     FileNamespace,
@@ -19,6 +19,7 @@ from svg_replacer.wikitext import (
 
 Decide = Callable[["Proposal"], str]
 Publish = Callable[[str, str, str, int], int]
+Confirm = Callable[[str], bool]
 Emit = Callable[[str], None]
 
 _STATUS_ORDER = {"replace": 0, "blocked": 1, "indirect": 2, "missing": 3}
@@ -208,6 +209,41 @@ def _reject_unknown(decision: str) -> None:
         raise ValueError(f"unknown decision {decision!r}; never guessing")
 
 
+def _publish_with_warning_ack(
+    publish: Publish,
+    args: tuple[str, str, str, int],
+    confirm: Confirm | None,
+    out: Emit,
+) -> tuple[str, str]:
+    """Publish one edit, acknowledging a warn-level refusal at most once.
+
+    AbuseFilter warns once per session and allows the identical resubmission,
+    so after the server warning is shown an explicit default-NO confirmation
+    permits exactly one resubmission of the same edit (same baserevid).
+    Declining skips; a failed retry stays failed. Returns (outcome, reason).
+    """
+    title = args[0]
+    warned = False
+    while True:
+        try:
+            publish(*args)
+        except EditWarning as exc:
+            if warned:
+                return "failed", f"{exc.code}: {exc.info}"
+            warned = True
+            out(f"Server warning on {title}: {exc.info}")
+            if confirm is None or not confirm(
+                "Resubmit the same edit to acknowledge this warning?"
+            ):
+                return "skipped", "warning not acknowledged (declined)"
+            continue
+        except EditConflict as exc:
+            return "failed", f"conflict: {exc}"
+        except ApiError as exc:
+            return "failed", f"{exc.code}: {exc.info}"
+        return "published", ""
+
+
 def review_pages(
     reviews: list[PageReview],
     *,
@@ -216,6 +252,7 @@ def review_pages(
     decide: Decide,
     publish: Publish,
     out: Emit,
+    confirm: Confirm | None = None,
 ) -> Summary:
     """Interactive review loop: every candidate needs an explicit decision.
 
@@ -269,17 +306,17 @@ def review_pages(
             summary.dry_approved.append(title)
             out(f"Previewed article: {title} (not saved)")
             continue
-        try:
-            publish(title, new_text, proposal.edit_summary, review.revid)
-        except EditConflict as exc:
-            summary.failed.append((title, f"conflict: {exc}"))
-            out(f"FAILED {title}: conflict: {exc}")
-        except ApiError as exc:
-            summary.failed.append((title, f"{exc.code}: {exc.info}"))
-            out(f"FAILED {title}: {exc}")
-        else:
+        outcome, reason = _publish_with_warning_ack(
+            publish, (title, new_text, proposal.edit_summary, review.revid), confirm, out
+        )
+        if outcome == "published":
             summary.published.append(title)
             out(f"published {title}")
+        elif outcome == "skipped":
+            _record_skip(summary, title, reason, out)
+        else:
+            summary.failed.append((title, reason))
+            out(f"FAILED {title}: {reason}")
     return summary
 
 
@@ -298,6 +335,7 @@ def propose_vva(
     decide: Decide,
     publish: Publish,
     out: Emit,
+    confirm: Confirm | None = None,
 ) -> str:
     """Separately propose the Commons notice and marker cleanup on one page."""
     marker_removed = remove_svg_markers(text) != text
@@ -336,16 +374,17 @@ def propose_vva(
     if not apply:
         out("Previewed Commons notice (not saved).")
         return "dry"
-    try:
-        publish(raster_title, new_text, proposal.edit_summary, revid)
-    except EditConflict as exc:
-        out(f"FAILED {raster_title}: conflict: {exc}")
-        return "failed"
-    except ApiError as exc:
-        out(f"FAILED {raster_title}: {exc}")
-        return "failed"
-    out(f"published {raster_title}")
-    return "published"
+    outcome, reason = _publish_with_warning_ack(
+        publish, (raster_title, new_text, proposal.edit_summary, revid), confirm, out
+    )
+    if outcome == "published":
+        out(f"published {raster_title}")
+        return "published"
+    if outcome == "skipped":
+        out(f"skipped Commons template for {raster_title}")
+        return "skipped"
+    out(f"FAILED {raster_title}: {reason}")
+    return "failed"
 
 
 def render_summary(summary: Summary, *, commons_outcome: str | None = None) -> str:

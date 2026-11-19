@@ -251,6 +251,113 @@ def test_cli_without_arguments_prompts_for_svg_link(monkeypatch, capsys):
     assert "expected a commons.wikimedia.org URL" in capsys.readouterr().err
 
 
+def _recording_api(log: list) -> type:
+    """Multi-wiki stand-in that records discovery and write calls in order."""
+
+    class FakeApi:
+        def __init__(self, host):
+            self.host = host
+
+        def imageinfo(self, title):
+            svg = title.endswith(".svg")
+            return SimpleNamespace(
+                title=title,
+                missing=False,
+                mime="image/svg+xml" if svg else "image/png",
+                repository="shared",
+                url="https://upload.wikimedia.org/" + title,
+                width=10,
+                height=10,
+                description_url="https://example.invalid",
+                thumb_url=None,
+            )
+
+        def page_revisions(self, titles):
+            pages = {}
+            for title in titles:
+                if title.endswith(".svg"):
+                    text = "{{Derived from|File:Old.png}}"
+                elif title.endswith(".png"):
+                    text = "{{Convert to SVG}}\n[[File:Old.png|thumb|x]]"
+                else:
+                    text = "[[File:Old.png|thumb|Апісанне]]"
+                pages[title] = SimpleNamespace(title=title, missing=False, text=text, revid=1)
+            return pages
+
+        def file_namespaces(self):
+            return FileNamespace.of("File")
+
+        def global_usage(self, *args, **kwargs):
+            log.append(("discovery", self.host))
+            return [
+                {
+                    "wiki": "be.wikipedia.org",
+                    "title": "Артыкул",
+                    "ns": 0,
+                    "pageid": 1,
+                    "url": "https://be.wikipedia.org/wiki/Артыкул",
+                }
+            ]
+
+        def login(self, credentials):
+            log.append(("login", self.host))
+
+        def edit(self, *, title, text, summary, base_revid):
+            log.append(("edit", self.host, title))
+            return 7
+
+    return FakeApi
+
+
+def _drive_cli(monkeypatch, log: list, decision: str) -> int:
+    monkeypatch.setattr(cli, "MediaWikiApi", _recording_api(log))
+    monkeypatch.setattr(cli, "load_credentials", lambda path: Credentials("user@bot", "synthetic"))
+    monkeypatch.setattr(cli, "confirm", lambda _: True)
+    monkeypatch.setattr(cli, "Decider", lambda **kwargs: lambda proposal: decision)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    return cli.main(["File:New.svg", "--raster", "File:Old.png", "--wiki", "be"])
+
+
+def test_cli_commons_description_edit_precedes_discovery_and_article_edits(monkeypatch):
+    log: list = []
+    result = _drive_cli(monkeypatch, log, "approve")
+
+    assert result == 0
+    assert log.count(("edit", "commons.wikimedia.org", "File:Old.png")) == 1
+    assert log.count(("edit", "be.wikipedia.org", "Артыкул")) == 1
+    assert log.index(("edit", "commons.wikimedia.org", "File:Old.png")) < log.index(
+        ("discovery", "commons.wikimedia.org")
+    )
+    assert log.index(("discovery", "commons.wikimedia.org")) < log.index(
+        ("edit", "be.wikipedia.org", "Артыкул")
+    )
+
+
+def test_cli_quit_at_commons_step_stops_before_article_work(monkeypatch, capsys):
+    log: list = []
+    result = _drive_cli(monkeypatch, log, "stop")
+
+    assert result == 0
+    assert [entry for entry in log if entry[0] == "edit"] == []
+    assert [entry for entry in log if entry[0] == "discovery"] == []
+    assert "Stopped" in capsys.readouterr().out
+
+
+def test_cli_commons_skip_leaves_article_review_untouched(monkeypatch):
+    log: list = []
+    decisions = iter(["skip", "approve"])
+    monkeypatch.setattr(cli, "MediaWikiApi", _recording_api(log))
+    monkeypatch.setattr(cli, "load_credentials", lambda path: Credentials("user@bot", "synthetic"))
+    monkeypatch.setattr(cli, "confirm", lambda _: True)
+    monkeypatch.setattr(cli, "Decider", lambda **kwargs: lambda proposal: next(decisions))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    result = cli.main(["File:New.svg", "--raster", "File:Old.png", "--wiki", "be"])
+
+    assert result == 0
+    assert log.count(("edit", "commons.wikimedia.org", "File:Old.png")) == 0
+    assert log.count(("edit", "be.wikipedia.org", "Артыкул")) == 1
+
+
 def test_shared_image_does_not_need_local_description_page():
     response = {
         "query": {

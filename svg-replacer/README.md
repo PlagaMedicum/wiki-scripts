@@ -20,6 +20,13 @@ the operator through one reviewed, approved replacement at a time.
   with the revision the diff was built from, and the same revision id is passed
   as `baserevid`; the server enforces it. Conflicts and API errors are reported
   as failed edits, never as successes.
+- **AbuseFilter warnings.** A warn-level refusal is shown as the server's
+  readable warning text and needs an explicit default-no confirmation to
+  resubmit the identical edit once — the acknowledgement the server expects
+  (it warns only once per session). Declining skips that item; a failed retry
+  stays failed; disallow-level refusals are never retried. Requests use
+  `errorformat=plaintext` and never send `ignorewarnings` (not an `action=edit`
+  parameter).
 - **Wikitext preservation.** Replacement rewrites only the filename span inside
   a direct `[[File:…]]`-style link. Namespace aliases, underscores, image
   options, captions, dimensions, Unicode (Belarusian text) and all surrounding
@@ -64,18 +71,19 @@ make svg-replacer-run
    the tool asks for the raster URL (`--raster` pre-fills it); it never guesses.
 2. Show one Commons description-page link per file for visual comparison
    (confirmation required).
-3. Query the MediaWiki GlobalUsage API for pages using the raster across every
-   Wikimedia project (or only the editions named with `--wiki`), filtered to
-   the selected namespaces (default 0).
-4. List candidate titles; direct article uses come first, auto-skips are labelled.
-5. Show each target link, exact unified diff (including surrounding context) and
+3. Separately propose the Commons file-description page of the raster first:
+   add `{{Vector version available|Example.svg}}` on top and remove any stale
+   `{{SVG}}`/`{{Convert to SVG}}` conversion-request marker (one diff, one
+   approval). Existing equivalent notices are detected and never duplicated.
+   Quitting at this step stops before any article work; skipping it leaves the
+   article review untouched.
+4. Query the MediaWiki GlobalUsage API for pages using the raster across every
+   Wikimedia project (or only the editions named with `--wiki`), filtered to the
+   selected namespaces (default 0).
+5. List candidate titles; direct article uses come first, auto-skips are labelled.
+6. Show each target link, exact unified diff (including surrounding context) and
    edit summary. Press `Enter` (or `a`) to approve — the action is Preview when
    publishing is off, Publish otherwise — `s` to skip, `q` to quit.
-6. After the article loop, separately propose the Commons file-description page
-   of the raster: add `{{Vector version available|Example.svg}}` on top and
-   remove any stale `{{SVG}}`/`{{Convert to SVG}}` conversion-request marker
-   (one diff, one approval). Existing equivalent notices are detected and never
-   duplicated.
 7. Summarize saved and previewed changes, including the separate Commons notice.
    Zero-count skip/failure details are omitted.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -26,6 +27,7 @@ TITLE_BATCH_SIZE = 20
 GLOBAL_USAGE_LIMIT = 500
 EDIT_REJECTED_CODES = frozenset(
     {
+        "abusefilter-disallowed",
         "assertuserfailed",
         "badtoken",
         "cantcreate",
@@ -38,6 +40,32 @@ EDIT_REJECTED_CODES = frozenset(
         "spamdetected",
     }
 )
+
+MESSAGE_REF_RE = re.compile(r"⧼([^⧽]+)⧽")
+
+
+def _error_fields(response: dict[str, Any]) -> tuple[str | None, str]:
+    """Map both error wire formats to (code, message).
+
+    Modern `errorformat=plaintext` responses carry an `errors` list with `text`;
+    legacy `bc` responses carry a single `error` object with `info`.
+    """
+    errors = response.get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        return str(errors[0].get("code", "error")), str(errors[0].get("text", ""))
+    error = response.get("error")
+    if isinstance(error, dict):
+        return str(error.get("code", "error")), str(error.get("info", ""))
+    return None, ""
+
+
+def _warning_payload(content: str) -> str:
+    """Unwrap the standard {{edit filter warning|…|text=…}} box to its warning text."""
+    match = re.search(
+        r"\{\{edit filter warning\b(.*?)\|text\s*=\s*(.*?)\n?\}\}\s*$", content, re.DOTALL
+    )
+    return match.group(2).strip() if match else content
+
 
 Transport = Callable[[str, bytes | None], bytes]
 
@@ -61,6 +89,11 @@ class EditConflict(ApiError):
 
 class EditRejected(ApiError):
     """The server refused the edit (permissions, protection, rate limits, ...)."""
+
+
+class EditWarning(EditRejected):
+    """A warn-level refusal (e.g. AbuseFilter) the operator may acknowledge by
+    resubmitting the identical edit once; never raised for disallow-level codes."""
 
 
 @dataclass(frozen=True)
@@ -130,7 +163,7 @@ class MediaWikiApi:
         return f"https://{self.host}/w/api.php"
 
     def _request(self, params: dict[str, Any], *, post: bool = False) -> dict[str, Any]:
-        full = {"format": "json", "formatversion": "2", **params}
+        full = {"format": "json", "formatversion": "2", "errorformat": "plaintext", **params}
         self.sleep(REQUEST_INTERVAL_SECONDS)
         encoded = urlencode(full, doseq=True)
         if post or len(encoded) > MAX_URL_LENGTH:
@@ -144,9 +177,9 @@ class MediaWikiApi:
             raise ApiError("badresponse", f"non-JSON response from {self.host}") from None
         if not isinstance(response, dict):
             raise ApiError("badresponse", f"unexpected response shape from {self.host}")
-        if "error" in response:
-            error = response["error"]
-            raise ApiError(str(error.get("code", "error")), str(error.get("info", "")))
+        code, text = _error_fields(response)
+        if code is not None:
+            raise ApiError(code, text)
         if "warnings" in response:
             raise ApiError("warning", json.dumps(response["warnings"], ensure_ascii=False))
         return response
@@ -397,6 +430,8 @@ class MediaWikiApi:
         except ApiError as exc:
             if exc.code == "editconflict":
                 raise EditConflict(exc.code, exc.info) from None
+            if exc.code == "abusefilter-warning":
+                raise EditWarning(exc.code, self._readable(exc.info)) from None
             if exc.code in EDIT_REJECTED_CODES:
                 raise EditRejected(exc.code, exc.info) from None
             raise
@@ -409,3 +444,40 @@ class MediaWikiApi:
         if "nochange" in result:
             raise EditRejected("nochange", "no edit was made")
         return revid
+
+    def message_contents(self, keys: list[str]) -> dict[str, str]:
+        """Read-only lookup of MediaWiki message contents, keyed by lowercase name."""
+        response = self._request(
+            {
+                "action": "query",
+                "meta": "allmessages",
+                "ammessages": "|".join(keys),
+            }
+        )
+        contents: dict[str, str] = {}
+        for entry in response.get("query", {}).get("allmessages", []):
+            if "missing" not in entry:
+                contents[str(entry.get("name", "")).lower()] = str(entry.get("content", ""))
+        return contents
+
+    def _readable(self, text: str) -> str:
+        """Best-effort readable server warning text.
+
+        Expands ⧼message-key⧽ references (filter warnings arrive as unexpanded
+        message keys) through a read-only allmessages lookup and unwraps the
+        {{edit filter warning|…|text=…}} box to its actual warning text. If the
+        lookup fails, the server text is shown unchanged.
+        """
+        keys = list(dict.fromkeys(MESSAGE_REF_RE.findall(text)))[:5]
+        if keys:
+            try:
+                contents = self.message_contents(keys)
+            except ApiError:
+                contents = {}
+            text = MESSAGE_REF_RE.sub(
+                lambda match: _warning_payload(
+                    contents.get(match.group(1).lower(), match.group(0))
+                ),
+                text,
+            )
+        return _warning_payload(text)

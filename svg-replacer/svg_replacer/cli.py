@@ -274,6 +274,34 @@ def _run(args: argparse.Namespace) -> int:
     if hosts is not None:
         for host in sorted(hosts):
             _verify_shared_files(MediaWikiApi(host), host, raster_info, svg_info)
+
+    svg_name = svg_info.title.partition(":")[2]
+    summary = Summary()
+
+    # The Commons raster description edit is proposed first, separately approved.
+    raster_revision = _page_revision(commons, raster_info.title)
+    if raster_revision is None or raster_revision.missing:
+        print(f"Commons notice failed: page missing ({raster_info.title}).", color="31")
+        commons_outcome = "failed"
+    else:
+        commons_outcome = propose_vva(
+            raster_info.title,
+            svg_name,
+            raster_revision.text,
+            raster_revision.revid,
+            apply=apply,
+            decide=Decider(apply=apply),
+            publish=_publisher(commons, credentials) if apply else _unused,
+            out=print,
+            confirm=confirm,
+        )
+    if commons_outcome == "stopped":
+        summary.stopped = True
+        print("Stopped at the Commons notice step; no article work performed.")
+        print()
+        print(render_summary(summary, commons_outcome=commons_outcome), color="36")
+        return 0
+
     rows = commons.global_usage(
         raster_info.title, hosts=hosts, namespaces=namespaces, limit=args.limit
     )
@@ -281,9 +309,6 @@ def _run(args: argparse.Namespace) -> int:
     by_host: dict[str, list[Candidate]] = {}
     for candidate in candidates:
         by_host.setdefault(candidate.wiki, []).append(candidate)
-
-    svg_name = svg_info.title.partition(":")[2]
-    summary = Summary()
     for host, host_candidates in by_host.items():
         # all-mode: hosts are only known after GlobalUsage answers.
         if hosts is None:
@@ -304,6 +329,7 @@ def _run(args: argparse.Namespace) -> int:
             decide=Decider(apply=apply),
             publish=_publisher(target, credentials) if apply else _unused,
             out=print,
+            confirm=confirm,
         )
         summary.published.extend(part.published)
         summary.dry_approved.extend(part.dry_approved)
@@ -316,27 +342,6 @@ def _run(args: argparse.Namespace) -> int:
     if not by_host:
         print()
         print(f"No article uses found (namespace {', '.join(map(str, sorted(namespaces)))}).")
-
-    print()
-    if summary.stopped:
-        print("Stopped during article review; skipping the Commons template step.")
-        commons_outcome = None
-    else:
-        raster_revision = _page_revision(commons, raster_info.title)
-        if raster_revision is None or raster_revision.missing:
-            print(f"Commons notice failed: page missing ({raster_info.title}).", color="31")
-            commons_outcome = "failed"
-        else:
-            commons_outcome = propose_vva(
-                raster_info.title,
-                svg_name,
-                raster_revision.text,
-                raster_revision.revid,
-                apply=apply,
-                decide=Decider(apply=apply),
-                publish=_publisher(commons, credentials) if apply else _unused,
-                out=print,
-            )
 
     print()
     failed = bool(summary.failed) or commons_outcome == "failed"

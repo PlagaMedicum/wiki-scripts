@@ -20,7 +20,7 @@ Designed for supervised AI workflows where an assistant (Codex) investigates iss
 ```text
 1. Investigate  → Read-only page retrieval via MediaWiki API
 2. Propose      → Create persistent proposal (page snapshot, proposed text, summary, rationale)
-3. Review       → Interactive terminal UI displaying colorized unified diff
+3. Review       → Interactive terminal UI displaying a compact word-level diff
 4. Edit         → Modify proposed content or summary in Vim ($VISUAL / $EDITOR)
 5. Approve      → Mark proposal as approved for publication
 6. Decline      → Mark proposal as declined with optional rejection reasons
@@ -110,8 +110,10 @@ navigation and view filters, cyan for inspection (Validate, Browser), yellow for
 changes (Edit, Rebase, Summary, Toggle Bot), green for Approve/Publish, and red for
 Decline. Green controls do not imply validation has passed or bypass confirmation.
 Status/validation colours use yellow for pending or incomplete, green for accepted,
-published or successful, and red for declined, conflicts or errors. Diff additions
-are green and removals red; labels and `+`/`-` remain the primary cues without colour.
+published or successful, and red for declined, conflicts or errors. Changed
+paragraphs appear once: shared text is neutral, removed words are red/struck through,
+and added words green/underlined. Pure added/deleted lines retain `+`/`-` markers.
+Diff counts still describe whole added/removed source lines, not changed words.
 
 ## Vim Editing (Pull & Merge)
 

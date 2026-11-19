@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import difflib
+import re
 from functools import lru_cache
+from itertools import zip_longest
 
 from rich.console import Console
 from rich.markup import escape
@@ -54,23 +56,62 @@ def print_diff(console: Console, original: str, proposed: str, title: str = "pag
     console.print(syntax)
 
 
+def _inline_change(original: str, proposed: str) -> str:
+    """Preserve shared text once; distinguish removed/added Unicode word tokens."""
+    before = re.findall(r"\w+|\s+|[^\w\s]", original)
+    after = re.findall(r"\w+|\s+|[^\w\s]", proposed)
+    parts = ["  "]
+    for tag, i, j, k, end in difflib.SequenceMatcher(
+        None, before, after, autojunk=False
+    ).get_opcodes():
+        if tag == "equal":
+            parts.append(escape("".join(before[i:j])))
+        else:
+            if tag in ("replace", "delete"):
+                parts.append(f"[bold red strike]{escape(''.join(before[i:j]))}[/bold red strike]")
+            if tag in ("replace", "insert"):
+                parts.append(
+                    f"[bold green underline]{escape(''.join(after[k:end]))}[/bold green underline]"
+                )
+    return "".join(parts)
+
+
 def format_diff_lines(original: str, proposed: str, title: str = "page") -> list[str]:
-    """Generate unified diff formatted as a list of styled Rich markup lines."""
-    diff_text = generate_unified_diff(original, proposed, title)
-    if not diff_text.strip():
+    """Generate compact preview rows; unified patch output stays unchanged."""
+    diff = list(
+        difflib.unified_diff(
+            original.splitlines(),
+            proposed.splitlines(),
+            fromfile=f"a/{title}",
+            tofile=f"b/{title}",
+            lineterm="",
+        )
+    )
+    if not diff:
         return ["[dim italic](No changes between original and proposed content)[/dim italic]"]
 
-    lines: list[str] = []
-    for line in diff_text.splitlines():
-        esc = escape(line)
-        if line.startswith("---") or line.startswith("+++"):
-            lines.append(f"[bold white]{esc}[/bold white]")
-        elif line.startswith("@@"):
-            lines.append(f"[bold cyan]{esc}[/bold cyan]")
-        elif line.startswith("+"):
-            lines.append(f"[bold green]{esc}[/bold green]")
-        elif line.startswith("-"):
-            lines.append(f"[bold red]{esc}[/bold red]")
+    lines = [f"[bold white]{escape(line)}[/bold white]" for line in diff[:2]]
+    index = 2
+    while index < len(diff):
+        line = diff[index]
+        if line.startswith(("-", "+")):
+            removed: list[str] = []
+            added: list[str] = []
+            while index < len(diff) and diff[index].startswith("-"):
+                removed.append(diff[index][1:])
+                index += 1
+            while index < len(diff) and diff[index].startswith("+"):
+                added.append(diff[index][1:])
+                index += 1
+            for before, after in zip_longest(removed, added):
+                if before is not None and after is not None:
+                    lines.append(_inline_change(before, after))
+                elif before is not None:
+                    lines.append(f"[bold red]-{escape(before)}[/bold red]")
+                else:
+                    lines.append(f"[bold green]+{escape(after)}[/bold green]")
         else:
-            lines.append(esc)
+            esc = escape(line)
+            lines.append(f"[bold cyan]{esc}[/bold cyan]" if line.startswith("@@") else esc)
+            index += 1
     return lines

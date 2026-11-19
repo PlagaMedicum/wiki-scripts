@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from agentic_bot.diff import (
     compute_diff_stats,
     format_diff_lines,
@@ -7,6 +8,7 @@ from agentic_bot.diff import (
     print_diff,
 )
 from rich.console import Console
+from rich.text import Text
 
 
 def test_compute_diff_stats():
@@ -53,10 +55,47 @@ def test_print_diff_does_not_raise():
     assert "+c" in output
 
 
-def test_format_diff_lines():
-    orig = "function test() {\n  return 1;\n}\n"
-    prop = "function test() {\n  return 2;\n}\n"
-    lines = format_diff_lines(orig, prop, title="Gadget.js")
-    assert any("[bold red]" in line and "return 1;" in line for line in lines)
-    assert any("[bold green]" in line and "return 2;" in line for line in lines)
-    assert any("[bold white]--- a/Gadget.js" in line for line in lines)
+@pytest.mark.parametrize(
+    "before,after,removed,added",
+    [
+        ("The old word stays.", "The new word stays.", "old", "new"),
+        ("Літара і ў тэксце.", "Літара ў ў тэксце.", "і", "ў"),
+        ("Caption ends here", "Caption ends here.", "", "."),
+        ("A redundant word.", "A word.", "redundant ", ""),
+        ("[[Page|old]] {{name}}", "[[Page|new]] {{name}}", "old", "new"),
+        ("A  word.", "A word.", "  ", " "),
+    ],
+)
+def test_preview_highlights_only_changed_tokens(before, after, removed, added):
+    """AI-assisted: a paragraph is displayed once with neutral shared text."""
+    rows = [Text.from_markup(line) for line in format_diff_lines(before, after)]
+    body = rows[3:]
+    assert len(body) == 1
+    row = body[0]
+    assert row.plain.startswith("  ")
+    console = Console()
+    coloured = {"red": "", "green": ""}
+    reconstructed = {"before": "", "after": ""}
+    for offset, char in enumerate(row.plain):
+        style = row.get_style_at_offset(console, offset)
+        if style.color and style.color.name in coloured:
+            coloured[style.color.name] += char
+        if not style.color or style.color.name != "green":
+            reconstructed["before"] += char
+        if not style.color or style.color.name != "red":
+            reconstructed["after"] += char
+    for colour, expected in (("red", removed), ("green", added)):
+        # Either adjacent space may belong to a deleted word; both reconstruct identically.
+        actual = coloured[colour]
+        assert (actual.strip() if expected.strip() else actual) == (
+            expected.strip() if expected.strip() else expected
+        )
+    assert reconstructed == {"before": "  " + before, "after": "  " + after}
+
+
+def test_preview_preserves_unpaired_lines_and_context():
+    rows = [
+        Text.from_markup(line).plain
+        for line in format_diff_lines("context\nold word\n", "context\nnew word\nextra\n")
+    ]
+    assert rows[3:] == [" context", "  oldnew word", "+extra"]

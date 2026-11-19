@@ -235,6 +235,7 @@ class RasterCandidate:
 
 
 _ORIGIN_PRIORITY = {
+    "Derived from": -1,
     "file link": 0,
     "Commons file URL": 1,
     "upload URL": 2,
@@ -278,6 +279,21 @@ def discover_raster_candidates(text: str, ns: FileNamespace) -> list[RasterCandi
         candidate = RasterCandidate(name=name, origin=origin, evidence=evidence)
         if key not in found or _ORIGIN_PRIORITY[origin] < _ORIGIN_PRIORITY[found[key].origin]:
             found[key] = candidate
+
+    visible = _LITERAL.sub("", text)
+    # Only literal parameters; nested template expressions require operator input.
+    for match in re.finditer(r"\{\{\s*derived[ _]+from\s*\|([^{}]*)\}\}", visible, re.I):
+        for parameter in match.group(1).split("|"):
+            name = parameter.strip()
+            if "=" in name:
+                key, name = name.split("=", 1)
+                if not key.strip().isdigit():
+                    continue
+                name = name.strip()
+            prefix, colon, rest = name.partition(":")
+            if colon and ns.matches(prefix):
+                name = rest.strip()
+            add(name, "Derived from", match.group())
 
     for link in find_file_links(text, ns):
         add(link.name, "file link", text[link.start : link.end])

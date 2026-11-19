@@ -114,9 +114,9 @@ SVG_REPLACER_LIVE=1 make test ARGS="tests/test_live_readonly.py"
 
 ## Known limitations
 
-- Raster discovery reads the SVG page's own wikitext (file links and Commons /
-  upload URLs in the source fields). Derivation info recorded elsewhere is not
-  guessed at: the tool asks for the raster URL instead.
+- Raster discovery reads the SVG page's own wikitext: file links, file URLs and
+  literal positional filenames in `{{Derived from|…}}`. Nested template
+  expressions and derivation information elsewhere require manual raster input.
 - Image uses inside template invocations (e.g. infobox `|image=`) are skipped
   by design; replace those manually if appropriate.
 - Duplicate-vector detection recognizes `{{Vector version available}}`,

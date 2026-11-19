@@ -163,6 +163,30 @@ def test_discover_raster_candidates_from_derivation_info() -> None:
     assert len({normalize_file_name(n) for n in names}) == len(names)
 
 
+@pytest.mark.parametrize("template", ["Derived from", "derived_from"])
+def test_discover_plain_derived_from_parameters(template):
+    text = (
+        "{{Information|source={{"
+        + template
+        + "|Project Management (phases).png|by=[[User:Example|Example]]}}"
+        "|other_versions={{Other versions|Translated diagram.png}}}}"
+    )
+    candidates = discover_raster_candidates(text, COMMONS_FILES)
+    assert [candidate.name for candidate in candidates] == ["Project Management (phases).png"]
+
+
+def test_multiple_derived_sources_remain_ambiguous():
+    text = "{{Derived from|1=First.png|2=Second.jpg|by=Example}}"
+    assert {candidate.name for candidate in discover_raster_candidates(text, COMMONS_FILES)} == {
+        "First.png",
+        "Second.jpg",
+    }
+
+
+def test_commented_derivation_is_not_a_source():
+    assert discover_raster_candidates("<!-- {{Derived from|Unused.png}} -->", COMMONS_FILES) == []
+
+
 def test_discover_raster_candidates_commons_file_urls() -> None:
     svg_page = (
         "Converted from https://commons.wikimedia.org/wiki/File:Derived_image.PNG?uselang=be\n"

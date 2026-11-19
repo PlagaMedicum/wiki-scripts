@@ -264,7 +264,6 @@ def test_globalusage_pagination_and_site_filter() -> None:
     def handler(url: str, query: dict, body: dict) -> JSONDict:
         params = {**query, **body}
         assert params.get("prop") == ["globalusage"]
-        assert params.get("gusite") == ["bewiki"]
         assert params.get("guprop") == ["namespace|pageid|url"]
         index = call_count["n"]
         call_count["n"] += 1
@@ -274,7 +273,7 @@ def test_globalusage_pagination_and_site_filter() -> None:
         return response
 
     api = make_api(handler)
-    rows = api.global_usage("File:Foo.png", site="bewiki")
+    rows = api.global_usage("File:Foo.png", hosts={"be.wikipedia.org"})
 
     assert [row["title"] for row in rows] == ["Артыкул", "Другая"]
     assert call_count["n"] == 2

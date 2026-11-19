@@ -9,7 +9,7 @@ help:
 		'Available targets:' \
 		'  make sync' \
 		'  make lock' \
-		'  make run [ARGS="--apply ..."]  (prompts for the Commons SVG link)' \
+		'  make run [ARGS="--apply ..."]  (asks publish/preview, then the SVG link)' \
 		'  make test [ARGS="..."]' \
 		'  make lint' \
 		'  make format' \

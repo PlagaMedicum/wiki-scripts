@@ -105,7 +105,6 @@ class MediaWikiApi:
         self.sleep = sleep
         self.transport = transport if transport is not None else self._build_transport()
         self._file_namespaces: FileNamespace | None = None
-        self._site_db_name: str | None = None
         self._logged_in = False
 
     def _build_transport(self) -> Transport:
@@ -292,24 +291,15 @@ class MediaWikiApi:
             return None
         return int(revisions[0]["revid"])
 
-    def site_db_name(self) -> str:
-        """The wiki's database id (e.g. `bewiki`) from siteinfo; never guessed."""
-        if self._site_db_name is None:
-            response = self._request({"action": "query", "meta": "siteinfo", "siprop": "general"})
-            db_name = response.get("query", {}).get("general", {}).get("wikiid")
-            if not db_name:
-                raise ApiError("badresponse", f"no wikiid reported by {self.host}")
-            self._site_db_name = str(db_name)
-        return self._site_db_name
-
     def global_usage(
         self,
         file_title: str,
         *,
-        site: str | None = None,
+        hosts: set[str] | None = None,
         namespaces: set[int] | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        """List GlobalUsage rows, bounded by eligible rows seen for `hosts`."""
         params: dict[str, Any] = {
             "action": "query",
             "prop": "globalusage",
@@ -317,8 +307,6 @@ class MediaWikiApi:
             "guprop": "namespace|pageid|url",
             "gulimit": str(GLOBAL_USAGE_LIMIT),
         }
-        if site is not None:
-            params["gusite"] = site
         rows: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         while True:
@@ -327,6 +315,9 @@ class MediaWikiApi:
             for row in page.get("globalusage", []):
                 if "ns" not in row:
                     raise ApiError("badresponse", "globalusage row has no ns field")
+                wiki = str(row.get("wiki", ""))
+                if hosts is not None and wiki not in hosts:
+                    continue
                 if namespaces is not None and int(row.get("ns", -1)) not in namespaces:
                     continue
                 key = (str(row.get("wiki", "")), str(row.get("title", "")))

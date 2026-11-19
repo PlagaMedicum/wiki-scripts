@@ -67,15 +67,15 @@ class Summary:
 def filter_usage_rows(
     rows: Iterable[dict],
     *,
-    wiki_host: str,
+    hosts: set[str] | None,
     namespaces: set[int],
 ) -> list[Candidate]:
-    """Keep GlobalUsage rows for one wiki/namespace set and deduplicate pages."""
+    """Keep GlobalUsage rows for the selected wikis/namespaces and deduplicate pages."""
     seen: set[tuple[str, str]] = set()
     candidates: list[Candidate] = []
     for row in rows:
         wiki = str(row.get("wiki", ""))
-        if wiki != wiki_host:
+        if hosts is not None and wiki not in hosts:
             continue
         if "ns" not in row:
             raise ApiError("badresponse", "globalusage row has no ns field")

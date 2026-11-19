@@ -15,6 +15,8 @@ from svg_replacer.wikitext import (
     discover_raster_candidates,
 )
 from svg_replacer.workflow import (
+    Candidate,
+    Summary,
     build_page_reviews,
     filter_usage_rows,
     format_candidates,
@@ -23,7 +25,7 @@ from svg_replacer.workflow import (
     review_pages,
 )
 
-DEFAULT_WIKI = "be"
+DEFAULT_WIKI = "all"
 WIKI_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 FILE_PREFIX_RE = re.compile(r"^(?:file|файл|image|выява)\s*:", re.IGNORECASE)
 
@@ -37,8 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="svg-replacer",
         description=(
             "Interactively replace raster images with their existing SVG equivalents "
-            "on a Wikipedia edition. Read-only unless --apply is given; every edit "
-            "still needs individual interactive approval."
+            "across Wikimedia projects. Read-only unless publishing is explicitly "
+            "chosen; every edit still needs individual interactive approval."
         ),
     )
     parser.add_argument(
@@ -54,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--wiki",
         default=DEFAULT_WIKI,
-        help=f"Wikipedia language edition (default: {DEFAULT_WIKI})",
+        help="wikis to scan: 'all' (default, every Wikimedia project using the file) "
+        "or comma-separated Wikipedia codes like en,ar",
     )
     parser.add_argument(
         "--ns",
@@ -73,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="enable publishing (default is read-only; every edit still requires "
+        help="start in PUBLISH mode without the prompt (every edit still requires "
         "interactive approval)",
     )
     parser.add_argument(
@@ -172,39 +175,63 @@ def _unused(title: str, text: str, summary: str, base_revid: int) -> int:
     raise AssertionError("publishing requested in read-only mode")
 
 
-def _make_publishers(
-    commons: MediaWikiApi,
-    target: MediaWikiApi,
-    credentials: Credentials | None,
-):
+def _publisher(api: MediaWikiApi, credentials: Credentials | None):
     if credentials is None:
         raise AssertionError("publishing requested without credentials")
 
-    def publish_page(title: str, text: str, summary: str, base_revid: int) -> int:
-        target.login(credentials)
-        return target.edit(title=title, text=text, summary=summary, base_revid=base_revid)
+    def publish(title: str, text: str, summary: str, base_revid: int) -> int:
+        api.login(credentials)
+        return api.edit(title=title, text=text, summary=summary, base_revid=base_revid)
 
-    def publish_commons(title: str, text: str, summary: str, base_revid: int) -> int:
-        commons.login(credentials)
-        return commons.edit(title=title, text=text, summary=summary, base_revid=base_revid)
+    return publish
 
-    return publish_page, publish_commons
+
+def _wiki_hosts(value: str) -> set[str] | None:
+    """`all` for every project using the file, or comma-separated Wikipedia codes."""
+    if value == "all":
+        return None
+    hosts = set()
+    for code in value.split(","):
+        code = code.strip()
+        if not code or not WIKI_RE.match(code):
+            raise CliError(f"invalid Wikipedia edition {code!r}")
+        hosts.add(f"{code}.wikipedia.org")
+    return hosts or None
+
+
+def _verify_shared_files(
+    target: MediaWikiApi, host: str, raster_info: ImageInfo, svg_info: ImageInfo
+) -> None:
+    for expected in (raster_info, svg_info):
+        actual = target.imageinfo(expected.title)
+        # imageinfo adds wiki-specific tracking queries to the same upload URL.
+        if (
+            actual.missing
+            or actual.repository != "shared"
+            or not actual.url
+            or not expected.url
+            or urlsplit(actual.url)[:3] != urlsplit(expected.url)[:3]
+        ):
+            raise CliError(
+                f"{expected.title} does not resolve to the intended Commons file on {host}"
+            )
 
 
 def _run(args: argparse.Namespace) -> int:
-    if not WIKI_RE.match(args.wiki):
-        raise CliError(f"invalid Wikipedia edition {args.wiki!r}")
+    hosts = _wiki_hosts(args.wiki)
     if args.limit < 1:
         raise CliError("--limit must be at least 1")
     if args.apply and not sys.stdin.isatty():
         raise CliError("--apply requires an interactive terminal for per-edit confirmation")
     namespaces = set(args.namespaces or [0])
-    if args.apply:
+    apply = args.apply or (
+        sys.stdin.isatty() and confirm("Publish approved edits? (each edit still asks separately)")
+    )
+    if apply:
         print("PUBLISH — each edit needs your approval.", color="32")
     else:
         print("PREVIEW — nothing will be saved.", color="33")
-        print('To publish instead: make run ARGS="--apply"')
-    credentials = load_credentials(args.env or default_env_path()) if args.apply else None
+    credentials = load_credentials(args.env or default_env_path()) if apply else None
 
     commons = MediaWikiApi("commons.wikimedia.org")
     svg_title = parse_commons_file_title(
@@ -244,77 +271,74 @@ def _run(args: argparse.Namespace) -> int:
         print("Aborted; no changes made.")
         return 0
 
-    host = f"{args.wiki}.wikipedia.org"
-    target = MediaWikiApi(host)
-    for expected in (raster_info, svg_info):
-        actual = target.imageinfo(expected.title)
-        # imageinfo adds wiki-specific tracking queries to the same upload URL.
-        if (
-            actual.missing
-            or actual.repository != "shared"
-            or not actual.url
-            or not expected.url
-            or urlsplit(actual.url)[:3] != urlsplit(expected.url)[:3]
-        ):
-            raise CliError(
-                f"{expected.title} does not resolve to the intended Commons file on {host}"
-            )
-    site_db = target.site_db_name()
+    if hosts is not None:
+        for host in sorted(hosts):
+            _verify_shared_files(MediaWikiApi(host), host, raster_info, svg_info)
     rows = commons.global_usage(
-        raster_info.title, site=site_db, namespaces=namespaces, limit=args.limit
+        raster_info.title, hosts=hosts, namespaces=namespaces, limit=args.limit
     )
-    candidates = filter_usage_rows(rows, wiki_host=host, namespaces=namespaces)
-
-    target_files = target.file_namespaces()
-    reviews = build_page_reviews(
-        candidates,
-        target.page_revisions,
-        target_files,
-        raster_name=raster_info.title.partition(":")[2],
-    )
-    print()
-    if reviews:
-        print(format_candidates(reviews, wiki_host=host, namespaces=namespaces), color="36")
-    else:
-        print(
-            f"No article uses found on {host} (namespace {', '.join(map(str, sorted(namespaces)))})."
-        )
+    candidates = filter_usage_rows(rows, hosts=hosts, namespaces=namespaces)
+    by_host: dict[str, list[Candidate]] = {}
+    for candidate in candidates:
+        by_host.setdefault(candidate.wiki, []).append(candidate)
 
     svg_name = svg_info.title.partition(":")[2]
-    publish_page, publish_commons = (
-        _make_publishers(commons, target, credentials) if args.apply else (_unused, _unused)
-    )
-    summary = review_pages(
-        reviews,
-        apply=args.apply,
-        svg_name=svg_name,
-        decide=Decider(apply=args.apply),
-        publish=publish_page,
-        out=print,
-    )
+    summary = Summary()
+    for host, host_candidates in by_host.items():
+        # all-mode: hosts are only known after GlobalUsage answers.
+        if hosts is None:
+            _verify_shared_files(MediaWikiApi(host), host, raster_info, svg_info)
+        target = MediaWikiApi(host)
+        reviews = build_page_reviews(
+            host_candidates,
+            target.page_revisions,
+            target.file_namespaces(),
+            raster_name=raster_info.title.partition(":")[2],
+        )
+        print()
+        print(format_candidates(reviews, wiki_host=host, namespaces=namespaces), color="36")
+        part = review_pages(
+            reviews,
+            apply=apply,
+            svg_name=svg_name,
+            decide=Decider(apply=apply),
+            publish=_publisher(target, credentials) if apply else _unused,
+            out=print,
+        )
+        summary.published.extend(part.published)
+        summary.dry_approved.extend(part.dry_approved)
+        summary.skipped.extend(part.skipped)
+        summary.failed.extend(part.failed)
+        summary.not_processed.extend(part.not_processed)
+        summary.stopped = summary.stopped or part.stopped
+        if summary.stopped:
+            break
+    if not by_host:
+        print()
+        print(f"No article uses found (namespace {', '.join(map(str, sorted(namespaces)))}).")
 
     print()
     if summary.stopped:
         print("Stopped during article review; skipping the Commons template step.")
+        commons_outcome = None
     else:
         raster_revision = _page_revision(commons, raster_info.title)
         if raster_revision is None or raster_revision.missing:
             print(f"Commons notice failed: page missing ({raster_info.title}).", color="31")
-            outcome = "failed"
+            commons_outcome = "failed"
         else:
-            outcome = propose_vva(
+            commons_outcome = propose_vva(
                 raster_info.title,
                 svg_name,
                 raster_revision.text,
                 raster_revision.revid,
-                apply=args.apply,
-                decide=Decider(apply=args.apply),
-                publish=publish_commons,
+                apply=apply,
+                decide=Decider(apply=apply),
+                publish=_publisher(commons, credentials) if apply else _unused,
                 out=print,
             )
 
     print()
-    commons_outcome = None if summary.stopped else outcome
     failed = bool(summary.failed) or commons_outcome == "failed"
     print(render_summary(summary, commons_outcome=commons_outcome), color="31" if failed else "36")
     return 1 if failed else 0

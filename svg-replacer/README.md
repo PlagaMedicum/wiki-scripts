@@ -9,12 +9,13 @@ the operator through one reviewed, approved replacement at a time.
 
 ## Safety model
 
-- **Read-only by default.** Nothing is written without `--apply`, and even with
-  `--apply` every single edit requires an individual interactive
+- **Nothing is written without an explicit publish decision.** The tool asks
+  `Publish approved edits?` at startup (default no); `--apply` answers it up
+  front. Even then every single edit requires an individual interactive
   `approve / skip / stop` decision. There is no bulk mode and no unattended
   publishing.
-- **Read-only mode is anonymous.** Without `--apply`, discovery and previews
-  never log in. With `--apply`, login is lazy; later reads use that wiki's session.
+- **Preview mode is anonymous.** Discovery and previews never log in.
+  Publishing logs in lazily per wiki; later reads use that wiki's session.
 - **Conflict checks.** Before publishing, the current page revision is compared
   with the revision the diff was built from, and the same revision id is passed
   as `baserevid`; the server enforces it. Conflicts and API errors are reported
@@ -43,10 +44,10 @@ uv sync --dev
 make run
 ```
 
-The tool prompts for the Commons SVG link. Publishing still requires
-`make run ARGS="--apply"` and individual approval; plain `make run` is read-only.
-The yellow PREVIEW banner and `[a] Preview (not saved)` mean no edit is sent.
-With `--apply`, the banner says PUBLISH and the action is `[a] Publish`.
+The tool first asks whether to publish (default no), then prompts for the
+Commons SVG link. Answering yes — or `make run ARGS="--apply"` — sets PUBLISH
+mode; each edit still asks individually. The yellow PREVIEW banner and
+`[a] Preview (not saved)` mean no edit is sent; PUBLISH uses `[a] Publish`.
 Colours are automatic in terminals; `NO_COLOR` disables them.
 
 From the repository root:
@@ -62,9 +63,9 @@ make svg-replacer-run
    the tool asks for the raster URL (`--raster` pre-fills it); it never guesses.
 2. Show one Commons description-page link per file for visual comparison
    (confirmation required).
-3. Query the MediaWiki GlobalUsage API for pages using the raster, filtered to
-   the selected Wikipedia edition and namespace (default `be.wikipedia.org`,
-   namespace 0).
+3. Query the MediaWiki GlobalUsage API for pages using the raster across every
+   Wikimedia project (or only the editions named with `--wiki`), filtered to
+   the selected namespaces (default 0).
 4. List candidate titles; direct article uses come first, auto-skips are labelled.
 5. Show each target link, exact unified diff (including surrounding context) and
    edit summary. Choose `[a] Preview` (read-only) or `[a] Publish` (`--apply`),
@@ -82,10 +83,10 @@ make svg-replacer-run
 | --- | --- |
 | `svg_url` | optional Commons SVG URL (or `File:` title); prompted when omitted |
 | `--raster URL\|File:X.png` | original raster when discovery is ambiguous |
-| `--wiki LANG` | Wikipedia edition (default `be`) |
+| `--wiki all\|en,ar` | wikis to scan (default `all`, every project using the file) |
 | `--ns N` | namespace to search, repeatable (default `0`) |
 | `--limit N` | max candidate pages to review (default `25`) |
-| `--apply` | enable publishing; requires an interactive terminal |
+| `--apply` | start in PUBLISH mode without the prompt (interactive terminal required) |
 | `--env PATH` | credential file (default `biblio/.env` in the repository) |
 
 Exit codes: `0` success, `1` API/credential failure or failed edits,
@@ -95,8 +96,8 @@ Exit codes: `0` success, `1` API/credential failure or failed edits,
 
 Publishing loads `WIKI_BOT_USERNAME` (a BotPasswords login, `Username@label`)
 and `WIKI_BOT_PASSWORD` from `biblio/.env`. The file is never copied and the
-values are never printed or logged. Credentials are read only when `--apply` is
-given, and each wiki (the target Wikipedia and Commons) authenticates its own
+values are never printed or logged. Credentials are read only once publishing is
+chosen, and each wiki (every edit target and Commons) authenticates its own
 session separately — the bot password must be valid on each wiki you publish to.
 Password representations and authentication errors omit secrets. Terminal
 control characters in remote text are displayed as escapes, not executed.

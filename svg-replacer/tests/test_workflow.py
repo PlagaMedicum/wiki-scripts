@@ -123,25 +123,25 @@ def usage_rows() -> list[dict]:
 
 
 def test_namespace_filter_keeps_articles_and_drops_talk_user_template() -> None:
-    rows = filter_usage_rows(usage_rows(), wiki_host="be.wikipedia.org", namespaces={0})
+    rows = filter_usage_rows(usage_rows(), hosts={"be.wikipedia.org"}, namespaces={0})
     assert [c.title for c in rows] == ["Артыкул"]
     assert rows[0].wiki == "be.wikipedia.org"
 
 
 def test_namespace_filter_can_include_selected_extra_namespaces() -> None:
-    rows = filter_usage_rows(usage_rows(), wiki_host="be.wikipedia.org", namespaces={0, 1})
+    rows = filter_usage_rows(usage_rows(), hosts={"be.wikipedia.org"}, namespaces={0, 1})
     assert [c.title for c in rows] == ["Артыкул", "Размова:Артыкул"]
 
 
 def test_namespace_filter_targets_explicit_wiki_edition() -> None:
-    rows = filter_usage_rows(usage_rows(), wiki_host="ru.wikipedia.org", namespaces={0})
+    rows = filter_usage_rows(usage_rows(), hosts={"ru.wikipedia.org"}, namespaces={0})
     assert [c.title for c in rows] == ["Артыкул"]
     assert rows[0].wiki == "ru.wikipedia.org"
     assert rows[0].url.startswith("https://ru.wikipedia.org/")
 
 
 def test_namespace_filter_deduplicates_repeated_page_rows() -> None:
-    rows = filter_usage_rows(usage_rows(), wiki_host="be.wikipedia.org", namespaces={0})
+    rows = filter_usage_rows(usage_rows(), hosts={"be.wikipedia.org"}, namespaces={0})
     assert len(rows) == 1
 
 

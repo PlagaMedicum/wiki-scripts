@@ -196,7 +196,7 @@ def test_cli_validates_file_pair_before_discovery(monkeypatch, capsys, case):
     monkeypatch.setattr(cli, "confirm", lambda _: True)
     monkeypatch.setattr(cli, "Decider", lambda **kwargs: lambda proposal: "approve")
     raster = "File:New.svg" if case == "same-file" else "File:Old.png"
-    result = cli.main(["File:New.svg", "--raster", raster])
+    result = cli.main(["File:New.svg", "--raster", raster, "--wiki", "be"])
     if case == "preview":
         assert result == 0
         shown = capsys.readouterr().out
@@ -233,7 +233,7 @@ def test_globalusage_limit_counts_only_eligible_unique_pages():
         return json.dumps({"query": {"pages": pages}, "continue": {"gucontinue": "next"}}).encode()
 
     api = MediaWikiApi("example.invalid", transport=transport, sleep=lambda _: None)
-    rows = api.global_usage("File:Old.png", site="bewiki", namespaces={0}, limit=2)
+    rows = api.global_usage("File:Old.png", hosts={"be.wikipedia.org"}, namespaces={0}, limit=2)
     assert [row["title"] for row in rows] == ["A", "B"]
     assert len(calls) == 1
 
@@ -272,3 +272,114 @@ def test_shared_image_does_not_need_local_description_page():
     info = api.imageinfo("File:Example.svg")
     assert not info.missing
     assert info.repository == "shared"
+
+
+EDITS: list = []
+
+
+class MultiWikiApi:
+    """Stand-in covering the whole multi-wiki publishing surface."""
+
+    def __init__(self, host):
+        self.host = host
+
+    def imageinfo(self, title):
+        svg = title.endswith(".svg")
+        return SimpleNamespace(
+            title=title,
+            missing=False,
+            mime="image/svg+xml" if svg else "image/png",
+            repository="shared",
+            url="https://upload.wikimedia.org/" + title,
+            width=10,
+            height=10,
+            description_url="https://example.invalid",
+            thumb_url=None,
+        )
+
+    def page_revisions(self, titles):
+        return {
+            title: SimpleNamespace(title=title, missing=False, text="[[File:Old.png]]", revid=1)
+            for title in titles
+        }
+
+    def file_namespaces(self):
+        return FileNamespace.of("File")
+
+    def global_usage(self, title, **kwargs):
+        return [
+            {"wiki": "en.wikipedia.org", "title": "En page", "ns": 0, "url": "u"},
+            {"wiki": "ar.wikipedia.org", "title": "Ar page", "ns": 0, "url": "u"},
+            {"wiki": "de.wikiversity.org", "title": "User:X", "ns": 2, "url": "u"},
+        ]
+
+    def login(self, credentials):
+        pass
+
+    def edit(self, title, text, summary, base_revid):
+        EDITS.append((self.host, title))
+        return 7
+
+
+def run_multiwiki(
+    monkeypatch, capsys, *, argv_extra=(), publish_answer=None, tty=False, decision="skip"
+):
+    EDITS.clear()
+    asked = []
+
+    def confirm(question):
+        asked.append(question)
+        return (publish_answer is True) if question.startswith("Publish") else True
+
+    if tty:
+
+        class Tty:
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr(cli.sys, "stdin", Tty())
+    monkeypatch.setattr(cli, "MediaWikiApi", MultiWikiApi)
+    monkeypatch.setattr(cli, "confirm", confirm)
+    monkeypatch.setattr(cli, "Decider", lambda **kwargs: lambda proposal: decision)
+    monkeypatch.setattr(
+        cli, "load_credentials", lambda path: SimpleNamespace(username="u", password="p")
+    )
+    result = cli.main(["File:New.svg", "--raster", "File:Old.png", *argv_extra])
+    return result, capsys.readouterr().out, asked
+
+
+def test_default_scans_every_wiki_and_keeps_ns_filter(monkeypatch, capsys):
+    result, shown, asked = run_multiwiki(monkeypatch, capsys)
+    assert result == 0
+    assert "Candidates on en.wikipedia.org" in shown
+    assert "Candidates on ar.wikipedia.org" in shown
+    assert "En page" in shown and "Ar page" in shown
+    assert "User:X" not in shown
+    assert shown.count("Commons notice:") == 1
+    assert not any("Publish" in question for question in asked)
+
+
+def test_wiki_selection_restricts_to_named_editions(monkeypatch, capsys):
+    result, shown, _ = run_multiwiki(monkeypatch, capsys, argv_extra=("--wiki", "ar"))
+    assert result == 0
+    assert "Ar page" in shown
+    assert "En page" not in shown
+
+
+def test_publish_question_decides_mode(monkeypatch, capsys):
+    result, shown, asked = run_multiwiki(
+        monkeypatch, capsys, tty=True, publish_answer=True, decision="approve"
+    )
+    assert result == 0
+    assert "PUBLISH" in shown
+    assert any("Publish" in question for question in asked)
+    assert ("en.wikipedia.org", "En page") in EDITS
+    assert ("ar.wikipedia.org", "Ar page") in EDITS
+    assert ("commons.wikimedia.org", "File:Old.png") in EDITS
+
+    result, shown, asked = run_multiwiki(
+        monkeypatch, capsys, tty=True, publish_answer=False, decision="approve"
+    )
+    assert result == 0
+    assert "PREVIEW" in shown
+    assert EDITS == []

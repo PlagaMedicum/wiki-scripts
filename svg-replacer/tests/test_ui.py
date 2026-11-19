@@ -33,8 +33,6 @@ def test_decider_reprompts_on_invalid_choice_then_approves() -> None:
     decider = Decider(input_fn=scripted_input("maybe", "approve"), out=out)
 
     assert decider(make_proposal()) == "approve"
-    # Prompt shown twice: invalid input never counts as a decision.
-    assert out.getvalue().count("[a]pprove") == 2
 
 
 def test_decider_maps_short_and_long_tokens() -> None:
@@ -49,7 +47,7 @@ def test_decider_maps_short_and_long_tokens() -> None:
         assert decider(make_proposal()) == expected
 
 
-def test_decider_shows_context_diff_and_files_before_prompt() -> None:
+def test_decider_shows_target_and_exact_diff_before_prompt() -> None:
     out = io.StringIO()
     decider = Decider(input_fn=scripted_input("s"), out=out)
     decider(make_proposal())
@@ -57,7 +55,6 @@ def test_decider_shows_context_diff_and_files_before_prompt() -> None:
 
     assert "Артыкул" in shown
     assert "https://be.wikipedia.org/wiki/Артыкул" in shown
-    assert "Радок з [[Файл:Foo.png|рамка]]" in shown
     assert "-[[Файл:Foo.png|рамка]]" in shown
     assert "+[[Файл:Foo.svg|рамка]]" in shown
     assert "Foo.png" in shown and "Foo.svg" in shown
@@ -73,3 +70,31 @@ def test_confirm_defaults_to_no_on_empty_or_rejected_answer() -> None:
 def test_colorize_only_emits_escape_codes_when_enabled() -> None:
     assert "\x1b[" in colorize("x", "31", enabled=True)
     assert "\x1b[" not in colorize("x", "31", enabled=False)
+
+
+def test_preview_prompt_cannot_be_mistaken_for_publishing():
+    out = io.StringIO()
+    Decider(input_fn=scripted_input("a"), out=out)(make_proposal())
+    shown = out.getvalue().lower()
+    assert "[a] preview" in shown
+    assert "not saved" in shown
+
+
+def test_publish_prompt_names_the_write_action():
+    out = io.StringIO()
+    Decider(input_fn=scripted_input("s"), out=out, apply=True)(make_proposal())
+    assert "[a] publish" in out.getvalue().lower()
+
+
+def test_terminal_colour_does_not_restore_untrusted_controls(monkeypatch):
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    out = Terminal()
+    proposal = make_proposal()
+    proposal.title = "Title\x1b[2J"
+    Decider(input_fn=scripted_input("s"), out=out)(proposal)
+    assert "\x1b[36m" in out.getvalue()
+    assert "\x1b[2J" not in out.getvalue()

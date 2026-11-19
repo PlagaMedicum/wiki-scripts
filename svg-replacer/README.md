@@ -45,6 +45,9 @@ make run
 
 The tool prompts for the Commons SVG link. Publishing still requires
 `make run ARGS="--apply"` and individual approval; plain `make run` is read-only.
+The yellow PREVIEW banner and `[a] Preview (not saved)` mean no edit is sent.
+With `--apply`, the banner says PUBLISH and the action is `[a] Publish`.
+Colours are automatic in terminals; `NO_COLOR` disables them.
 
 From the repository root:
 
@@ -57,21 +60,21 @@ make svg-replacer-run
 1. Fetch Commons metadata for the SVG and identify the original raster from the
    page's source/derivation information. If there is not exactly one candidate,
    the tool asks for the raster URL (`--raster` pre-fills it); it never guesses.
-2. Verify that both files exist and print description-page, direct-file and
-   thumbnail links for side-by-side visual comparison (confirmation required).
+2. Show one Commons description-page link per file for visual comparison
+   (confirmation required).
 3. Query the MediaWiki GlobalUsage API for pages using the raster, filtered to
    the selected Wikipedia edition and namespace (default `be.wikipedia.org`,
    namespace 0).
-4. List candidates with titles, links and usage context; direct article uses
-   come first, auto-skips are labelled.
-5. For each replaceable candidate: show the exact unified diff of the proposed
-   wikitext change and ask for `approve / skip / stop`.
+4. List candidate titles; direct article uses come first, auto-skips are labelled.
+5. Show each target link, exact unified diff (including surrounding context) and
+   edit summary. Choose `[a] Preview` (read-only) or `[a] Publish` (`--apply`),
+   `[s] Skip`, or `[q] Quit`.
 6. After the article loop, separately propose adding
    `{{Vector version available|Example.svg}}` to the raster's Commons
    file-description page (existing equivalent templates are detected and never
    duplicated) — own diff, own approval.
-7. Print a final summary of published, dry-run, skipped, failed and
-   not-processed items.
+7. Summarize saved and previewed changes, including the separate Commons notice.
+   Zero-count skip/failure details are omitted.
 
 ## Options
 

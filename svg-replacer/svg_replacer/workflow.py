@@ -251,7 +251,7 @@ def review_pages(
             continue
         if not apply:
             summary.dry_approved.append(title)
-            out(f"dry run: would publish {title}")
+            out(f"Previewed article: {title} (not saved)")
             continue
         try:
             publish(title, new_text, proposal.edit_summary, review.revid)
@@ -285,7 +285,7 @@ def propose_vva(
 ) -> str:
     """Separately propose adding {{Vector version available}} on Commons."""
     if has_vector_template(text):
-        out(f"{raster_title} already has a vector-version template; nothing to add")
+        out("Commons notice already present; nothing to add.")
         return "duplicate"
     new_text = add_vector_template(text, svg_name)
     diff = render_diff(text, new_text, fromfile=f"a/{raster_title}", tofile=f"b/{raster_title}")
@@ -293,7 +293,7 @@ def propose_vva(
         kind="commons",
         title=raster_title,
         url=f"https://commons.wikimedia.org/wiki/{quote(raster_title.replace(' ', '_'), safe=':')}",
-        context=["Add the vector-version notice to the Commons file-description page."],
+        context=[],
         diff=diff,
         edit_summary=build_vva_summary(raster_title, svg_name),
         raster=raster_title,
@@ -308,7 +308,7 @@ def propose_vva(
         out(f"skipped Commons template for {raster_title}")
         return "skipped"
     if not apply:
-        out(f"dry run: would add the template to {raster_title}")
+        out("Previewed Commons notice (not saved).")
         return "dry"
     try:
         publish(raster_title, new_text, proposal.edit_summary, revid)
@@ -322,19 +322,28 @@ def propose_vva(
     return "published"
 
 
-def render_summary(summary: Summary) -> str:
-    lines = [
-        "Final summary:",
-        f"  published: {len(summary.published)}",
-        f"  approved but not published (read-only): {len(summary.dry_approved)}",
-        f"  skipped: {len(summary.skipped)}",
-        f"  failed: {len(summary.failed)}",
-        f"  not processed: {len(summary.not_processed)}",
-    ]
+def render_summary(summary: Summary, *, commons_outcome: str | None = None) -> str:
+    saved = len(summary.published) + (commons_outcome == "published")
+    previewed = len(summary.dry_approved) + (commons_outcome == "dry")
+    lines = [f"Result: {saved} saved, {previewed} previewed (not saved)"]
+    if commons_outcome is not None:
+        label = {
+            "published": "saved",
+            "dry": "previewed",
+            "duplicate": "already present",
+            "skipped": "skipped",
+            "stopped": "not processed (quit)",
+            "failed": "failed",
+        }[commons_outcome]
+        lines.append(f"Commons notice: {label}")
+    failed = len(summary.failed) + (commons_outcome == "failed")
+    skipped = len(summary.skipped) + (commons_outcome == "skipped")
+    if failed:
+        lines.append(f"Failed: {failed}")
+    if skipped:
+        lines.append(f"Skipped: {skipped}")
+    if summary.not_processed:
+        lines.append(f"Not processed: {len(summary.not_processed)}")
     if summary.stopped:
-        lines.append("  stopped by operator before completing all candidates")
-    for title in summary.published:
-        lines.append(f"    published: {title}")
-    for title, reason in summary.failed:
-        lines.append(f"    failed: {title} ({reason})")
+        lines.append("Stopped by operator.")
     return "\n".join(lines)

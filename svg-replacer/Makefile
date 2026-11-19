@@ -22,7 +22,7 @@ lock:
 	$(UV) lock --cache-dir $(UV_CACHE_DIR)
 
 run:
-	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) svg-replacer $(ARGS)
+	@$(UV) run --locked --cache-dir $(UV_CACHE_DIR) svg-replacer $(ARGS)
 
 test:
 	$(UV) run --locked --cache-dir $(UV_CACHE_DIR) pytest $(ARGS)

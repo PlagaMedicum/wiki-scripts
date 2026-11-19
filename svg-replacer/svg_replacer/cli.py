@@ -13,8 +13,6 @@ from svg_replacer.ui import safe_print as print
 from svg_replacer.wikitext import (
     FileNamespace,
     discover_raster_candidates,
-    has_vector_template,
-    usage_context,
 )
 from svg_replacer.workflow import (
     build_page_reviews,
@@ -127,13 +125,9 @@ def _page_text(api: MediaWikiApi, title: str) -> str:
 
 
 def _print_file_pair(svg: ImageInfo, raster: ImageInfo) -> None:
-    for label, info in (("SVG   ", svg), ("raster", raster)):
-        dimensions = f"{info.width}x{info.height}" if info.width and info.height else "unknown size"
-        print(f"{label}: {info.title} ({info.mime}, {dimensions})")
-        print(f"        description page: {info.description_url}")
-        print(f"        direct file:      {info.url}")
-        if info.thumb_url:
-            print(f"        thumbnail:        {info.thumb_url}")
+    for label, info in (("Raster", raster), ("SVG", svg)):
+        print(f"{label}: {info.title}", color="36")
+        print(f"  {info.description_url}")
 
 
 def _resolve_raster(
@@ -151,14 +145,11 @@ def _resolve_raster(
 
     discovered = discover_raster_candidates(svg_text, file_ns)
     if len(discovered) == 1:
-        candidate = discovered[0]
-        print(f"Original raster from source/derivation info: {candidate.name} [{candidate.origin}]")
-        return f"File:{candidate.name}"
+        return f"File:{discovered[0].name}"
     if discovered:
         print("The SVG page references several raster files; never guessing:")
         for number, candidate in enumerate(discovered, start=1):
-            evidence = candidate.evidence[:120]
-            print(f"  {number}. {candidate.name} [{candidate.origin}] {evidence}")
+            print(f"  {number}. {candidate.name}")
     else:
         print("No raster found in the SVG page's source/derivation information.")
     while True:
@@ -208,6 +199,11 @@ def _run(args: argparse.Namespace) -> int:
     if args.apply and not sys.stdin.isatty():
         raise CliError("--apply requires an interactive terminal for per-edit confirmation")
     namespaces = set(args.namespaces or [0])
+    if args.apply:
+        print("PUBLISH — each edit needs your approval.", color="32")
+    else:
+        print("PREVIEW — nothing will be saved.", color="33")
+        print('To publish instead: make run ARGS="--apply"')
     credentials = load_credentials(args.env or default_env_path()) if args.apply else None
 
     commons = MediaWikiApi("commons.wikimedia.org")
@@ -241,14 +237,10 @@ def _run(args: argparse.Namespace) -> int:
         "image/x-ms-bmp",
     }:
         raise CliError("source must be a supported raster image")
-    raster_text = _page_text(commons, raster_info.title)
 
-    print("Both files exist; compare them visually before any replacement:")
+    print()
     _print_file_pair(svg_info, raster_info)
-    if has_vector_template(raster_text):
-        for line in usage_context(raster_text, "ector version available", limit=1):
-            print(f"note: {raster_info.title} already carries a vector notice: {line}")
-    if not confirm("Compare the two files and continue"):
+    if not confirm("Same image? Continue"):
         print("Aborted; no changes made.")
         return 0
 
@@ -281,10 +273,12 @@ def _run(args: argparse.Namespace) -> int:
         raster_name=raster_info.title.partition(":")[2],
     )
     print()
-    print(format_candidates(reviews, wiki_host=host, namespaces=namespaces))
-    if not reviews:
-        print("No pages to review; continuing to the Commons template step.")
-    print()
+    if reviews:
+        print(format_candidates(reviews, wiki_host=host, namespaces=namespaces), color="36")
+    else:
+        print(
+            f"No article uses found on {host} (namespace {', '.join(map(str, sorted(namespaces)))})."
+        )
 
     svg_name = svg_info.title.partition(":")[2]
     publish_page, publish_commons = (
@@ -294,20 +288,19 @@ def _run(args: argparse.Namespace) -> int:
         reviews,
         apply=args.apply,
         svg_name=svg_name,
-        decide=Decider(),
+        decide=Decider(apply=args.apply),
         publish=publish_page,
         out=print,
     )
 
     print()
-    vva_failed = False
     if summary.stopped:
         print("Stopped during article review; skipping the Commons template step.")
     else:
-        print("Commons file-description page (separate step, separate approval):")
         raster_revision = _page_revision(commons, raster_info.title)
         if raster_revision is None or raster_revision.missing:
-            print(f"Cannot edit {raster_info.title}: page missing on Commons.")
+            print(f"Commons notice failed: page missing ({raster_info.title}).", color="31")
+            outcome = "failed"
         else:
             outcome = propose_vva(
                 raster_info.title,
@@ -315,15 +308,16 @@ def _run(args: argparse.Namespace) -> int:
                 raster_revision.text,
                 raster_revision.revid,
                 apply=args.apply,
-                decide=Decider(),
+                decide=Decider(apply=args.apply),
                 publish=publish_commons,
                 out=print,
             )
-            vva_failed = outcome == "failed"
 
     print()
-    print(render_summary(summary))
-    return 1 if summary.failed or vva_failed else 0
+    commons_outcome = None if summary.stopped else outcome
+    failed = bool(summary.failed) or commons_outcome == "failed"
+    print(render_summary(summary, commons_outcome=commons_outcome), color="31" if failed else "36")
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -331,10 +325,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _run(args)
     except CliError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, color="31")
         return 2
     except (ApiError, CredentialsError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, color="31")
         return 1
     except EOFError:
         print("error: input closed; aborting without further changes", file=sys.stderr)

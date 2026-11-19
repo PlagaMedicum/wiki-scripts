@@ -127,6 +127,8 @@ def test_terminal_controls_are_visible_not_executed():
         "wrong-shared",
         "valid",
         "tracking",
+        "preview",
+        "missing-commons",
     ],
 )
 def test_cli_validates_file_pair_before_discovery(monkeypatch, capsys, case):
@@ -166,7 +168,15 @@ def test_cli_validates_file_pair_before_discovery(monkeypatch, capsys, case):
         def page_revisions(self, titles):
             return {
                 title: SimpleNamespace(
-                    title=title, missing=False, text="{{Vector version available|New.svg}}", revid=1
+                    title=title,
+                    missing=case == "missing-commons" and title.endswith(".png"),
+                    text=(
+                        ""
+                        if case == "preview"
+                        or (case == "missing-commons" and title.endswith(".png"))
+                        else "{{Vector version available|New.svg}}"
+                    ),
+                    revid=1,
                 )
                 for title in titles
             }
@@ -178,17 +188,27 @@ def test_cli_validates_file_pair_before_discovery(monkeypatch, capsys, case):
             return "bewiki"
 
         def global_usage(self, *args, **kwargs):
-            if case in {"valid", "tracking"}:
+            if case in {"valid", "tracking", "preview", "missing-commons"}:
                 return []
             pytest.fail("invalid files reached discovery")
 
     monkeypatch.setattr(cli, "MediaWikiApi", FakeApi)
     monkeypatch.setattr(cli, "confirm", lambda _: True)
+    monkeypatch.setattr(cli, "Decider", lambda **kwargs: lambda proposal: "approve")
     raster = "File:New.svg" if case == "same-file" else "File:Old.png"
     result = cli.main(["File:New.svg", "--raster", raster])
-    if case in {"valid", "tracking"}:
+    if case == "preview":
         assert result == 0
-        assert "already has a vector-version template" in capsys.readouterr().out
+        shown = capsys.readouterr().out
+        assert "PREVIEW" in shown
+        assert "0 saved, 1 previewed" in shown
+        assert "not saved" in shown
+    elif case == "missing-commons":
+        assert result == 1
+        assert "failed" in capsys.readouterr().out.lower()
+    elif case in {"valid", "tracking"}:
+        assert result == 0
+        assert "0 saved, 0 previewed" in capsys.readouterr().out
     else:
         assert result != 0
         assert "error:" in capsys.readouterr().err

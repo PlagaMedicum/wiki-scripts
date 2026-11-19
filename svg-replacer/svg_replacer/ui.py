@@ -18,7 +18,6 @@ DECISIONS = {
     "quit": "stop",
     "stop": "stop",
 }
-PROMPT = "[a]pprove / [s]kip / [q]uit: "
 
 
 def safe_text(text: str) -> str:
@@ -31,8 +30,13 @@ def safe_text(text: str) -> str:
     )
 
 
-def safe_print(*values: object, file: TextIO | None = None) -> None:
-    builtins.print(*(safe_text(str(value)) for value in values), file=file)
+def safe_print(*values: object, file: TextIO | None = None, color: str | None = None) -> None:
+    stream = file if file is not None else sys.stdout
+    text = " ".join(safe_text(str(value)) for value in values)
+    builtins.print(
+        colorize(text, color or "", enabled=bool(color) and _supports_color(stream)),
+        file=stream,
+    )
 
 
 def colorize(text: str, code: str, *, enabled: bool) -> str:
@@ -71,32 +75,33 @@ class Decider:
         self,
         *,
         input_fn: Callable[[str], str] = input,
+        apply: bool = False,
         out: TextIO | None = None,
     ) -> None:
         self._input = input_fn
         self._out = out if out is not None else sys.stdout
         self._color = _supports_color(self._out)
+        self._apply = apply
 
-    def _write(self, line: str = "") -> None:
-        safe_print(line, file=self._out)
+    def _write(self, line: str = "", *, color: str | None = None) -> None:
+        safe_print(line, file=self._out, color=color)
 
     def __call__(self, proposal: Proposal) -> str:
         self._write()
-        self._write(f"--- {proposal.kind}: {proposal.title}")
+        heading = "Commons notice" if proposal.kind == "commons" else proposal.title
+        self._write(heading, color="36")
         if proposal.url:
-            self._write(f"    {proposal.url}")
-        for line in proposal.context:
-            self._write(f"    {line}")
-        self._write(f"    files: {proposal.raster} -> {proposal.svg}")
+            self._write(proposal.url)
         print(colorize_diff(safe_text(proposal.diff), enabled=self._color), file=self._out)
-        self._write(f"    edit summary: {proposal.edit_summary}")
+        self._write(f"Edit summary: {proposal.edit_summary}")
+        action = "Publish" if self._apply else "Preview (not saved)"
         while True:
-            self._write(PROMPT.rstrip())
+            self._write(f"[a] {action}  [s] Skip  [q] Quit", color="33")
             raw = self._input("").strip().lower()
             decision = DECISIONS.get(raw)
             if decision is not None:
                 return decision
-            self._write("Please answer a (approve), s (skip) or q (quit).")
+            self._write("Choose a, s or q.", color="33")
 
 
 def confirm(question: str, *, input_fn: Callable[[str], str] = input) -> bool:

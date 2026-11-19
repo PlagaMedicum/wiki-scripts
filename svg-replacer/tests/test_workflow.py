@@ -482,3 +482,27 @@ def test_vva_stop_leaves_page_untouched() -> None:
         out=[].append,
     )
     assert outcome == "stopped"
+
+
+@pytest.mark.parametrize(
+    "outcome,saved,previewed",
+    [
+        ("dry", 0, 1),
+        ("published", 1, 0),
+        ("failed", 0, 0),
+        ("skipped", 0, 0),
+        ("duplicate", 0, 0),
+        ("stopped", 0, 0),
+    ],
+)
+def test_summary_includes_commons_when_no_articles(outcome, saved, previewed):
+    from svg_replacer.workflow import Summary, render_summary
+
+    shown = render_summary(Summary(), commons_outcome=outcome)
+    assert f"{saved} saved" in shown
+    assert f"{previewed} previewed" in shown
+    assert "Commons notice:" in shown
+    if outcome == "dry":
+        assert "not saved" in shown
+    if outcome == "failed":
+        assert "failed" in shown.lower()

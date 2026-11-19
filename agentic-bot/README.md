@@ -46,6 +46,39 @@ preserve the intended link text. Record the checked pages in the rationale.
 Never guess the foreign target; if it cannot be verified, report the gap.
 This is proposal-preparation guidance, not an automatic validator rewrite.
 
+### Proposal QA (all assistants, including Antigravity)
+
+Before handing a proposal to the operator:
+
+1. **Bound the edit and its evidence.** Identify the source revision and keep the
+   diff minimal. For each added or changed factual claim, inspect a reliable,
+   authoritative source supporting that exact claim; record its URL/bibliographic
+   details and supporting passage/location in the rationale. A citation's
+   existence, another Wikipedia article or a model's recollection is not factual
+   verification. Omit unsupported additions and state unverified limits.
+2. **Read the complete final candidate.** Check grammar, spelling, units, ranges
+   and typography beyond the changed lines. For this workflow, finish descriptive
+   image captions with a full stop, including short fragments; check file embeds,
+   galleries and infobox caption parameters. Put it inside the displayed caption,
+   outside any nested link; do not append it to filenames or alt text. Preserve
+   meaningful question/exclamation marks. Use «памылка друку», not «абдрукоўка»,
+   in Belarusian edit summaries.
+3. **Inspect the result, not just the markup.** Preview/parse the final candidate
+   and inspect rendered captions, links, template output and references headings.
+   Apply the template/link checks above. Parsing and link/template validation do
+   not verify facts or language quality; record what was actually inspected.
+4. **Make the handoff reproducible.** Label the rationale AI-assisted; describe
+   the justified diff, supporting evidence, checks actually run with their results,
+   and remaining limits. For gadget/rule changes, exercise the actual consumer
+   with positive, negative and repeated-application cases; do not infer browser
+   gadget behaviour from a different regex engine. After revisions, recheck the
+   final saved version and update stale claims. Never infer a test result from a
+   rationale badge or remove a maintenance tag merely because edits were made.
+
+For retrospective review, distinguish the first retained draft, saved revisions,
+the exact published revision and later wiki edits. Later corrections do not prove
+the original draft was correct; keep proposal history intact.
+
 ## Quick Start (Single Entrypoint)
 
 From the repository root:

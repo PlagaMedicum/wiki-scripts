@@ -9,6 +9,9 @@ separate projects, not one application. You can adapt this repo for other wikis 
   Python tooling for bibliography and citation cleanup.
 - [`agentic-bot/`](agentic-bot/README.md)
   Terminal workflow for reviewing and publishing wiki edit proposals.
+- [`svg-replacer/`](svg-replacer/README.md)
+  Interactive terminal tool for replacing raster images with their existing SVG
+  equivalents on Wikimedia projects, one reviewed and approved edit at a time.
 - [`suppressor/`](suppressor/README.md)
   Rust tooling for fast public RevDel on matched revisions. It is currently running 24/7 on
   `be.wikipedia.org` to support suppressor workflow with quicker reaction time.
@@ -38,6 +41,7 @@ health; suppressor release verification is documented in its project docs.
 - suppressor usage: [`suppressor/README.md`](suppressor/README.md)
 - biblio usage: [`biblio/README.md`](biblio/README.md)
 - agentic-bot usage: [`agentic-bot/README.md`](agentic-bot/README.md)
+- svg-replacer usage: [`svg-replacer/README.md`](svg-replacer/README.md)
 - local agent rules for this repo: [`AGENTS.md`](AGENTS.md)
 - active work and stable task IDs: [`docs/plan.md`](docs/plan.md)
 

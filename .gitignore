@@ -38,3 +38,4 @@ agentic-bot/.env
 agentic-bot/.pywikibot/
 agentic-bot/.uv-cache/
 agentic-bot/proposals/
+svg-replacer/.uv-cache/

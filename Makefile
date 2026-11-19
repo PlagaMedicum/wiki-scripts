@@ -22,6 +22,7 @@ help:
 		'  make suppressor-<target> [ARGS="..."]' \
 		'  make biblio-<target> [ARGS="..."]' \
 		'  make agentic-bot-<target> [ARGS="..."]' \
+		'  make svg-replacer-<target> [ARGS="..."]' \
 		'' \
 		'Common examples:' \
 		'  make suppressor-build' \
@@ -30,13 +31,14 @@ help:
 		'  make suppressor-status CONFIG=/path/to/wiki.toml ARGS="--json"' \
 		'  make biblio-run ARGS="list"' \
 		'  make agentic-bot-test' \
-		'  make biblio-test'
+		'  make biblio-test' \
+		'  make svg-replacer-run ARGS="https://commons.wikimedia.org/wiki/File:Example.svg"'
 
-test: suppressor-test biblio-test agentic-bot-test
+test: suppressor-test biblio-test agentic-bot-test svg-replacer-test
 
-lint: suppressor-lint biblio-lint agentic-bot-lint
+lint: suppressor-lint biblio-lint agentic-bot-lint svg-replacer-lint
 
-check: suppressor-check biblio-check agentic-bot-check
+check: suppressor-check biblio-check agentic-bot-check svg-replacer-check
 
 suppressor-%: FORCE
 	$(MAKE) -C suppressor $* ARGS="$(ARGS)"
@@ -49,5 +51,8 @@ agentic-bot: FORCE
 
 agentic-bot-%: FORCE
 	$(MAKE) -C agentic-bot $* ARGS="$(ARGS)"
+
+svg-replacer-%: FORCE
+	$(MAKE) -C svg-replacer $* ARGS="$(ARGS)"
 
 FORCE:

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "svg-replacer"
+version = "0.1.0"
+description = "Interactive terminal tool for replacing raster images with their existing SVG equivalents on Wikimedia projects."
+requires-python = ">=3.14"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=9,<10",
+  "ruff>=0.15,<0.16",
+]
+
+[project.scripts]
+svg-replacer = "svg_replacer.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "live: read-only tests against real Wikimedia APIs (set SVG_REPLACER_LIVE=1)",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["svg_replacer", "tests"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.setuptools.packages.find]
+include = ["svg_replacer*"]

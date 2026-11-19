@@ -16,6 +16,13 @@ _VECTOR_TEMPLATE = re.compile(
     r"(?:vector[ \t\n]+version[ \t\n]+available|vva)(?=[ \t\n|}])",
     re.IGNORECASE,
 )
+_LITERAL = re.compile(
+    r"<!--.*?(?:-->|\Z)|"
+    r"<(?P<tag>nowiki|pre|syntaxhighlight|source|math|score|timeline|graph|templatedata)\b"
+    r"""(?:[^>"']|"[^"]*"|'[^']*')*"""
+    r"(?<!/)>.*?(?:</(?P=tag)\s*>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 _URL_JUNK = " \t\r\n).,;'\""
 
@@ -84,16 +91,10 @@ def _template_depth(text: str, pos: int) -> int:
     return depth
 
 
-def _unsafe_reason(lowered: str, pos: int) -> str | None:
-    if lowered.rfind("<!--", 0, pos) > lowered.rfind("-->", 0, pos):
-        return "inside an HTML comment"
-    if lowered.rfind("<nowiki>", 0, pos) > lowered.rfind("</nowiki>", 0, pos):
-        return "inside <nowiki>"
-    return None
-
-
 def find_file_links(text: str, ns: FileNamespace) -> list[FileLink]:
-    lowered = text.lower()
+    literal_spans = [(match.start(), match.end()) for match in _LITERAL.finditer(text)]
+    # Preserve offsets while hiding literal braces from template-depth accounting.
+    masked = _LITERAL.sub(lambda match: " " * len(match.group()), text)
     links: list[FileLink] = []
     for match in _LINK.finditer(text):
         body = match.group(1)
@@ -131,8 +132,12 @@ def find_file_links(text: str, ns: FileNamespace) -> list[FileLink]:
                 alias=alias.strip(),
                 name=text[name_start:name_end],
                 options=options,
-                template_depth=_template_depth(text, match.start()),
-                unsafe_reason=_unsafe_reason(lowered, match.start()),
+                template_depth=_template_depth(masked, match.start()),
+                unsafe_reason=(
+                    "inside a comment or literal-content tag"
+                    if any(start <= match.start() < end for start, end in literal_spans)
+                    else None
+                ),
             )
         )
     return links

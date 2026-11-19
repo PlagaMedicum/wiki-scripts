@@ -229,7 +229,7 @@ def test_failed_login_raises_auth_error_without_leaking_password() -> None:
     with pytest.raises(AuthError) as excinfo:
         api.login(Credentials(username="User@label", password="s3cret-pass"))
     assert "s3cret-pass" not in str(excinfo.value)
-    assert "wrongpassword" in str(excinfo.value)
+    assert "login did not establish a session" in str(excinfo.value)
 
 
 def test_globalusage_pagination_and_site_filter() -> None:

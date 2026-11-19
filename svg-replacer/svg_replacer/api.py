@@ -74,6 +74,7 @@ class ImageInfo:
     width: int | None = None
     height: int | None = None
     size: int | None = None
+    repository: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,8 +120,7 @@ class MediaWikiApi:
                 with opener.open(request, timeout=30) as response:
                     return response.read()
             except HTTPError as exc:
-                body = exc.read().decode("utf-8", "replace")[:300]
-                raise ApiError(f"http{exc.code}", body) from None
+                raise ApiError(f"http{exc.code}", "HTTP request failed") from None
             except URLError as exc:
                 raise ApiError("network", str(exc.reason)) from None
 
@@ -195,7 +195,7 @@ class MediaWikiApi:
         )
         page = self._single_page(response)
         page_title = str(page.get("title", title))
-        if page.get("missing") or not page.get("imageinfo"):
+        if not page.get("imageinfo"):
             return ImageInfo(title=page_title, missing=True)
         info = page["imageinfo"][0]
         return ImageInfo(
@@ -208,6 +208,7 @@ class MediaWikiApi:
             width=info.get("width"),
             height=info.get("height"),
             size=info.get("size"),
+            repository=page.get("imagerepository"),
         )
 
     def file_namespaces(self) -> FileNamespace:
@@ -301,7 +302,14 @@ class MediaWikiApi:
             self._site_db_name = str(db_name)
         return self._site_db_name
 
-    def global_usage(self, file_title: str, *, site: str | None = None) -> list[dict[str, Any]]:
+    def global_usage(
+        self,
+        file_title: str,
+        *,
+        site: str | None = None,
+        namespaces: set[int] | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {
             "action": "query",
             "prop": "globalusage",
@@ -312,10 +320,22 @@ class MediaWikiApi:
         if site is not None:
             params["gusite"] = site
         rows: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
         while True:
             response = self._request(params)
             page = self._single_page(response)
-            rows.extend(page.get("globalusage", []))
+            for row in page.get("globalusage", []):
+                if "ns" not in row:
+                    raise ApiError("badresponse", "globalusage row has no ns field")
+                if namespaces is not None and int(row.get("ns", -1)) not in namespaces:
+                    continue
+                key = (str(row.get("wiki", "")), str(row.get("title", "")))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(row)
+                if limit is not None and len(rows) >= limit:
+                    return rows
             continuation = response.get("continue")
             if not continuation:
                 return rows
@@ -341,12 +361,11 @@ class MediaWikiApi:
                 },
                 post=True,
             )
-        except ApiError as exc:
-            raise AuthError(exc.code, exc.info) from None
+        except ApiError:
+            raise AuthError("loginfailed", "authentication request failed") from None
         result = response.get("login", {})
         if result.get("result") != "Success":
-            code = str(result.get("reason") or result.get("result") or "unknown")
-            raise AuthError(code, "login did not establish a session")
+            raise AuthError("loginfailed", "login did not establish a session")
         self._logged_in = True
 
     def csrf_token(self) -> str:
@@ -393,4 +412,9 @@ class MediaWikiApi:
         result = response.get("edit", {})
         if result.get("result") != "Success":
             raise EditRejected(str(result.get("result", "unknown")), "edit did not succeed")
-        return int(result.get("newrevid", 0))
+        revid = result.get("newrevid")
+        if not isinstance(revid, int) or isinstance(revid, bool) or revid <= 0:
+            raise ApiError("badresponse", "edit response has no valid revision acknowledgement")
+        if "nochange" in result:
+            raise EditRejected("nochange", "no edit was made")
+        return revid

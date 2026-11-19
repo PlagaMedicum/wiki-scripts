@@ -1,0 +1,254 @@
+"""AI-assisted regressions for reviewed safety boundaries; no network or credentials."""
+
+from __future__ import annotations
+
+import io
+import json
+from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from svg_replacer import cli
+from svg_replacer.api import ApiError, MediaWikiApi
+from svg_replacer.creds import Credentials
+from svg_replacer.ui import Decider
+from svg_replacer.wikitext import FileNamespace, assess_usage, replace_usage
+from svg_replacer.workflow import Proposal
+
+
+@pytest.mark.parametrize(
+    "opening,closing",
+    [
+        ("<nowiki >", "</nowiki>"),
+        ('<nowiki class="x">', "</nowiki>"),
+        ("<pre>", "</pre>"),
+        ('<syntaxhighlight lang="wikitext">', "</syntaxhighlight>"),
+        ('<source lang="text">', "</source>"),
+        ("<math>", "</math>"),
+        ("<!--", "-->"),
+        ("<nowiki>", ""),
+    ],
+)
+def test_literal_content_is_never_replaceable(opening, closing):
+    text = f"{opening}[[File:Old.png]]{closing}"
+    assert assess_usage(text, "Old.png", FileNamespace.of("File")).status != "replace"
+
+
+def test_braces_in_comments_do_not_block_real_image():
+    text = "<!-- {{ -->\n[[File:Old.png|caption]]"
+    new, count = replace_usage(text, "Old.png", "New.svg", FileNamespace.of("File"))
+    assert count == 1
+    assert new == "<!-- {{ -->\n[[File:New.svg|caption]]"
+
+
+def test_credentials_repr_hides_password():
+    assert "SYNTHETIC_SECRET" not in repr(Credentials("example@bot", "SYNTHETIC_SECRET"))
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"result": "Success"},
+        {"result": "Success", "newrevid": 0},
+        {"result": "Success", "newrevid": "garbage"},
+        {"result": "Success", "nochange": True},
+        {"result": "Success", "nochange": True, "newrevid": 123},
+    ],
+)
+def test_edit_requires_revision_acknowledgement(result):
+    def transport(url, data):
+        p = parse_qs(data.decode() if data else urlsplit(url).query)
+        if p.get("action") == ["edit"]:
+            response = {"edit": result}
+        elif p.get("meta") == ["tokens"]:
+            response = {"query": {"tokens": {"csrftoken": "synthetic"}}}
+        else:
+            response = {"query": {"pages": [{"revisions": [{"revid": 123}]}]}}
+        return json.dumps(response).encode()
+
+    api = MediaWikiApi("example.invalid", transport=transport, sleep=lambda _: None)
+    with pytest.raises(ApiError):
+        api.edit(title="Example", text="new", summary="test", base_revid=123)
+
+
+def test_login_errors_do_not_echo_server_secrets():
+    def transport(url, data):
+        if data:
+            return json.dumps({"error": {"code": "failed", "info": "SYNTHETIC_SECRET"}}).encode()
+        return json.dumps({"query": {"tokens": {"logintoken": "synthetic"}}}).encode()
+
+    api = MediaWikiApi("example.invalid", transport=transport, sleep=lambda _: None)
+    with pytest.raises(ApiError) as exc:
+        api.login(Credentials("example@bot", "SYNTHETIC_SECRET"))
+    assert "SYNTHETIC_SECRET" not in str(exc.value)
+
+
+def test_http_errors_do_not_display_raw_bodies(monkeypatch):
+    class Opener:
+        def open(self, *args, **kwargs):
+            raise HTTPError(
+                "https://example.invalid", 403, "Forbidden", {}, io.BytesIO(b"SYNTHETIC_SECRET")
+            )
+
+    monkeypatch.setattr("svg_replacer.api.build_opener", lambda *args: Opener())
+    api = MediaWikiApi("example.invalid", sleep=lambda _: None)
+    with pytest.raises(ApiError) as exc:
+        api.imageinfo("File:Example.png")
+    assert "SYNTHETIC_SECRET" not in str(exc.value)
+
+
+def test_terminal_controls_are_visible_not_executed():
+    out = io.StringIO()
+    proposal = Proposal(
+        "page",
+        "Title",
+        "",
+        ["\x1b[2Jhidden"],
+        "-old\n+new\x1b]52;c;payload\x07\n",
+        "summary",
+        "Old.png",
+        "New.svg",
+    )
+    Decider(input_fn=lambda _: "s", out=out)(proposal)
+    assert "\x1b" not in out.getvalue()
+    assert "\x07" not in out.getvalue()
+    assert "payload" in out.getvalue()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "not-svg",
+        "not-raster",
+        "same-file",
+        "local-raster",
+        "local-svg",
+        "wrong-shared",
+        "valid",
+        "tracking",
+    ],
+)
+def test_cli_validates_file_pair_before_discovery(monkeypatch, capsys, case):
+    class FakeApi:
+        def __init__(self, host):
+            self.host = host
+
+        def imageinfo(self, title):
+            svg = title.endswith(".svg")
+            mime = "image/svg+xml" if svg else "image/png"
+            if case == "not-svg" and svg:
+                mime = "image/png"
+            if case == "not-raster" and not svg:
+                mime = "application/pdf"
+            repository = "shared"
+            if self.host != "commons.wikimedia.org" and (
+                (case == "local-svg" and svg) or (case == "local-raster" and not svg)
+            ):
+                repository = "local"
+            url = "https://upload.wikimedia.org/" + title
+            if self.host != "commons.wikimedia.org" and case == "wrong-shared":
+                url += "-different"
+            if case == "tracking":
+                url += f"?utm_source={self.host}"
+            return SimpleNamespace(
+                title=title,
+                missing=False,
+                mime=mime,
+                repository=repository,
+                url=url,
+                width=10,
+                height=10,
+                description_url="https://example.invalid",
+                thumb_url=None,
+            )
+
+        def page_revisions(self, titles):
+            return {
+                title: SimpleNamespace(
+                    title=title, missing=False, text="{{Vector version available|New.svg}}", revid=1
+                )
+                for title in titles
+            }
+
+        def file_namespaces(self):
+            return FileNamespace.of("File")
+
+        def site_db_name(self):
+            return "bewiki"
+
+        def global_usage(self, *args, **kwargs):
+            if case in {"valid", "tracking"}:
+                return []
+            pytest.fail("invalid files reached discovery")
+
+    monkeypatch.setattr(cli, "MediaWikiApi", FakeApi)
+    monkeypatch.setattr(cli, "confirm", lambda _: True)
+    raster = "File:New.svg" if case == "same-file" else "File:Old.png"
+    result = cli.main(["File:New.svg", "--raster", raster])
+    if case in {"valid", "tracking"}:
+        assert result == 0
+        assert "already has a vector-version template" in capsys.readouterr().out
+    else:
+        assert result != 0
+        assert "error:" in capsys.readouterr().err
+
+
+def test_globalusage_limit_counts_only_eligible_unique_pages():
+    calls = []
+
+    def transport(url, data):
+        calls.append(url)
+        pages = [
+            {
+                "title": "File:Old.png",
+                "globalusage": [
+                    {"wiki": "be.wikipedia.org", "title": "Talk:X", "ns": 1},
+                    {"wiki": "be.wikipedia.org", "title": "A", "ns": 0},
+                    {"wiki": "be.wikipedia.org", "title": "A", "ns": 0},
+                    {"wiki": "be.wikipedia.org", "title": "B", "ns": 0},
+                ],
+            }
+        ]
+        return json.dumps({"query": {"pages": pages}, "continue": {"gucontinue": "next"}}).encode()
+
+    api = MediaWikiApi("example.invalid", transport=transport, sleep=lambda _: None)
+    rows = api.global_usage("File:Old.png", site="bewiki", namespaces={0}, limit=2)
+    assert [row["title"] for row in rows] == ["A", "B"]
+    assert len(calls) == 1
+
+
+def test_cli_without_arguments_prompts_for_svg_link(monkeypatch, capsys):
+    prompts = []
+
+    def answer(prompt):
+        prompts.append(prompt)
+        return "https://not-commons.invalid/wiki/File:Example.svg"
+
+    monkeypatch.setattr("builtins.input", answer)
+    assert cli.main([]) == 2
+    assert prompts and "SVG" in prompts[0]
+    assert "expected a commons.wikimedia.org URL" in capsys.readouterr().err
+
+
+def test_shared_image_does_not_need_local_description_page():
+    response = {
+        "query": {
+            "pages": [
+                {
+                    "title": "File:Example.svg",
+                    "missing": True,
+                    "imagerepository": "shared",
+                    "imageinfo": [
+                        {"url": "https://upload.wikimedia.org/example.svg", "mime": "image/svg+xml"}
+                    ],
+                }
+            ]
+        }
+    }
+    api = MediaWikiApi(
+        "example.invalid", transport=lambda *_: json.dumps(response).encode(), sleep=lambda _: None
+    )
+    info = api.imageinfo("File:Example.svg")
+    assert not info.missing
+    assert info.repository == "shared"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -11,7 +11,7 @@ class CredentialsError(RuntimeError):
 @dataclass(frozen=True)
 class Credentials:
     username: str
-    password: str
+    password: str = field(repr=False)
 
 
 def default_env_path() -> Path:

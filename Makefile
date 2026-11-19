@@ -32,7 +32,7 @@ help:
 		'  make biblio-run ARGS="list"' \
 		'  make agentic-bot-test' \
 		'  make biblio-test' \
-		'  make svg-replacer-run ARGS="https://commons.wikimedia.org/wiki/File:Example.svg"'
+		'  make svg-replacer-run'
 
 test: suppressor-test biblio-test agentic-bot-test svg-replacer-test
 

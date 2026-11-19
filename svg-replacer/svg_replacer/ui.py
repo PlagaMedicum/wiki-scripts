@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import builtins
 import os
 import sys
+import unicodedata
 from collections.abc import Callable
 from typing import TextIO
 
@@ -17,6 +19,20 @@ DECISIONS = {
     "stop": "stop",
 }
 PROMPT = "[a]pprove / [s]kip / [q]uit: "
+
+
+def safe_text(text: str) -> str:
+    """Render untrusted controls visibly, without changing stored wikitext."""
+    return "".join(
+        char
+        if char in "\n\t" or unicodedata.category(char) not in {"Cc", "Cf"}
+        else ascii(char)[1:-1]
+        for char in text
+    )
+
+
+def safe_print(*values: object, file: TextIO | None = None) -> None:
+    builtins.print(*(safe_text(str(value)) for value in values), file=file)
 
 
 def colorize(text: str, code: str, *, enabled: bool) -> str:
@@ -62,7 +78,7 @@ class Decider:
         self._color = _supports_color(self._out)
 
     def _write(self, line: str = "") -> None:
-        print(line, file=self._out)
+        safe_print(line, file=self._out)
 
     def __call__(self, proposal: Proposal) -> str:
         self._write()
@@ -72,7 +88,7 @@ class Decider:
         for line in proposal.context:
             self._write(f"    {line}")
         self._write(f"    files: {proposal.raster} -> {proposal.svg}")
-        self._write(colorize_diff(proposal.diff, enabled=self._color))
+        print(colorize_diff(safe_text(proposal.diff), enabled=self._color), file=self._out)
         self._write(f"    edit summary: {proposal.edit_summary}")
         while True:
             self._write(PROMPT.rstrip())
@@ -86,7 +102,7 @@ class Decider:
 def confirm(question: str, *, input_fn: Callable[[str], str] = input) -> bool:
     """Yes/no gate that defaults to no on empty or unrecognized answers."""
     for _ in range(5):
-        raw = input_fn(f"{question} [y/N] ").strip().lower()
+        raw = input_fn(f"{safe_text(question)} [y/N] ").strip().lower()
         if raw in {"y", "yes"}:
             return True
         if raw in {"", "n", "no"}:

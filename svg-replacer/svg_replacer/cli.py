@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from svg_replacer.api import ApiError, ImageInfo, MediaWikiApi, PageRevision
 from svg_replacer.creds import Credentials, CredentialsError, default_env_path, load_credentials
 from svg_replacer.ui import Decider, confirm
+from svg_replacer.ui import safe_print as print
 from svg_replacer.wikitext import (
     FileNamespace,
     discover_raster_candidates,
@@ -45,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "svg_url",
         help="Commons URL of the SVG file, e.g. https://commons.wikimedia.org/wiki/File:Example.svg",
+        nargs="?",
     )
     parser.add_argument(
         "--raster",
@@ -112,8 +114,6 @@ def _page_revision(api: MediaWikiApi, title: str) -> PageRevision | None:
     """Fetch one page, tolerating server-side title normalization."""
     result = api.page_revisions([title])
     revision = result.get(title)
-    if revision is None and len(result) == 1:
-        revision = next(iter(result.values()))
     if revision is None or revision.missing:
         return None
     return revision
@@ -211,10 +211,14 @@ def _run(args: argparse.Namespace) -> int:
     credentials = load_credentials(args.env or default_env_path()) if args.apply else None
 
     commons = MediaWikiApi("commons.wikimedia.org")
-    svg_title = parse_commons_file_title(args.svg_url)
+    svg_title = parse_commons_file_title(
+        args.svg_url if args.svg_url is not None else input("Commons SVG link: ")
+    )
     svg_info = commons.imageinfo(svg_title)
     if svg_info.missing:
         raise CliError(f"SVG file does not exist on Commons: {svg_title}")
+    if svg_info.mime != "image/svg+xml":
+        raise CliError("destination must be an SVG image")
     svg_text = _page_text(commons, svg_info.title)
     commons_files = commons.file_namespaces()
 
@@ -225,6 +229,18 @@ def _run(args: argparse.Namespace) -> int:
             f"raster file does not exist on Commons: {raster_title} "
             "(pass --raster if the derivation info is wrong)"
         )
+    if raster_info.title == svg_info.title:
+        raise CliError("raster and SVG must be different files")
+    if raster_info.mime not in {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/tiff",
+        "image/webp",
+        "image/bmp",
+        "image/x-ms-bmp",
+    }:
+        raise CliError("source must be a supported raster image")
     raster_text = _page_text(commons, raster_info.title)
 
     print("Both files exist; compare them visually before any replacement:")
@@ -238,10 +254,24 @@ def _run(args: argparse.Namespace) -> int:
 
     host = f"{args.wiki}.wikipedia.org"
     target = MediaWikiApi(host)
+    for expected in (raster_info, svg_info):
+        actual = target.imageinfo(expected.title)
+        # imageinfo adds wiki-specific tracking queries to the same upload URL.
+        if (
+            actual.missing
+            or actual.repository != "shared"
+            or not actual.url
+            or not expected.url
+            or urlsplit(actual.url)[:3] != urlsplit(expected.url)[:3]
+        ):
+            raise CliError(
+                f"{expected.title} does not resolve to the intended Commons file on {host}"
+            )
     site_db = target.site_db_name()
-    rows = commons.global_usage(raster_info.title, site=site_db)
+    rows = commons.global_usage(
+        raster_info.title, site=site_db, namespaces=namespaces, limit=args.limit
+    )
     candidates = filter_usage_rows(rows, wiki_host=host, namespaces=namespaces)
-    candidates = candidates[: args.limit]
 
     target_files = target.file_namespaces()
     reviews = build_page_reviews(

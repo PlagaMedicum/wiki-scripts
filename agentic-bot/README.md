@@ -106,11 +106,13 @@ proposals/
             └── ...
 ```
 
-Proposals and existing local `.env` files are ignored by Git. Prefer environment
-variables for credentials. Authentication and cookies stay in memory; the
-isolated temporary Pywikibot configuration contains no password. Restart the bot
-if its session expires or Pywikibot was already initialized in the process.
-Existing credential and cookie files from earlier versions are not removed.
+Proposals and existing local `.env` files are ignored by Git. Credentials can be
+placed in `.env` in the repository root or in `~/.config/wiki-scripts/publisher.env`
+(permissions `600`). When `.env` is absent in the tool root, `publisher.env` is
+loaded by default. Authentication and cookies stay in memory; the isolated temporary
+Pywikibot configuration contains no password. Restart the bot if its session expires
+or Pywikibot was already initialized in the process. Existing credential and cookie
+files from earlier versions are not removed.
 
 ## Testing & Quality Gates
 

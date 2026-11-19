@@ -83,13 +83,37 @@ def split_bot_password_login(login: str) -> tuple[str, str]:
     return normalize_bot_username(username), suffix.strip()
 
 
-def load_credentials_from_env(env_path: Path | None = None) -> tuple[str, str, str]:
-    """Load credentials from local .env. Returns (username, password, api_url)."""
-    if env_path is None:
-        env_path = Path(__file__).resolve().parent.parent / ".env"
+ROOT_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+USER_CONFIG_ENV_FILENAME = "publisher.env"
 
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
+
+def get_user_config_env_path() -> Path:
+    """Resolve user configuration env file path, respecting XDG_CONFIG_HOME if set."""
+    xdg_config = os.getenv("XDG_CONFIG_HOME")
+    if xdg_config:
+        return Path(xdg_config) / "wiki-scripts" / USER_CONFIG_ENV_FILENAME
+    return Path.home() / ".config" / "wiki-scripts" / USER_CONFIG_ENV_FILENAME
+
+
+def resolve_default_env_path() -> Path:
+    """Resolve default .env path: root .env takes precedence; falls back to user config."""
+    if ROOT_ENV_PATH.exists():
+        return ROOT_ENV_PATH
+    user_config_path = get_user_config_env_path()
+    if user_config_path.exists():
+        return user_config_path
+    default_home_config = Path.home() / ".config" / "wiki-scripts" / USER_CONFIG_ENV_FILENAME
+    if default_home_config.exists():
+        return default_home_config
+    return ROOT_ENV_PATH
+
+
+def load_credentials_from_env(env_path: Path | None = None) -> tuple[str, str, str]:
+    """Load credentials from local .env or fallback config location. Returns (username, password, api_url)."""
+    target_path = env_path if env_path is not None else resolve_default_env_path()
+
+    if target_path.exists():
+        load_dotenv(dotenv_path=target_path)
     else:
         load_dotenv()
 
@@ -99,8 +123,8 @@ def load_credentials_from_env(env_path: Path | None = None) -> tuple[str, str, s
 
     if not username or not password:
         raise WikiError(
-            f"Missing WIKI_BOT_USERNAME or WIKI_BOT_PASSWORD in {env_path}. "
-            "Please copy .env.example to .env and supply valid bot credentials."
+            f"Missing WIKI_BOT_USERNAME or WIKI_BOT_PASSWORD in {target_path}. "
+            "Please copy .env.example to .env or ~/.config/wiki-scripts/publisher.env and supply valid bot credentials."
         )
 
     return username, password, api_url

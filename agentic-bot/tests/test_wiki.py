@@ -15,6 +15,7 @@ from agentic_bot.wiki import (
     InsufficientPermissionsError,
     WikiClient,
     WikiError,
+    load_credentials_from_env,
     normalize_bot_username,
     split_bot_password_login,
 )
@@ -511,3 +512,109 @@ def test_publish_with_bot_flag():
         baserevid=100,
         bot=True,
     )
+
+
+def test_load_credentials_fallback_to_user_config(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".config" / "wiki-scripts"
+    config_dir.mkdir(parents=True)
+    publisher_env = config_dir / "publisher.env"
+    publisher_env.write_text(
+        "WIKI_BOT_USERNAME=ConfigBot@label\n"
+        "WIKI_BOT_PASSWORD=secret-config-pass\n"
+        "WIKI_API_URL=https://be.wikipedia.org/w/api.php\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    monkeypatch.delenv("WIKI_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_PASSWORD", raising=False)
+    monkeypatch.delenv("WIKI_API_URL", raising=False)
+
+    user, password, api_url = load_credentials_from_env(None)
+    assert user == "ConfigBot@label"
+    assert password == "secret-config-pass"
+    assert api_url == "https://be.wikipedia.org/w/api.php"
+
+
+def test_load_credentials_fallback_to_default_home_config(tmp_path, monkeypatch):
+    # Tests ~/.config/wiki-scripts/publisher.env when XDG_CONFIG_HOME is unset
+    config_dir = tmp_path / ".config" / "wiki-scripts"
+    config_dir.mkdir(parents=True)
+    publisher_env = config_dir / "publisher.env"
+    publisher_env.write_text(
+        "WIKI_BOT_USERNAME=DefaultHomeBot@label\nWIKI_BOT_PASSWORD=home-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_PASSWORD", raising=False)
+    monkeypatch.delenv("WIKI_API_URL", raising=False)
+
+    user, password, api_url = load_credentials_from_env(None)
+    assert user == "DefaultHomeBot@label"
+    assert password == "home-secret"
+    assert api_url == "https://be.wikipedia.org/w/api.php"
+
+
+def test_load_credentials_root_env_precedence(tmp_path, monkeypatch):
+    config_dir = tmp_path / ".config" / "wiki-scripts"
+    config_dir.mkdir(parents=True)
+    (config_dir / "publisher.env").write_text(
+        "WIKI_BOT_USERNAME=ConfigBot@label\nWIKI_BOT_PASSWORD=config-pass\n",
+        encoding="utf-8",
+    )
+    root_env = tmp_path / "tool_root" / ".env"
+    root_env.parent.mkdir(parents=True)
+    root_env.write_text(
+        "WIKI_BOT_USERNAME=RootBot@label\nWIKI_BOT_PASSWORD=root-pass\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("agentic_bot.wiki.ROOT_ENV_PATH", root_env)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    monkeypatch.delenv("WIKI_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_PASSWORD", raising=False)
+    monkeypatch.delenv("WIKI_API_URL", raising=False)
+
+    user, password, _ = load_credentials_from_env(None)
+    assert user == "RootBot@label"
+    assert password == "root-pass"
+
+
+def test_load_credentials_explicit_path_takes_precedence(tmp_path, monkeypatch):
+    custom_env = tmp_path / "custom.env"
+    custom_env.write_text(
+        "WIKI_BOT_USERNAME=CustomBot@label\nWIKI_BOT_PASSWORD=custom-pass\n",
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".config" / "wiki-scripts"
+    config_dir.mkdir(parents=True)
+    (config_dir / "publisher.env").write_text(
+        "WIKI_BOT_USERNAME=ConfigBot@label\nWIKI_BOT_PASSWORD=config-pass\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    monkeypatch.delenv("WIKI_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_PASSWORD", raising=False)
+    monkeypatch.delenv("WIKI_API_URL", raising=False)
+
+    user, password, _ = load_credentials_from_env(custom_env)
+    assert user == "CustomBot@label"
+    assert password == "custom-pass"
+
+
+def test_load_credentials_missing_raises_informative_error(tmp_path, monkeypatch):
+    empty_root = tmp_path / "nonexistent" / ".env"
+    monkeypatch.setattr("agentic_bot.wiki.ROOT_ENV_PATH", empty_root)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    monkeypatch.delenv("WIKI_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("WIKI_BOT_PASSWORD", raising=False)
+    monkeypatch.delenv("WIKI_API_URL", raising=False)
+
+    with pytest.raises(WikiError, match="publisher.env"):
+        load_credentials_from_env(None)

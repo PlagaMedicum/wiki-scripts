@@ -47,7 +47,8 @@ make run
 The tool first asks whether to publish (default no), then prompts for the
 Commons SVG link. Answering yes — or `make run ARGS="--apply"` — sets PUBLISH
 mode; each edit still asks individually. The yellow PREVIEW banner and
-`[a] Preview (not saved)` mean no edit is sent; PUBLISH uses `[a] Publish`.
+`[Enter/a] Preview (not saved)` mean no edit is sent; PUBLISH uses
+`[Enter/a] Publish`. Pressing `Enter` approves the shown diff, nothing else.
 Colours are automatic in terminals; `NO_COLOR` disables them.
 
 From the repository root:
@@ -68,12 +69,13 @@ make svg-replacer-run
    the selected namespaces (default 0).
 4. List candidate titles; direct article uses come first, auto-skips are labelled.
 5. Show each target link, exact unified diff (including surrounding context) and
-   edit summary. Choose `[a] Preview` (read-only) or `[a] Publish` (`--apply`),
-   `[s] Skip`, or `[q] Quit`.
-6. After the article loop, separately propose adding
-   `{{Vector version available|Example.svg}}` to the raster's Commons
-   file-description page (existing equivalent templates are detected and never
-   duplicated) — own diff, own approval.
+   edit summary. Press `Enter` (or `a`) to approve — the action is Preview when
+   publishing is off, Publish otherwise — `s` to skip, `q` to quit.
+6. After the article loop, separately propose the Commons file-description page
+   of the raster: add `{{Vector version available|Example.svg}}` on top and
+   remove any stale `{{SVG}}`/`{{Convert to SVG}}` conversion-request marker
+   (one diff, one approval). Existing equivalent notices are detected and never
+   duplicated.
 7. Summarize saved and previewed changes, including the separate Commons notice.
    Zero-count skip/failure details are omitted.
 
@@ -124,7 +126,9 @@ SVG_REPLACER_LIVE=1 make test ARGS="tests/test_live_readonly.py"
 - Image uses inside template invocations (e.g. infobox `|image=`) are skipped
   by design; replace those manually if appropriate.
 - Duplicate-vector detection recognizes `{{Vector version available}}`,
-  `{{VVA}}` and `{{subst:…}}` spellings only.
+  `{{VVA}}` and `{{subst:…}}` spellings only. The Commons cleanup removes only
+  the `{{SVG}}`/`{{Convert to SVG}}` marker family, outside comments and
+  literal-content tags.
 - Transient HTTP 429/503 throttling is retried on reads (3 bounded retries);
   login and edit requests are never retried automatically. Missing revision
   acknowledgements and explicit no-change responses are not counted as published.

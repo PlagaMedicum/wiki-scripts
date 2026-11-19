@@ -9,6 +9,7 @@ from svg_replacer.wikitext import (
     find_file_links,
     has_vector_template,
     normalize_file_name,
+    remove_svg_markers,
     replace_usage,
 )
 
@@ -193,6 +194,40 @@ def test_discover_raster_candidates_commons_file_urls() -> None:
     )
     candidates = discover_raster_candidates(svg_page, COMMONS_FILES)
     assert [c.name for c in candidates] == ["Derived_image.PNG"]
+
+
+def test_remove_svg_markers_drops_own_line_and_newline():
+    text = "{{Information|x}}\n{{SVG|diagram}}\n\n== license ==\n"
+    assert remove_svg_markers(text) == "{{Information|x}}\n\n== license ==\n"
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "{{SVG}}",
+        "{{svg|diagram}}",
+        "{{ subst:SVG | x }}",
+        "{{Convert to SVG|diagram}}",
+        "{{convert_to_svg}}",
+        "{{ convert to svg |1= please }}",
+    ],
+)
+def test_remove_svg_markers_recognizes_marker_family(marker):
+    assert marker not in remove_svg_markers(f"before {marker} after\n")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<!-- {{SVG|diagram}} -->",
+        "<nowiki>{{SVG|diagram}}</nowiki>",
+        "{{SVG|{{nested}}}}",
+        "{{SVGx|y}}",
+        "{{SVG other|y}}",
+    ],
+)
+def test_remove_svg_markers_never_touches_protected_or_foreign(text):
+    assert remove_svg_markers(text) == text
 
 
 def test_vector_template_detection_and_addition() -> None:

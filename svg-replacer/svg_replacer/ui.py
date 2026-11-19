@@ -10,6 +10,7 @@ from typing import TextIO
 from svg_replacer.workflow import Proposal
 
 DECISIONS = {
+    "": "approve",
     "a": "approve",
     "approve": "approve",
     "s": "skip",
@@ -96,12 +97,12 @@ class Decider:
         self._write(f"Edit summary: {proposal.edit_summary}")
         action = "Publish" if self._apply else "Preview (not saved)"
         while True:
-            self._write(f"[a] {action}  [s] Skip  [q] Quit", color="33")
+            self._write(f"[Enter/a] {action}  [s] Skip  [q] Quit", color="33")
             raw = self._input("").strip().lower()
             decision = DECISIONS.get(raw)
             if decision is not None:
                 return decision
-            self._write("Choose a, s or q.", color="33")
+            self._write("Choose Enter, a, s or q.", color="33")
 
 
 def confirm(question: str, *, input_fn: Callable[[str], str] = input) -> bool:

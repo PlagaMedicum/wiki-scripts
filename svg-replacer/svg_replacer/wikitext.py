@@ -26,6 +26,11 @@ _LITERAL = re.compile(
 
 _URL_JUNK = " \t\r\n).,;'\""
 
+_SVG_MARKER = re.compile(
+    r"\{\{\s*(?:subst\s*:\s*)?(?:svg|convert[ _]+to[ _]+svg)\s*(?:\|[^{}]*)?\}\}",
+    re.IGNORECASE,
+)
+
 
 def normalize_file_name(name: str) -> str:
     """Approximate MediaWiki file-title normalization for safe comparison."""
@@ -266,6 +271,31 @@ def _raster_from_url(url: str, ns: FileNamespace) -> tuple[str, str] | None:
     if _raster_extension(name):
         return name, "external URL"
     return None
+
+
+def remove_svg_markers(text: str) -> str:
+    """Remove {{SVG|…}} / {{Convert to SVG|…}} vectorization-request markers."""
+    protected = [(match.start(), match.end()) for match in _LITERAL.finditer(text)]
+    pieces: list[str] = []
+    pos = 0
+    for match in _SVG_MARKER.finditer(text):
+        if any(start <= match.start() < end for start, end in protected):
+            continue
+        start, end = match.span()
+        line_start = start
+        while line_start > 0 and text[line_start - 1] in " \t":
+            line_start -= 1
+        line_end = end
+        while line_end < len(text) and text[line_end] in " \t":
+            line_end += 1
+        if (line_start == 0 or text[line_start - 1] == "\n") and (
+            line_end == len(text) or text[line_end] == "\n"
+        ):
+            start, end = line_start, min(line_end + 1, len(text))
+        pieces.append(text[pos:start])
+        pos = end
+    pieces.append(text[pos:])
+    return "".join(pieces)
 
 
 def discover_raster_candidates(text: str, ns: FileNamespace) -> list[RasterCandidate]:

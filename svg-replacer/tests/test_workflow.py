@@ -384,6 +384,53 @@ def test_build_page_reviews_marks_missing_pages() -> None:
 # --- Commons Vector-version-available step ---
 
 
+def test_vva_removes_conversion_marker_and_adds_notice():
+    text = "== desc ==\n{{Information|x}}\n{{SVG|diagram}}\n"
+    calls: list[tuple[str, str, str, int]] = []
+
+    outcome = propose_vva(
+        "File:Foo.png",
+        SVG,
+        text,
+        revid=9,
+        apply=True,
+        decide=scripted_decisions("approve"),
+        publish=recording_publish(calls),
+        out=[].append,
+    )
+
+    assert outcome == "published"
+    _, new_text, summary, _ = calls[0]
+    assert new_text.startswith("{{Vector version available|Foo.svg}}\n")
+    assert "{{SVG" not in new_text
+    assert "{{Information|x}}" in new_text
+    assert "marker" in summary.lower()
+
+
+def test_vva_removes_stale_marker_even_when_notice_exists():
+    text = "{{Vector version available|Foo.svg}}\n{{Information|x}}\n{{SVG|diagram}}\n"
+    calls: list[tuple[str, str, str, int]] = []
+
+    outcome = propose_vva(
+        "File:Foo.png",
+        SVG,
+        text,
+        revid=9,
+        apply=True,
+        decide=scripted_decisions("approve"),
+        publish=recording_publish(calls),
+        out=[].append,
+    )
+
+    assert outcome == "published"
+    _, new_text, summary, _ = calls[0]
+    assert "{{SVG" not in new_text
+    assert new_text.startswith("{{Vector version available|Foo.svg}}\n")
+    assert "{{Information|x}}" in new_text
+    assert "marker" in summary.lower()
+    assert "Adds" not in summary
+
+
 def test_vva_duplicate_detected_without_prompt_or_publish() -> None:
     text = "{{Vector version available|Foo.svg}}\n{{Information|x}}\n"
     calls: list[tuple[str, str, str, int]] = []

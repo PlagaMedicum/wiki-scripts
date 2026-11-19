@@ -72,18 +72,25 @@ def test_colorize_only_emits_escape_codes_when_enabled() -> None:
     assert "\x1b[" not in colorize("x", "31", enabled=False)
 
 
+def test_enter_approves():
+    decider = Decider(input_fn=scripted_input(""), out=io.StringIO())
+    assert decider(make_proposal()) == "approve"
+
+
 def test_preview_prompt_cannot_be_mistaken_for_publishing():
     out = io.StringIO()
-    Decider(input_fn=scripted_input("a"), out=out)(make_proposal())
+    Decider(input_fn=scripted_input(""), out=out)(make_proposal())
     shown = out.getvalue().lower()
-    assert "[a] preview" in shown
-    assert "not saved" in shown
+    assert "enter" in shown
+    assert "preview (not saved)" in shown
 
 
 def test_publish_prompt_names_the_write_action():
     out = io.StringIO()
     Decider(input_fn=scripted_input("s"), out=out, apply=True)(make_proposal())
-    assert "[a] publish" in out.getvalue().lower()
+    shown = out.getvalue().lower()
+    assert "enter" in shown
+    assert "publish" in shown
 
 
 def test_terminal_colour_does_not_restore_untrusted_controls(monkeypatch):

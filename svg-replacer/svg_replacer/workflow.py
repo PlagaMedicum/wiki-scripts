@@ -12,6 +12,7 @@ from svg_replacer.wikitext import (
     add_vector_template,
     assess_usage,
     has_vector_template,
+    remove_svg_markers,
     replace_matches,
     usage_context,
 )
@@ -183,8 +184,23 @@ def build_edit_summary(raster_name: str, svg_name: str) -> str:
     return f"Replaces File:{raster_name} with File:{svg_name} (vector version available)"
 
 
-def build_vva_summary(raster_title: str, svg_title: str) -> str:
-    return f"Adds {{{{Vector version available|{svg_title}}}}} for [[{raster_title}]]"
+def build_vva_summary(
+    raster_title: str,
+    svg_title: str,
+    *,
+    marker_removed: bool = False,
+    notice_added: bool = True,
+) -> str:
+    if notice_added and marker_removed:
+        change = (
+            f"Replaces the {{{{Convert to SVG}}}} marker with "
+            f"{{{{Vector version available|{svg_title}}}}}"
+        )
+    elif notice_added:
+        change = f"Adds {{{{Vector version available|{svg_title}}}}}"
+    else:
+        change = "Removes the {{Convert to SVG}} marker"
+    return f"{change} for [[{raster_title}]]"
 
 
 def _reject_unknown(decision: str) -> None:
@@ -283,11 +299,16 @@ def propose_vva(
     publish: Publish,
     out: Emit,
 ) -> str:
-    """Separately propose adding {{Vector version available}} on Commons."""
-    if has_vector_template(text):
+    """Separately propose the Commons notice and marker cleanup on one page."""
+    marker_removed = remove_svg_markers(text) != text
+    notice_added = not has_vector_template(text)
+    new_text = text
+    if notice_added:
+        new_text = add_vector_template(new_text, svg_name)
+    new_text = remove_svg_markers(new_text)
+    if new_text == text:
         out("Commons notice already present; nothing to add.")
         return "duplicate"
-    new_text = add_vector_template(text, svg_name)
     diff = render_diff(text, new_text, fromfile=f"a/{raster_title}", tofile=f"b/{raster_title}")
     proposal = Proposal(
         kind="commons",
@@ -295,7 +316,12 @@ def propose_vva(
         url=f"https://commons.wikimedia.org/wiki/{quote(raster_title.replace(' ', '_'), safe=':')}",
         context=[],
         diff=diff,
-        edit_summary=build_vva_summary(raster_title, svg_name),
+        edit_summary=build_vva_summary(
+            raster_title,
+            svg_name,
+            marker_removed=marker_removed,
+            notice_added=notice_added,
+        ),
         raster=raster_title,
         svg=svg_name,
     )

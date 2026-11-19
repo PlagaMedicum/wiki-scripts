@@ -279,6 +279,18 @@ class WikiClient:
         is_current = latest_revid == expected_revid
         return is_current, latest_revid, latest_ts
 
+    def query_api(self, action: str, **params: Any) -> dict[str, Any]:
+        """Run a read-only MediaWiki API request and return the raw JSON response.
+
+        Never authenticates and never modifies the wiki; used by validation.
+        """
+        self._init_pywikibot()
+        request = self._pywikibot.data.api.Request(self._site, action=action, **params)
+        response = request.submit()
+        if not isinstance(response, dict):
+            raise WikiError(f"Unexpected API response shape for action={action!r}")
+        return response
+
     def publish_page(
         self,
         title: str,

@@ -2,15 +2,33 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from agentic_bot.cli import main
 from agentic_bot.models import PageSnapshot
 from agentic_bot.store import ProposalStore
+from agentic_bot.validate import ValidationResult
 
 
 def test_cli_list_empty(tmp_path):
     with patch("agentic_bot.cli.ProposalStore", return_value=ProposalStore(tmp_path)):
         exit_code = main(["list"])
         assert exit_code == 0
+
+
+@pytest.mark.parametrize("status", [None, "published", "declined", "all"])
+def test_cli_list_hides_archived_proposals_unless_requested(tmp_path, capsys, status):
+    store = ProposalStore(tmp_path)
+    for state in ("pending", "approved", "conflict", "declined", "published"):
+        snap = PageSnapshot(f"Fixture-{state}", 100, "", "Old")
+        proposal = store.create(snap, "New", "Summary", "Rationale", "Issue")
+        store.set_status(proposal.id, state)
+    args = ["list"] if status is None else ["list", "--status", status]
+    with patch("agentic_bot.cli.ProposalStore", return_value=store):
+        assert main(args) == 0
+    output = capsys.readouterr().out
+    expected = {"pending", "approved", "conflict"} if status is None else {status}
+    for state in ("pending", "approved", "conflict", "declined", "published"):
+        assert (f"Fixture-{state}" in output) == (state in expected or status == "all")
 
 
 def test_cli_create_and_show(tmp_path):
@@ -214,7 +232,7 @@ def test_cli_approve_validation(tmp_path):
     store = ProposalStore(tmp_path)
     snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
     p1 = store.create(snap, "clean text", "Summary", "R", "I")
-    p2 = store.create(snap, "conflict <<<<<<< text", "Summary", "R", "I")
+    p2 = store.create(snap, "<<<<<<< ours\nA\n=======\nB\n>>>>>>> theirs\n", "Summary", "R", "I")
 
     with (
         patch("agentic_bot.cli.ProposalStore", return_value=store),
@@ -269,3 +287,71 @@ def test_cli_approve_requires_review_and_confirmation(tmp_path):
         mock_render.assert_called_once()
         mock_confirm.assert_called_once()
         assert store.load(p.id).status == "approved"
+
+
+# ---------------------------------------------------------------------------
+# Validation gates on CLI approval/publication
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_wiki_validation(monkeypatch):
+    """Keep the suite offline: validation performs real API calls unless a test opts in."""
+    monkeypatch.setattr(
+        "agentic_bot.validate.validate_proposal",
+        lambda client, proposal: ValidationResult(proposal.current_version, proposal.page.revid),
+    )
+    monkeypatch.setattr("agentic_bot.cli.WikiClient", lambda **kwargs: None)
+
+
+def test_cmd_approve_blocked_by_validation_errors(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
+    p1 = store.create(snap, "clean text", "Summary", "R", "I")
+
+    errors = ValidationResult(
+        version=1, base_revid=100, errors=("newly introduced link target 'X' does not exist",)
+    )
+    with (
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("agentic_bot.validate.validate_proposal", return_value=errors),
+        patch("rich.prompt.Confirm.ask") as mock_confirm,
+    ):
+        assert main(["approve", p1.id]) == 1
+        mock_confirm.assert_not_called()
+    assert store.load(p1.id).status == "pending"
+
+
+def test_cmd_publish_blocked_by_validation_errors(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("TestPage", 100, "2026-01-01T00:00:00Z", "Old text")
+    p1 = store.create(snap, "clean text", "Summary", "R", "I")
+    store.set_status(p1.id, "approved", reason="t")
+
+    errors = ValidationResult(
+        version=1, base_revid=100, errors=("newly introduced template 'Ghost' does not exist",)
+    )
+    with (
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("agentic_bot.validate.validate_proposal", return_value=errors),
+    ):
+        assert main(["publish", p1.id, "--dry-run"]) == 1
+    assert store.load(p1.id).status == "approved"  # unchanged, nothing published
+
+
+def test_cli_edit_defers_validation(tmp_path, capsys):
+    store = ProposalStore(tmp_path)
+    proposal = store.create(PageSnapshot("Page", 1, "", "base"), "proposed", "S", "R", "I")
+    with (
+        patch("agentic_bot.cli.WikiClient") as wiki,
+        patch("agentic_bot.cli.ProposalStore", return_value=store),
+        patch("agentic_bot.cli.edit_text_in_editor", return_value=("edited", True)),
+        patch("agentic_bot.validate.validate_proposal") as validation,
+    ):
+        wiki.return_value.fetch_page.return_value = proposal.page
+        assert main(["edit", proposal.id]) == 0
+    validation.assert_not_called()
+    assert store.load(proposal.id).current_version == 2
+    assert "validation" in capsys.readouterr().out.lower()

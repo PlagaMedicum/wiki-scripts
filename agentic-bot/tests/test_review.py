@@ -2,17 +2,30 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from agentic_bot.models import PageSnapshot
 from agentic_bot.review import (
+    approval_block_reason,
     build_proposal_content_lines,
     extract_test_status,
     interactive_dashboard_loop,
+    publication_block_reason,
     render_proposal_view,
     review_proposal_interactive,
-    sync_proposal_with_wiki,
 )
 from agentic_bot.store import ProposalStore
+from agentic_bot.validate import ValidationResult
 from rich.console import Console
+
+
+@pytest.fixture(autouse=True)
+def _no_wiki_validation(monkeypatch):
+    """Keep the suite offline: validation performs real API calls unless a test opts in."""
+    monkeypatch.setattr(
+        "agentic_bot.validate.validate_proposal",
+        lambda client, proposal: ValidationResult(proposal.current_version, proposal.page.revid),
+    )
+    monkeypatch.setattr("agentic_bot.review.WikiClient", MagicMock())
 
 
 def test_extract_test_status():
@@ -81,106 +94,6 @@ def test_proposal_view_does_not_claim_unchecked_live_sync():
     render_proposal_view(console, proposal)
 
     assert "LOCAL BASE" in console.export_text()
-
-
-def test_sync_proposal_with_wiki_synced(tmp_path):
-    store = ProposalStore(tmp_path)
-    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
-    p = store.create(snap, "Proposed", "Summary", "R", "I")
-
-    wiki = MagicMock()
-    wiki.fetch_page.return_value = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
-
-    status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert status == "synced"
-    assert updated_p.page.revid == 100
-
-
-def test_sync_proposal_with_wiki_outdated_does_not_rebase(tmp_path):
-    store = ProposalStore(tmp_path)
-    base_text = "line 1\nline 2\nline 3\nline 4\nline 5\n"
-    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", base_text)
-    p = store.create(snap, "line 1\nline 2\nline 3\nline 4\nline 5 proposed\n", "Summary", "R", "I")
-
-    live_snap = PageSnapshot(
-        "Page", 105, "2026-01-02T00:00:00Z", "line 1 live\nline 2\nline 3\nline 4\nline 5\n"
-    )
-    wiki = MagicMock()
-    wiki.fetch_page.return_value = live_snap
-
-    status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert status.startswith("outdated:105")
-    assert updated_p.status == "pending"
-    assert updated_p.page.revid == 100
-    assert updated_p.current_version == 1
-    assert store.load(p.id).status == "pending"
-    assert store.load(p.id).current_version == 1
-
-
-def test_sync_proposal_with_wiki_failure_returns_unknown(tmp_path):
-    store = ProposalStore(tmp_path)
-    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "line1\nline2\n")
-    p = store.create(snap, "line1\nline2 proposal\n", "Summary", "R", "I")
-
-    wiki = MagicMock()
-    wiki.fetch_page.side_effect = RuntimeError("Network error")
-
-    status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert status == "unknown"
-    assert updated_p.status == "pending"
-    assert updated_p.page.revid == 100
-    assert store.load(p.id).status == "pending"
-
-
-def test_sync_proposal_with_wiki_declined_preserves_status(tmp_path):
-    store = ProposalStore(tmp_path)
-    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "line 1\nline 2\n")
-    p = store.create(snap, "line 1\nline 2 proposed\n", "Summary", "R", "I")
-    p = store.set_status(p.id, "declined", reason="Not needed")
-
-    live_snap = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "line 1 live\nline 2\n")
-    wiki = MagicMock()
-    wiki.fetch_page.return_value = live_snap
-
-    status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert updated_p.status == "declined"
-    assert updated_p.current_version == 1
-    assert store.load(p.id).status == "declined"
-    assert store.load(p.id).current_version == 1
-
-
-def test_sync_proposal_with_wiki_published_preserves_status(tmp_path):
-    store = ProposalStore(tmp_path)
-    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "line 1\nline 2\n")
-    p = store.create(snap, "line 1\nline 2 proposed\n", "Summary", "R", "I")
-    p = store.record_publication(p.id, 101, "2026-01-01T01:00:00Z")
-
-    live_snap = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "line 1 live\nline 2\n")
-    wiki = MagicMock()
-    wiki.fetch_page.return_value = live_snap
-
-    status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert updated_p.status == "published"
-    assert updated_p.current_version == 1
-    assert store.load(p.id).status == "published"
-    assert store.load(p.id).current_version == 1
-
-
-def test_sync_proposal_with_wiki_approved_preserves_status(tmp_path):
-    store = ProposalStore(tmp_path)
-    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "line 1\nline 2\n")
-    p = store.create(snap, "line 1\nline 2 proposed\n", "Summary", "R", "I")
-    p = store.set_status(p.id, "approved")
-
-    live_snap = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "line 1 live\nline 2\n")
-    wiki = MagicMock()
-    wiki.fetch_page.return_value = live_snap
-
-    status, updated_p = sync_proposal_with_wiki(p, store, wiki)
-    assert updated_p.status == "approved"
-    assert updated_p.current_version == 1
-    assert store.load(p.id).status == "approved"
-    assert store.load(p.id).current_version == 1
 
 
 def test_dashboard_does_not_publish_from_piped_input(tmp_path):
@@ -287,6 +200,8 @@ def test_review_press_a_requires_confirmation(tmp_path):
 
     # Declining confirmation -> remains pending
     with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
         patch("agentic_bot.review.read_key", side_effect=["a", "b"]),
         patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)),
         patch("rich.prompt.Confirm.ask", return_value=False) as mock_confirm,
@@ -300,6 +215,8 @@ def test_review_press_a_requires_confirmation(tmp_path):
     # Accepting confirmation -> approved
     with (
         patch("agentic_bot.review.read_key", side_effect=["a", "b"]),
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
         patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)),
         patch("rich.prompt.Confirm.ask", return_value=True) as mock_confirm,
     ):
@@ -321,7 +238,7 @@ def test_dashboard_open_declined_has_no_side_effects(tmp_path):
     wiki.fetch_page.return_value = PageSnapshot("Page", 105, "2026-01-02T00:00:00Z", "Live content")
 
     with (
-        patch("agentic_bot.review.read_key", side_effect=["enter", "q"]),
+        patch("agentic_bot.review.read_key", side_effect=["f", "f", "f", "f", "enter", "q"]),
         patch("agentic_bot.review.render_dashboard_table"),
         patch("agentic_bot.review.review_proposal_interactive", return_value="back") as mock_review,
     ):
@@ -426,6 +343,8 @@ def test_review_blocked_approve_and_publish_explain_persistently(tmp_path):
 
     # [a] on conflicted content: blocked with explanation, no confirmation offered
     with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
         patch("agentic_bot.review.read_key", side_effect=["a", "down", "b"]),
         patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
         patch("rich.prompt.Confirm.ask") as mock_confirm,
@@ -438,8 +357,10 @@ def test_review_blocked_approve_and_publish_explain_persistently(tmp_path):
     # The explanation persists across frames until replaced
     assert sum("conflict markers" in n.lower() for n in notices) >= 2
 
-    # [p] on pending proposal: blocked with the approval explanation
+    # [p] also attempts approval, but unresolved conflict markers block it.
     with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
         patch("agentic_bot.review.read_key", side_effect=["p", "down", "b"]),
         patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
         patch("rich.prompt.Confirm.ask") as mock_confirm,
@@ -448,7 +369,7 @@ def test_review_blocked_approve_and_publish_explain_persistently(tmp_path):
 
     mock_confirm.assert_not_called()
     notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
-    assert sum("must be approved" in n.lower() for n in notices) >= 2
+    assert sum("conflict markers" in n.lower() for n in notices) >= 2
 
 
 def test_publication_block_reason_statuses(tmp_store: ProposalStore, sample_snapshot: PageSnapshot):
@@ -461,7 +382,7 @@ def test_publication_block_reason_statuses(tmp_store: ProposalStore, sample_snap
     assert "Reopen" in publication_block_reason(tmp_store.load(proposal.id))
 
     tmp_store.set_status(proposal.id, "approved")
-    assert publication_block_reason(tmp_store.load(proposal.id)) is None
+    assert "validation" in publication_block_reason(tmp_store.load(proposal.id)).lower()
 
     conflicted = tmp_store.create(
         sample_snapshot, "<<<<<<< ours\nA\n=======\nB\n>>>>>>> theirs\n", "S", "R", "I"
@@ -535,3 +456,154 @@ def test_review_r_on_current_revision_changes_nothing(tmp_path):
     assert loaded.decisions == []
     notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
     assert any("nothing to rebase" in n.lower() for n in notices)
+
+
+# ---------------------------------------------------------------------------
+# Validation gates: block on confirmed newly introduced errors, handle stale
+# results explicitly, never block on warnings/unverified checks.
+# ---------------------------------------------------------------------------
+
+
+def test_block_reasons_validation_gates(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
+    proposal = store.create(snap, "Proposed", "S", "R", "I")
+
+    clean = ValidationResult(version=proposal.current_version, base_revid=proposal.page.revid)
+    assert approval_block_reason(proposal, clean) is None
+    assert "validation" in approval_block_reason(proposal, None).lower()
+
+    errors = ValidationResult(
+        version=proposal.current_version,
+        base_revid=proposal.page.revid,
+        errors=("newly introduced link target 'X' does not exist",),
+    )
+    reason = approval_block_reason(proposal, errors)
+    assert reason is not None and "X" in reason
+
+    stale = ValidationResult(version=0, base_revid=0)
+    reason = approval_block_reason(proposal, stale)
+    assert reason is not None and "stale" in reason.lower()
+
+    # Warnings and unverified checks never block
+    noisy = ValidationResult(
+        version=proposal.current_version,
+        base_revid=proposal.page.revid,
+        warnings=("w",),
+        unverified=("u",),
+    )
+    assert approval_block_reason(proposal, noisy) is None
+
+    approved = store.set_status(proposal.id, "approved", reason="t")
+    assert publication_block_reason(approved, clean) is None
+    assert "validation" in publication_block_reason(approved, None).lower()
+    reason = publication_block_reason(approved, errors)
+    assert reason is not None and "X" in reason
+    reason = publication_block_reason(approved, stale)
+    assert reason is not None and "stale" in reason.lower()
+    assert publication_block_reason(approved, noisy) is None
+
+
+def test_review_explicit_validation_becomes_stale_after_edit(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "original line\n")
+    proposal = store.create(snap, "proposal line\n", "S", "R", "I")
+
+    wiki = MagicMock()
+    wiki.fetch_page.return_value = PageSnapshot(
+        "Page", 100, "2026-01-01T00:00:00Z", "original line\n"
+    )
+
+    def record(client, prop):
+        return ValidationResult(version=prop.current_version, base_revid=prop.page.revid)
+
+    with (
+        patch("agentic_bot.validate.validate_proposal", side_effect=record) as mock_validate,
+        patch("agentic_bot.review.read_key", side_effect=["c", "e", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as render,
+        patch(
+            "agentic_bot.review.edit_text_in_editor",
+            side_effect=lambda content, suffix: ("edited line\n", True),
+        ),
+    ):
+        assert review_proposal_interactive(Console(), proposal, store, wiki=wiki) == "back"
+
+    assert mock_validate.call_count == 1
+    edited = store.load(proposal.id)
+    assert edited.current_version == 2
+    last_result = render.call_args.kwargs["validation"]
+    assert not last_result.is_fresh(edited.current_version, edited.page.revid)
+
+
+def test_review_publish_blocked_by_validation_errors(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
+    proposal = store.create(snap, "Proposed", "S", "R", "I")
+    proposal = store.set_status(proposal.id, "approved", reason="t")
+
+    errors = ValidationResult(
+        version=proposal.current_version,
+        base_revid=proposal.page.revid,
+        errors=("newly introduced template 'Ghost' does not exist",),
+    )
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("agentic_bot.validate.validate_proposal", return_value=errors),
+        patch("agentic_bot.review.read_key", side_effect=["p", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+        patch("agentic_bot.review.confirm_publication") as mock_confirm,
+        patch("agentic_bot.review.attempt_publish") as mock_publish,
+    ):
+        assert review_proposal_interactive(Console(), proposal, store) == "back"
+
+    mock_confirm.assert_not_called()
+    mock_publish.assert_not_called()
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert any("Ghost" in n for n in notices)
+
+
+def test_review_approve_blocked_by_validation_errors(tmp_path):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
+    proposal = store.create(snap, "Proposed", "S", "R", "I")
+
+    errors = ValidationResult(
+        version=proposal.current_version,
+        base_revid=proposal.page.revid,
+        errors=("newly introduced link target 'X' does not exist",),
+    )
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
+        patch("agentic_bot.validate.validate_proposal", return_value=errors),
+        patch("agentic_bot.review.read_key", side_effect=["a", "b"]),
+        patch("agentic_bot.review.render_proposal_view", return_value=(0, 0, 10)) as mock_render,
+        patch("rich.prompt.Confirm.ask") as mock_confirm,
+    ):
+        assert review_proposal_interactive(Console(), proposal, store) == "back"
+
+    mock_confirm.assert_not_called()
+    assert store.load(proposal.id).status == "pending"
+    notices = [c.kwargs.get("notice", "") for c in mock_render.call_args_list]
+    assert any("'X'" in n for n in notices)
+
+
+def test_render_proposal_view_shows_validation_summary(tmp_path, capsys):
+    store = ProposalStore(tmp_path)
+    snap = PageSnapshot("Page", 100, "2026-01-01T00:00:00Z", "Base")
+    proposal = store.create(snap, "Proposed", "S", "R", "I")
+
+    errors = ValidationResult(
+        version=1, base_revid=100, errors=("newly introduced link target 'X' does not exist",)
+    )
+    with patch("agentic_bot.review.shutil.get_terminal_size", return_value=(100, 30)):
+        render_proposal_view(Console(), proposal, validation=errors)
+    assert "VALIDATION FAILED" in capsys.readouterr().out
+
+    incomplete = ValidationResult(version=1, base_revid=100, unverified=("u",))
+    with patch("agentic_bot.review.shutil.get_terminal_size", return_value=(100, 30)):
+        render_proposal_view(Console(), proposal, validation=incomplete)
+    out = capsys.readouterr().out
+    assert "VALIDATION INCOMPLETE" in out
+    assert "PASSED" not in out

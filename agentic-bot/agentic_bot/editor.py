@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -26,9 +27,12 @@ def edit_text_in_editor(content: str, suffix: str = ".txt") -> tuple[str, bool]:
         with open(temp_fd, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-        proc = subprocess.run([editor, str(temp_path)], check=False)
+        try:
+            proc = subprocess.run([*shlex.split(editor), str(temp_path)], check=False)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Could not start editor: {exc}") from exc
         if proc.returncode != 0:
-            return content, False
+            raise ValueError(f"editor exited with status {proc.returncode}")
 
         new_content = temp_path.read_text(encoding="utf-8")
         was_modified = new_content != content

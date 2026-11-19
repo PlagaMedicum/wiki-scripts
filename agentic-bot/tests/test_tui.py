@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from agentic_bot.tui import alternate_screen, format_badge, parse_raw_bytes, read_key
 
 
@@ -103,7 +104,10 @@ def test_read_key_never_drops_buffered_keystrokes(monkeypatch):
     monkeypatch.setattr(
         tui,
         "sys",
-        SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True, fileno=lambda: 0)),
+        SimpleNamespace(
+            stdin=SimpleNamespace(isatty=lambda: True, fileno=lambda: 0),
+            stdout=SimpleNamespace(isatty=lambda: False),
+        ),
     )
     tui._pending.clear()
     try:
@@ -132,7 +136,10 @@ def test_read_key_preserves_keys_queued_during_rendering(monkeypatch):
         monkeypatch.setattr(
             tui,
             "sys",
-            SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True, fileno=lambda: slave_fd)),
+            SimpleNamespace(
+                stdin=SimpleNamespace(isatty=lambda: True, fileno=lambda: slave_fd),
+                stdout=SimpleNamespace(isatty=lambda: False),
+            ),
         )
         tui._pending.clear()
         try:
@@ -144,3 +151,84 @@ def test_read_key_preserves_keys_queued_during_rendering(monkeypatch):
         os.close(slave_fd)
 
     assert keys == ["j"] + ["x"] * 39
+
+
+@pytest.mark.parametrize(
+    "packet,expected",
+    [
+        (b"\x1b[<64;10;8M", "up"),
+        (b"\x1b[<65;10;8M", "down"),
+        (b"\x1b[<81;10;8M", "down"),  # Ctrl + wheel
+        (b"\x1b[M`pd", "up"),  # X10 coordinates must not become action keys
+        (b"\x1b[Mapd", "down"),
+        (b"\x1b[M pd", "unknown"),  # ordinary click
+        (b"\x1b[<0;10;8M", "unknown"),
+        (b"\x1b[<64;10;8m", "unknown"),  # release is not a second scroll
+        (b"\x1b[<66;10;8M", "unknown"),  # horizontal wheel
+    ],
+)
+def test_mouse_packets_are_single_events_even_when_fragmented(packet, expected):
+    """AI-assisted: wheel reports scroll; clicks/coordinates cannot trigger actions."""
+    from agentic_bot.tui import split_key_chunk
+
+    for split in range(1, len(packet)):
+        buf = bytearray(packet[:split])
+        assert split_key_chunk(buf) is None
+        buf.extend(packet[split:] + b"q")
+        event = split_key_chunk(buf)
+        assert parse_raw_bytes(event) == expected
+        assert split_key_chunk(buf) == b"q"
+        assert not buf
+
+
+@pytest.mark.parametrize("outcome", ["key", "timeout", "failure"])
+def test_mouse_capture_ends_before_returning_to_prompts_or_editors(monkeypatch, outcome):
+    """AI-assisted: real TTY settings and mouse capture are restored on every exit."""
+    import io
+    import os
+    import pty
+    import termios
+    from types import SimpleNamespace
+
+    import agentic_bot.tui as tui
+
+    class TerminalOutput(io.StringIO):
+        def isatty(self):
+            return True
+
+    master, slave = pty.openpty()
+    output = TerminalOutput()
+    original = termios.tcgetattr(slave)
+    monkeypatch.setattr(
+        tui,
+        "sys",
+        SimpleNamespace(
+            stdin=SimpleNamespace(isatty=lambda: True, fileno=lambda: slave),
+            stdout=output,
+        ),
+    )
+    tui._pending.clear()
+    try:
+        if outcome == "key":
+            os.write(master, b"\x1b[<65;10;8Mq")
+            assert tui.read_key(timeout=1) == "down"
+            assert tui.read_key(timeout=1) == "q"
+        elif outcome == "timeout":
+            assert tui.read_key(timeout=0) == "timeout"
+        else:
+
+            def fail_read(*args):
+                raise OSError("Synthetic input failure")
+
+            os.write(master, b"x")
+            monkeypatch.setattr(tui.os, "read", fail_read)
+            with pytest.raises(OSError, match="Synthetic input failure"):
+                tui.read_key(timeout=1)
+        assert termios.tcgetattr(slave) == original
+        emitted = output.getvalue()
+        assert "\x1b[?1000h\x1b[?1006h" in emitted
+        assert emitted.endswith("\x1b[?1006l\x1b[?1000l")
+    finally:
+        tui._pending.clear()
+        os.close(master)
+        os.close(slave)

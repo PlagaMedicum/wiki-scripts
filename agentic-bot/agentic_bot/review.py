@@ -12,7 +12,9 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
+from rich.text import Text
 
+from agentic_bot import validate
 from agentic_bot.diff import compute_diff_stats, format_diff_lines
 from agentic_bot.editor import edit_text_in_editor
 from agentic_bot.merge import has_conflict_markers, three_way_merge
@@ -27,10 +29,48 @@ def get_file_suffix_for_page(title: str) -> str:
         return ".js"
     if title.endswith(".css"):
         return ".css"
-    return ".txt"
+    return ".wiki"
 
 
-def approval_block_reason(proposal: Proposal) -> str | None:
+def _validation_block_reason(
+    proposal: Proposal, validation: validate.ValidationResult | None, action: str
+) -> str | None:
+    if validation is None:
+        return f"Fresh validation required before {action} — run [c] to validate."
+    if not validation.is_fresh(proposal.current_version, proposal.page.revid):
+        return (
+            "Validation results are stale (content changed since the last validation run) — "
+            f"revalidate before {action}."
+        )
+    if validation.errors:
+        more = f" (+{len(validation.errors) - 1} more)" if len(validation.errors) > 1 else ""
+        return (
+            f"{len(validation.errors)} newly introduced validation error(s) must be fixed "
+            f"before {action}: {validation.errors[0]}{more}"
+        )
+    return None
+
+
+def run_validation(
+    console: Console, proposal: Proposal, wiki: WikiClient | None = None
+) -> validate.ValidationResult:
+    """Connect only for an explicit validation or approval/publication action."""
+    console.print("[cyan]Validating against the wiki; this may take several seconds...[/cyan]")
+    if wiki is None:
+        try:
+            wiki = WikiClient(site_lang=proposal.page.site_lang, family=proposal.page.family)
+        except Exception as exc:
+            return validate.ValidationResult(
+                proposal.current_version,
+                proposal.page.revid,
+                unverified=(f"MediaWiki client unavailable ({exc}) — no wiki checks were run",),
+            )
+    return validate.validate_proposal(wiki, proposal)
+
+
+def approval_block_reason(
+    proposal: Proposal, validation: validate.ValidationResult | None = None
+) -> str | None:
     """Return why approval is blocked, or None when the proposal is approvable."""
     if proposal.status != "pending":
         return (
@@ -42,10 +82,12 @@ def approval_block_reason(proposal: Proposal) -> str | None:
             "Unresolved conflict markers in the proposed content — "
             "resolve them with [e] before approving."
         )
-    return None
+    return _validation_block_reason(proposal, validation, "approving")
 
 
-def publication_block_reason(proposal: Proposal) -> str | None:
+def publication_block_reason(
+    proposal: Proposal, validation: validate.ValidationResult | None = None
+) -> str | None:
     """Return why publication is blocked, or None when the proposal is publishable."""
     if proposal.status == "pending":
         return "Proposal must be approved before publishing."
@@ -56,11 +98,15 @@ def publication_block_reason(proposal: Proposal) -> str | None:
             "Unresolved conflict markers in the proposed content — "
             "resolve them with [e] before publishing."
         )
-    return None
+    return _validation_block_reason(proposal, validation, "publishing")
 
 
-def confirm_publication(console: Console, proposal: Proposal) -> bool | None:
-    reason = publication_block_reason(proposal)
+def confirm_publication(
+    console: Console,
+    proposal: Proposal,
+    validation: validate.ValidationResult | None = None,
+) -> bool | None:
+    reason = publication_block_reason(proposal, validation)
     if reason:
         console.print(f"[yellow]{reason}[/yellow]")
         return None
@@ -144,32 +190,6 @@ def draw_frame(console: Console, render_fn: Any) -> None:
     sys.stdout.flush()
 
 
-def sync_proposal_with_wiki(
-    proposal: Proposal,
-    store: ProposalStore,
-    wiki: WikiClient | None,
-) -> tuple[str, Proposal]:
-    """Check live wiki revision strictly read-only; never rebase or mutate proposal."""
-    if wiki is None:
-        try:
-            wiki = WikiClient(
-                site_lang=proposal.page.site_lang,
-                family=proposal.page.family,
-            )
-        except Exception:
-            return "unknown", proposal
-
-    try:
-        live = wiki.fetch_page(proposal.page.title)
-    except Exception:
-        return "unknown", proposal
-
-    if live.revid == proposal.page.revid:
-        return "synced", proposal
-
-    return f"outdated:{live.revid}", proposal
-
-
 def merge_with_live(proposal: Proposal, live: PageSnapshot) -> tuple[str, bool]:
     """3-way merge the proposal against a live snapshot.
 
@@ -198,10 +218,7 @@ def pull_and_merge_for_edit(
 
     Returns (text, was_rebased, live, has_conflicts).
     """
-    try:
-        live = wiki.fetch_page(proposal.page.title)
-    except Exception:
-        return proposal.proposed_content, False, proposal.page, False
+    live = wiki.fetch_page(proposal.page.title)
 
     if live.revid == proposal.page.revid:
         return proposal.proposed_content, False, live, False
@@ -238,7 +255,7 @@ def render_dashboard_table(
     console: Console,
     proposals: list[Proposal],
     selected_idx: int = 0,
-    filter_status: str = "all",
+    filter_status: str = "active",
     notice: str = "",
 ) -> None:
     """Render proposals dashboard table with an active cursor row."""
@@ -255,57 +272,92 @@ def render_dashboard_table(
             f"[yellow]Pending:[/yellow] {pending_count}  │  "
             f"[green]Approved:[/green] {approved_count}  │  "
             f"[red]Declined:[/red] {declined_count}  │  "
-            f"[blue]Published:[/blue] {published_count}"
+            f"[green]Published:[/green] {published_count}"
         )
         if conflict_count:
             summary_bar += f"  │  [bold red]Conflicts:[/bold red] {conflict_count}"
         if notice:
             summary_bar += f"\n[bold yellow]NOTICE:[/bold yellow] {escape(notice)}"
 
-        c.print(
-            Panel(
-                summary_bar,
-                title=f"[bold cyan]WIKIPEDIA EDIT PROPOSALS DASHBOARD[/bold cyan] [dim](Filter: {filter_status.upper()})[/dim]",
-                border_style="cyan",
-            )
+        toolbar = (
+            f"{format_badge('↑/↓', 'Navigate')}   "
+            f"{format_badge('Enter', 'Open')}   "
+            f"{format_badge('f', f'Filter: {filter_status.upper()}')}   "
+            f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
+            f"{format_badge('p', 'Publish', 'green')}   "
+            f"{format_badge('d', 'Decline', 'red')}   "
+            f"{format_badge('e', 'Vim Edit', 'yellow')}   "
+            f"{format_badge('o', 'Browser', 'cyan')}   "
+            f"{format_badge('q', 'Quit', 'white')}"
         )
+        controls = Panel(
+            toolbar,
+            title="[bold]Controls[/bold]",
+            title_align="left",
+            border_style="bright_black",
+        )
+        summary = Panel(
+            summary_bar,
+            title=f"[bold cyan]WIKIPEDIA EDIT PROPOSALS DASHBOARD[/bold cyan] [dim](Filter: {filter_status.upper()})[/dim]",
+            border_style="cyan",
+        )
+        _, terminal_height = shutil.get_terminal_size((120, 40))
+        available = (
+            terminal_height - len(c.render_lines(summary)) - len(c.render_lines(controls)) - 5
+        )
+        if available < 2 or c.width < 60:
+            c.print(
+                "Terminal too small — resize or [q] Quit.",
+                markup=False,
+                no_wrap=True,
+                overflow="ellipsis",
+            )
+            return
+        capacity = available // 2  # two-line rows; columns never wrap
+        start = max(0, selected_idx) // capacity * capacity
+        c.print(summary)
 
         if not proposals:
             c.print(f"\n[dim italic]No proposals matching filter '{filter_status}'.[/dim italic]\n")
         else:
-            table = Table(show_header=True, header_style="bold cyan", expand=True)
-            table.add_column("Sel", justify="center", width=3)
-            table.add_column("ID", style="bold", width=6)
-            table.add_column("Status", width=11)
-            table.add_column("Mode", justify="center", width=10)
-            table.add_column("Diff", justify="center", width=11)
-            table.add_column("Tests", justify="center", width=10)
-            table.add_column("Affected Page & URL", style="blue")
-            table.add_column("Issue & Agent Rationale")
+            table = Table(show_header=True, header_style="bold cyan", expand=True, padding=(0, 0))
+            compact = c.width < 100
+            table.add_column("Sel", justify="center", width=3, min_width=3)
+            table.add_column("ID", style="bold", width=6, min_width=6)
+            table.add_column("Status", width=11, min_width=11)
+            if not compact:
+                table.add_column("Mode", justify="center", width=10, min_width=10)
+                table.add_column("Diff", justify="center", width=11, min_width=11)
+                table.add_column("Tests", justify="center", width=10, min_width=10)
+            table.add_column("Affected Page & URL", min_width=12, ratio=1)
+            table.add_column("Issue & Agent Rationale", min_width=12, ratio=2)
+            for column in table.columns:
+                column.no_wrap = True
+                column.overflow = "ellipsis"
 
             status_styles = {
                 "pending": "yellow",
                 "approved": "green",
                 "declined": "red",
-                "published": "bold blue",
+                "published": "green",
                 "conflict": "bold red",
             }
 
-            for idx, p in enumerate(proposals):
+            for idx, p in enumerate(proposals[start : start + capacity], start):
                 is_selected = idx == selected_idx
                 sel_pointer = "[bold cyan]▶[/bold cyan]" if is_selected else " "
                 row_style = "bold white on grey23" if is_selected else None
 
                 color = status_styles.get(p.status, "white")
-                added, removed = compute_diff_stats(p.page.content, p.proposed_content)
-                diff_badge = f"[green]+{added}[/green] / [red]-{removed}[/red]"
-                test_badge = extract_test_status(p.rationale)
-
-                mode_badge = (
-                    "[dim cyan]BOT[/dim cyan]"
-                    if p.mark_as_bot
-                    else "[bold yellow]CRITICAL[/bold yellow]"
-                )
+                if not compact:
+                    added, removed = compute_diff_stats(p.page.content, p.proposed_content)
+                    diff_badge = f"[green]+{added}[/green] / [red]-{removed}[/red]"
+                    test_badge = extract_test_status(p.rationale)
+                    mode_badge = (
+                        "[dim cyan]BOT[/dim cyan]"
+                        if p.mark_as_bot
+                        else "[bold yellow]CRITICAL[/bold yellow]"
+                    )
 
                 first_line_rationale = ""
                 for line in p.rationale.splitlines():
@@ -321,45 +373,20 @@ def render_dashboard_table(
 
                 id_str = f"[bold cyan]#{p.id}[/bold cyan]" if is_selected else f"#{p.id}"
 
-                table.add_row(
-                    sel_pointer,
-                    id_str,
-                    f"[{color}]{p.status.upper()}[/{color}]",
-                    mode_badge,
-                    diff_badge,
-                    test_badge,
-                    page_cell,
-                    issue_cell,
-                    style=row_style,
-                )
+                cells = [sel_pointer, id_str, f"[{color}]{p.status.upper()}[/{color}]"]
+                if not compact:
+                    cells.extend([mode_badge, diff_badge, test_badge])
+                table.add_row(*cells, page_cell, issue_cell, style=row_style)
 
             c.print(table)
 
-        toolbar = (
-            f"{format_badge('↑/↓', 'Navigate', 'cyan')}   "
-            f"{format_badge('Enter', 'Open', 'green')}   "
-            f"{format_badge('f', f'Filter: {filter_status.upper()}', 'magenta')}   "
-            f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
-            f"{format_badge('p', 'Publish', 'cyan')}   "
-            f"{format_badge('d', 'Decline', 'red')}   "
-            f"{format_badge('e', 'Vim Edit', 'yellow')}   "
-            f"{format_badge('o', 'Browser', 'blue')}   "
-            f"{format_badge('q', 'Quit', 'white')}"
-        )
-        c.print(
-            Panel(
-                toolbar,
-                title="[bold]Controls[/bold]",
-                title_align="left",
-                border_style="bright_black",
-            )
-        )
+        c.print(controls)
 
     draw_frame(console, _draw)
 
 
 def render_dashboard(
-    console: Console, store: ProposalStore, filter_status: str = "all"
+    console: Console, store: ProposalStore, filter_status: str = "active"
 ) -> list[Proposal]:
     proposals = store.list_proposals(status=filter_status)
     render_dashboard_table(console, proposals, selected_idx=-1, filter_status=filter_status)
@@ -417,7 +444,7 @@ def _content_lines(
                 "[bold cyan]── Proposed Edit Summary ─────────────────────────────────────────────[/bold cyan]"
             )
         )
-        lines.extend(_render(f'[bold green]"{escape(edit_summary)}"[/bold green]'))
+        lines.extend(_render(f'"{escape(edit_summary)}"'))
 
     return tuple(lines)
 
@@ -453,6 +480,7 @@ def render_proposal_view(
     view_mode: str = "all",
     sync_status: str = "offline",
     notice: str = "",
+    validation: validate.ValidationResult | None = None,
 ) -> tuple[int, int, int]:
     """Render proposal card with pinned header/footer and middle scrollable viewport.
 
@@ -468,7 +496,7 @@ def render_proposal_view(
         "pending": "yellow",
         "approved": "green",
         "declined": "red",
-        "published": "blue",
+        "published": "green",
         "conflict": "bold red",
     }.get(proposal.status, "white")
 
@@ -508,6 +536,19 @@ def render_proposal_view(
     )
     if notice:
         header_text += f"\n[bold yellow]NOTICE:[/bold yellow] {escape(notice)}"
+    if validation is None:
+        header_text += "\n[yellow]VALIDATION NOT RUN — press \\[c] to validate[/yellow]"
+    elif not validation.is_fresh(proposal.current_version, proposal.page.revid):
+        header_text += (
+            "\n[yellow]VALIDATION STALE — content changed; press \\[c] to revalidate[/yellow]"
+        )
+    else:
+        style = (
+            "bold red"
+            if validation.errors
+            else ("yellow" if validation.warnings or validation.unverified else "green")
+        )
+        header_text += f"\n[{style}]{escape(validation.summary())}[/{style}]"
 
     buf = Console(force_terminal=True, color_system=console.color_system or "auto", width=term_cols)
 
@@ -524,10 +565,59 @@ def render_proposal_view(
         width=term_cols - 2,
         color_system=console.color_system or "auto",
     )
+    if view_mode in ("all", "validation") and validation is not None:
+        details = Console(
+            width=term_cols - 2, force_terminal=True, color_system=console.color_system or "auto"
+        )
+        with details.capture() as capture:
+            details.print("[bold cyan]── Validation details ──[/bold cyan]")
+            if not validation.is_fresh(proposal.current_version, proposal.page.revid):
+                details.print("[yellow]STALE — findings below refer to an earlier version[/yellow]")
+            for line in validate.describe_validation(validation)[1:]:
+                details.print(escape(line))
+        all_lines = capture.get().splitlines() + [""] + all_lines
     total_lines = len(all_lines)
 
-    footer_height = 4
-    viewport_height = max(3, term_lines - header_height - footer_height - 1)
+    view_labels = {
+        "all": "ALL",
+        "diff": "DIFF ONLY",
+        "rationale": "RATIONALE ONLY",
+        "validation": "VALIDATION",
+    }
+    view_label = view_labels.get(view_mode, view_mode.upper())
+    toolbar_row = (
+        f"{format_badge('↑/↓', 'Scroll')}   "
+        f"{format_badge('v', 'View')}   "
+        f"{format_badge('c', 'Validate', 'cyan')}   "
+        f"{format_badge('a', 'Approve', 'green')}   "
+        f"{format_badge('p', 'Publish', 'green')}   "
+        f"{format_badge('d', 'Decline', 'red')}   "
+        f"{format_badge('e', 'Vim Edit', 'yellow')}   "
+        f"{format_badge('r', 'Rebase', 'yellow')}   "
+        f"{format_badge('m', 'Summary', 'yellow')}   "
+        f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
+        f"{format_badge('o', 'Browser', 'cyan')}   "
+        f"{format_badge('b', 'Back', 'white')}"
+    )
+    # Measure wrapped controls instead of assuming a fixed footer height.
+    longest_status = (
+        f"Scroll: lines {total_lines}-{total_lines} of {total_lines} (100%) "
+        f"[↑/↓ or j/k to scroll]  │  View: {view_label} ([v] to switch)"
+    )
+    footer = Panel(
+        f"{escape(longest_status)}\n{toolbar_row}",
+        title="[bold]Actions[/bold]",
+        border_style="bright_black",
+    )
+    footer_height = len(buf.render_lines(footer))
+    viewport_height = term_lines - header_height - footer_height - 1
+    if viewport_height < 3:
+        if sys.stdout.isatty():
+            sys.stdout.write("\033[H\033[J")
+        console.print(
+            "Terminal too small — enlarge window or [b] Back.", no_wrap=True, overflow="ellipsis"
+        )
+        return 0, 0, 0
 
     max_scroll = max(0, total_lines - viewport_height)
     clamped_scroll = max(0, min(scroll_offset, max_scroll))
@@ -536,13 +626,6 @@ def render_proposal_view(
     if len(visible_lines) < viewport_height:
         visible_lines.extend([""] * (viewport_height - len(visible_lines)))
 
-    view_labels = {
-        "all": "ALL",
-        "diff": "DIFF ONLY",
-        "rationale": "RATIONALE ONLY",
-    }
-    view_label = view_labels.get(view_mode, view_mode.upper())
-
     if total_lines <= viewport_height:
         scroll_info = "Scroll: All content visible"
     else:
@@ -550,24 +633,11 @@ def render_proposal_view(
         pct = int(100 * current_bottom / total_lines)
         scroll_info = f"Scroll: lines {clamped_scroll + 1}-{current_bottom} of {total_lines} ({pct}%) [↑/↓ or j/k to scroll]"
 
-    status_row = f"[bold cyan]{scroll_info}[/bold cyan]  │  [bold magenta]View: {view_label} ([v] to switch)[/bold magenta]"
+    status_row = f"[dim]{escape(scroll_info)}[/dim]  │  View: {view_label} (\\[v] to switch)"
 
-    toolbar_row = (
-        f"{format_badge('↑/↓', 'Scroll', 'cyan')}   "
-        f"{format_badge('v', 'View', 'magenta')}   "
-        f"{format_badge('a', 'Approve', 'green')}   "
-        f"{format_badge('p', 'Publish', 'cyan')}   "
-        f"{format_badge('d', 'Decline', 'red')}   "
-        f"{format_badge('e', 'Vim Edit', 'yellow')}   "
-        f"{format_badge('r', 'Rebase', 'yellow')}   "
-        f"{format_badge('m', 'Summary', 'magenta')}   "
-        f"{format_badge('t', 'Toggle Bot', 'yellow')}   "
-        f"{format_badge('o', 'Browser', 'blue')}   "
-        f"{format_badge('b', 'Back', 'white')}"
-    )
-    footer_text = f"{status_row}\n{toolbar_row}"
+    footer.renderable = f"{status_row}\n{toolbar_row}"
     with buf.capture() as cap:
-        buf.print(Panel(footer_text, title="[bold]Actions[/bold]", border_style="bright_black"))
+        buf.print(footer)
     footer_lines = cap.get().splitlines()
 
     screen_lines = header_lines + visible_lines + footer_lines
@@ -577,7 +647,7 @@ def render_proposal_view(
         sys.stdout.flush()
     else:
         for line in screen_lines:
-            console.print(line)
+            console.print(Text.from_ansi(line))
 
     return clamped_scroll, max_scroll, viewport_height
 
@@ -595,9 +665,10 @@ def review_proposal_interactive(
 ) -> str:
     """Run interactive review for a proposal with scrollable diff and instant actions."""
     scroll_offset = 0
-    view_modes = ["all", "diff", "rationale"]
+    view_modes = ["all", "diff", "rationale", "validation"]
     view_idx = 0
     notice = ""
+    validation: validate.ValidationResult | None = None
 
     while True:
         current_view = view_modes[view_idx]
@@ -608,6 +679,7 @@ def review_proposal_interactive(
             view_mode=current_view,
             sync_status=sync_status,
             notice=notice,
+            validation=validation,
         )
 
         key = read_key()
@@ -664,9 +736,22 @@ def review_proposal_interactive(
             webbrowser.open(url)
             continue
 
+        if key == "c":
+            validation = run_validation(console, proposal, wiki)
+            view_idx = view_modes.index("validation")
+            scroll_offset = 0
+            continue
+
         # Approve
-        if key == "a":
-            reason = approval_block_reason(proposal)
+        if key in ("a", "p") and (not sys.stdin.isatty() or not sys.stdout.isatty()):
+            notice = "Approval/publication requires an interactive terminal."
+            continue
+        if key == "a" or (key == "p" and proposal.status == "pending"):
+            if proposal.status == "pending" and not has_conflict_markers(proposal.proposed_content):
+                validation = run_validation(console, proposal, wiki)
+                view_idx = view_modes.index("validation")
+                scroll_offset = 0
+            reason = approval_block_reason(proposal, validation)
             if reason:
                 notice = reason
                 continue
@@ -674,6 +759,8 @@ def review_proposal_interactive(
                 sys.stdout.write("\033[?1049l\033[?25h")
                 sys.stdout.flush()
             try:
+                for line in validate.describe_validation(validation):
+                    console.print(escape(line))
                 confirmed = Confirm.ask(
                     f"[bold green]Approve proposal #{proposal.id} for publication?[/bold green]",
                     default=False,
@@ -690,7 +777,8 @@ def review_proposal_interactive(
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[?1049h\033[?25l")
                     sys.stdout.flush()
-            continue
+            if key == "a" or proposal.status != "approved":
+                continue
 
         # Decline
         if key == "d":
@@ -710,25 +798,18 @@ def review_proposal_interactive(
 
         # Edit in Vim
         if key == "e":
-            if wiki is None:
-                try:
+            try:
+                if wiki is None:
                     wiki = WikiClient(
                         site_lang=proposal.page.site_lang,
                         family=proposal.page.family,
                     )
-                except Exception:
-                    wiki = None
-
-            if wiki is not None:
                 text_to_edit, was_rebased, live, _has_conflicts = pull_and_merge_for_edit(
                     console, proposal, store, wiki
                 )
-            else:
-                text_to_edit, was_rebased, live = (
-                    proposal.proposed_content,
-                    False,
-                    proposal.page,
-                )
+            except Exception as exc:
+                notice = f"Could not fetch latest revision; editor not opened: {exc}"
+                continue
 
             suffix = get_file_suffix_for_page(proposal.page.title)
 
@@ -737,6 +818,9 @@ def review_proposal_interactive(
                 sys.stdout.flush()
             try:
                 new_content, modified = edit_text_in_editor(text_to_edit, suffix=suffix)
+            except (OSError, ValueError) as exc:
+                notice = f"Editor failed: {exc}"
+                continue
             finally:
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[?1049h\033[?25l")
@@ -764,6 +848,9 @@ def review_proposal_interactive(
                 sys.stdout.flush()
             try:
                 new_summary, modified = edit_text_in_editor(proposal.edit_summary, suffix=".txt")
+            except (OSError, ValueError) as exc:
+                notice = f"Editor failed: {exc}"
+                continue
             finally:
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[?1049h\033[?25l")
@@ -804,7 +891,13 @@ def review_proposal_interactive(
 
         # Publish
         if key == "p":
-            reason = publication_block_reason(proposal)
+            if proposal.status == "approved" and not has_conflict_markers(
+                proposal.proposed_content
+            ):
+                validation = run_validation(console, proposal, wiki)
+                view_idx = view_modes.index("validation")
+                scroll_offset = 0
+            reason = publication_block_reason(proposal, validation)
             if reason:
                 notice = reason
                 continue
@@ -814,8 +907,11 @@ def review_proposal_interactive(
                 sys.stdout.flush()
 
             try:
-                confirmed = confirm_publication(console, proposal)
+                for line in validate.describe_validation(validation):
+                    console.print(escape(line))
+                confirmed = confirm_publication(console, proposal, validation=validation)
                 if not confirmed:
+                    notice = "Publication cancelled; proposal remains approved."
                     continue
 
                 if wiki is None:
@@ -839,7 +935,7 @@ def interactive_dashboard_loop(
     wiki: WikiClient | None = None,
 ) -> None:
     """Single-entrypoint dashboard loop with arrow navigation in alternate screen."""
-    filter_cycles = ["all", "pending", "approved", "declined"]
+    filter_cycles = ["active", "pending", "approved", "conflict", "declined", "published", "all"]
     filter_idx = 0
     selected_idx = 0
     notice = ""
@@ -895,20 +991,16 @@ def interactive_dashboard_loop(
                 store.toggle_mark_as_bot(current_proposal.id)
                 continue
 
-            # Open proposal: read-only live-revision check (rebase explicitly with [r])
+            # Inspection uses only the local snapshot; live checks are explicit.
             if key in ("enter", "space", "right"):
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[2J\033[H")
                     sys.stdout.flush()
-                sync_status, updated_proposal = sync_proposal_with_wiki(
-                    current_proposal, store, wiki
-                )
                 action = review_proposal_interactive(
                     console,
-                    updated_proposal,
+                    current_proposal,
                     store,
                     wiki=wiki,
-                    sync_status=sync_status,
                 )
                 if sys.stdout.isatty():
                     sys.stdout.write("\033[2J\033[H")
@@ -938,25 +1030,18 @@ def interactive_dashboard_loop(
                 continue
 
             if key == "e":
-                if wiki is None:
-                    try:
+                try:
+                    if wiki is None:
                         wiki = WikiClient(
                             site_lang=current_proposal.page.site_lang,
                             family=current_proposal.page.family,
                         )
-                    except Exception:
-                        wiki = None
-
-                if wiki is not None:
                     text_to_edit, was_rebased, live, _has_conflicts = pull_and_merge_for_edit(
                         console, current_proposal, store, wiki
                     )
-                else:
-                    text_to_edit, was_rebased, live = (
-                        current_proposal.proposed_content,
-                        False,
-                        current_proposal.page,
-                    )
+                except Exception as exc:
+                    notice = f"Could not fetch latest revision; editor not opened: {exc}"
+                    continue
 
                 suffix = get_file_suffix_for_page(current_proposal.page.title)
 
@@ -965,6 +1050,9 @@ def interactive_dashboard_loop(
                     sys.stdout.flush()
                 try:
                     new_content, modified = edit_text_in_editor(text_to_edit, suffix=suffix)
+                except (OSError, ValueError) as exc:
+                    notice = f"Editor failed: {exc}"
+                    continue
                 finally:
                     if sys.stdout.isatty():
                         sys.stdout.write("\033[?1049h\033[?25l")
@@ -985,7 +1073,12 @@ def interactive_dashboard_loop(
                 continue
 
             if key == "p":
-                reason = publication_block_reason(current_proposal)
+                validation = None
+                if current_proposal.status == "approved" and not has_conflict_markers(
+                    current_proposal.proposed_content
+                ):
+                    validation = run_validation(console, current_proposal, wiki)
+                reason = publication_block_reason(current_proposal, validation)
                 if reason:
                     notice = reason
                     continue
@@ -994,7 +1087,9 @@ def interactive_dashboard_loop(
                     sys.stdout.write("\033[?1049l\033[?25h")
                     sys.stdout.flush()
                 try:
-                    confirmed = confirm_publication(console, current_proposal)
+                    for line in validate.describe_validation(validation):
+                        console.print(escape(line))
+                    confirmed = confirm_publication(console, current_proposal, validation)
                     if confirmed:
                         if wiki is None:
                             wiki = WikiClient(

@@ -180,7 +180,11 @@ class ProposalStore:
             if item.is_dir() and item.name.isdigit():
                 try:
                     p = self.load(item.name)
-                    if status is None or status.lower() == "all" or p.status == status:
+                    if status == "active":
+                        matches = p.status not in {"declined", "published"}
+                    else:
+                        matches = status is None or status.lower() == "all" or p.status == status
+                    if matches:
                         proposals.append(p)
                 except Exception:
                     continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 from agentic_bot.editor import edit_text_in_editor, get_preferred_editor
@@ -26,7 +27,6 @@ def test_edit_text_in_editor_no_change(tmp_path):
 
 def test_edit_text_in_editor_with_modification(tmp_path):
     import subprocess
-    from pathlib import Path
 
     def fake_run(cmd, **kwargs):
         # cmd is [editor, path_str]
@@ -40,3 +40,15 @@ def test_edit_text_in_editor_with_modification(tmp_path):
             content, modified = edit_text_in_editor("Пачатковы тэкст.")
             assert modified is True
             assert "Дадатковы радок." in content
+
+
+def test_visual_command_supports_arguments_without_shell(tmp_path):
+    with (
+        patch.dict(os.environ, {"VISUAL": 'vim -N --cmd "set noswapfile"'}),
+        patch("subprocess.run") as run,
+    ):
+        run.return_value.returncode = 0
+        assert edit_text_in_editor("[[Page]]", suffix=".wiki") == ("[[Page]]", False)
+    argv = run.call_args.args[0]
+    assert argv[:-1] == ["vim", "-N", "--cmd", "set noswapfile"]
+    assert Path(argv[-1]).suffix == ".wiki"

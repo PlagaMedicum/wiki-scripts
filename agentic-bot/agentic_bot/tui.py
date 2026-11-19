@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import select
 import sys
 import termios
@@ -9,8 +10,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 
-def format_badge(key: str, label: str, bg_color: str = "cyan") -> str:
-    """Format a high-contrast button badge with key and action label."""
+def format_badge(key: str, label: str, bg_color: str = "white") -> str:
+    """Neutral navigation; cyan inspection, yellow edits, green acceptance, red rejection."""
     return f"[bold black on {bg_color}] {key} [/bold black on {bg_color}] {label}"
 
 
@@ -34,6 +35,13 @@ def alternate_screen() -> Iterator[None]:
 
 def parse_raw_bytes(b: bytes) -> str:
     """Parse raw terminal byte sequence into a recognized key name."""
+    if b.startswith(b"\x1b[<"):
+        report = re.fullmatch(rb"\x1b\[<(\d+);\d+;\d+M", b)
+        button = int(report[1]) if report else -1
+        return {64: "up", 65: "down"}.get(button & ~28, "unknown")
+    if b.startswith(b"\x1b[M"):
+        button = b[3] - 32 if len(b) == 6 else -1
+        return {64: "up", 65: "down"}.get(button & ~28, "unknown")
     if b in (b"\x1b[A", b"\x1bOA"):
         return "up"
     elif b in (b"\x1b[B", b"\x1bOB"):
@@ -105,6 +113,13 @@ def split_key_chunk(buf: bytearray, final: bool = False) -> bytes | None:
 
     if b0 == 0x1B:
         data = bytes(buf)
+        if data.startswith(b"\x1b[M"):
+            # Legacy mouse reports carry three bytes after M, not keyboard input.
+            if len(buf) < 6 and not final:
+                return None
+            chunk = bytes(buf[:6])
+            del buf[:6]
+            return chunk
         for seq in _KNOWN_ESCAPE_SEQUENCES:
             if data.startswith(seq):
                 del buf[: len(seq)]
@@ -158,10 +173,13 @@ def split_key_chunk(buf: bytearray, final: bool = False) -> bytes | None:
 
 
 def read_key(timeout: float | None = None) -> str:
-    """Read a single key or escape sequence from terminal stdin in raw mode.
+    """Read one keyboard or mouse-wheel event from terminal stdin in raw mode.
 
     Buffered keystrokes are consumed one per call, so keys queued during a
     slow frame are delivered individually instead of being merged and lost.
+
+    Mouse reporting is enabled only while waiting for raw input, never while
+    a caller runs a prompt or editor. Wheel events use the existing up/down keys.
 
     Returns:
         str: 'up', 'down', 'left', 'right', 'enter', 'escape', 'space',
@@ -174,6 +192,7 @@ def read_key(timeout: float | None = None) -> str:
             return "q"
         return line.strip()
 
+    mouse = sys.stdout.isatty()
     while True:
         chunk = split_key_chunk(_pending)
         if chunk is not None:
@@ -184,6 +203,9 @@ def read_key(timeout: float | None = None) -> str:
         try:
             # TCSANOW: never flush input queued while frames rendered
             tty.setraw(fd, when=termios.TCSANOW)
+            if mouse:
+                sys.stdout.write("\033[?1000h\033[?1006h")
+                sys.stdout.flush()
             if not _pending and timeout is not None:
                 r, _, _ = select.select([fd], [], [], timeout)
                 if not r:
@@ -200,4 +222,9 @@ def read_key(timeout: float | None = None) -> str:
                 return "q"
             _pending.extend(data)
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            try:
+                if mouse:
+                    sys.stdout.write("\033[?1006l\033[?1000l")
+                    sys.stdout.flush()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

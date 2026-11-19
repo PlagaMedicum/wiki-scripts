@@ -6,12 +6,15 @@ from pathlib import Path
 
 from rich.console import Console
 
+from agentic_bot import validate
 from agentic_bot.editor import edit_text_in_editor
 from agentic_bot.review import (
     apply_rebase,
+    approval_block_reason,
     confirm_publication,
     get_file_suffix_for_page,
     interactive_dashboard_loop,
+    publication_block_reason,
     pull_and_merge_for_edit,
     render_dashboard,
     render_proposal_card,
@@ -27,7 +30,7 @@ def cmd_dashboard(args: argparse.Namespace, store: ProposalStore, console: Conso
 
 
 def cmd_list(args: argparse.Namespace, store: ProposalStore, console: Console) -> int:
-    render_dashboard(console, store)
+    render_dashboard(console, store, filter_status=args.status)
     return 0
 
 
@@ -68,15 +71,12 @@ def cmd_edit(args: argparse.Namespace, store: ProposalStore, console: Console) -
             site_lang=proposal.page.site_lang,
             family=proposal.page.family,
         )
-    except Exception:
-        wiki = None
-
-    if wiki is not None:
         text_to_edit, was_rebased, live_snapshot, _has_conflicts = pull_and_merge_for_edit(
             console, proposal, store, wiki
         )
-    else:
-        text_to_edit, was_rebased, live_snapshot = proposal.proposed_content, False, proposal.page
+    except Exception as exc:
+        console.print(f"[red]Could not fetch latest revision; editor not opened: {exc}[/red]")
+        return 1
 
     suffix = get_file_suffix_for_page(proposal.page.title)
     new_content, modified = edit_text_in_editor(text_to_edit, suffix=suffix)
@@ -94,6 +94,10 @@ def cmd_edit(args: argparse.Namespace, store: ProposalStore, console: Console) -
                 f"[green]Saved version v{proposal.current_version} for #{proposal.id}. "
                 "Status reset to PENDING.[/green]"
             )
+        console.print(
+            "[yellow]Validation is stale after content changes; "
+            "it will run before approval/publication.[/yellow]"
+        )
     else:
         console.print("[dim]No changes made.[/dim]")
     return 0
@@ -134,10 +138,17 @@ def cmd_approve(args: argparse.Namespace, store: ProposalStore, console: Console
             "Reopen it first.[/red]"
         )
         return 1
-    if "<<<<<<<" in proposal.proposed_content or ">>>>>>>" in proposal.proposed_content:
-        console.print(
-            f"[bold red]Cannot approve proposal #{proposal.id}: unresolved merge conflict markers.[/bold red]"
-        )
+
+    try:
+        wiki = WikiClient(site_lang=proposal.page.site_lang, family=proposal.page.family)
+    except Exception:
+        wiki = None
+    validation = validate.validate_proposal(wiki, proposal)
+    for line in validate.describe_validation(validation):
+        console.print(f"[cyan]{line}[/cyan]")
+    reason = approval_block_reason(proposal, validation)
+    if reason:
+        console.print(f"[bold red]Cannot approve proposal #{proposal.id}: {reason}[/bold red]")
         return 1
 
     # Display exact proposed diff and edit summary before confirmation
@@ -195,17 +206,29 @@ def cmd_publish(args: argparse.Namespace, store: ProposalStore, console: Console
         else:
             console.print("[red]Reopen the proposal before publishing.[/red]")
         return 1
+
+    try:
+        wiki = WikiClient(site_lang=proposal.page.site_lang, family=proposal.page.family)
+    except Exception:
+        wiki = None
+    validation = validate.validate_proposal(wiki, proposal)
+    for line in validate.describe_validation(validation):
+        console.print(f"[cyan]{line}[/cyan]")
+    reason = publication_block_reason(proposal, validation)
+    if reason:
+        console.print(f"[bold red]Publication blocked: {reason}[/bold red]")
+        return 1
+
     if not args.dry_run:
-        confirmed = confirm_publication(console, proposal)
+        confirmed = confirm_publication(console, proposal, validation=validation)
         if confirmed is None:
             return 1
         if not confirmed:
             return 0
 
-    wiki = WikiClient(
-        site_lang=proposal.page.site_lang,
-        family=proposal.page.family,
-    )
+    if wiki is None:
+        console.print("[bold red]ERROR: wiki client unavailable — cannot publish.[/bold red]")
+        return 1
 
     try:
         console.print(f"[cyan]Connecting to {proposal.page.wiki}...[/cyan]")
@@ -320,9 +343,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_list = subparsers.add_parser("list", help="List edit proposals table")
     p_list.add_argument(
         "--status",
-        choices=["pending", "approved", "declined", "published", "conflict", "all"],
-        default="all",
-        help="Filter by status (default: all)",
+        choices=["active", "pending", "approved", "declined", "published", "conflict", "all"],
+        default="active",
+        help="Filter by status (default: active, excluding published and declined)",
     )
 
     # show

@@ -20,6 +20,12 @@ the operator through one reviewed, approved replacement at a time.
   with the revision the diff was built from, and the same revision id is passed
   as `baserevid`; the server enforces it. Conflicts and API errors are reported
   as failed edits, never as successes.
+- **Bot-permission gate.** PUBLISH edits only wikis where the logged-in account
+  holds the bot flag. On a wiki where it does not, running the bot needs a local
+  bot request first (unflagged bot edits risk a block), so that wiki is ignored:
+  every candidate there is auto-skipped with a `bot permission required on
+  <host>` reason, and the Commons notice step follows the same rule. Preview is
+  anonymous and cannot know permissions, so the gate applies at publish time.
 - **AbuseFilter warnings.** A warn-level refusal is shown as the server's
   readable warning text and needs an explicit default-no confirmation to
   resubmit the identical edit once — the acknowledgement the server expects

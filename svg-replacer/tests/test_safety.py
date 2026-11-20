@@ -302,6 +302,9 @@ def _recording_api(log: list) -> type:
         def login(self, credentials):
             log.append(("login", self.host))
 
+        def user_rights(self):
+            return {"read", "edit", "bot"}
+
         def edit(self, *, title, text, summary, base_revid):
             log.append(("edit", self.host, title))
             return 7
@@ -423,13 +426,23 @@ class MultiWikiApi:
     def login(self, credentials):
         pass
 
+    def user_rights(self):
+        return {"read", "edit", "bot"}
+
     def edit(self, title, text, summary, base_revid):
         EDITS.append((self.host, title))
         return 7
 
 
 def run_multiwiki(
-    monkeypatch, capsys, *, argv_extra=(), publish_answer=None, tty=False, decision="skip"
+    monkeypatch,
+    capsys,
+    *,
+    argv_extra=(),
+    publish_answer=None,
+    tty=False,
+    decision="skip",
+    api_class=MultiWikiApi,
 ):
     EDITS.clear()
     asked = []
@@ -445,7 +458,7 @@ def run_multiwiki(
                 return True
 
         monkeypatch.setattr(cli.sys, "stdin", Tty())
-    monkeypatch.setattr(cli, "MediaWikiApi", MultiWikiApi)
+    monkeypatch.setattr(cli, "MediaWikiApi", api_class)
     monkeypatch.setattr(cli, "confirm", confirm)
     monkeypatch.setattr(cli, "Decider", lambda **kwargs: lambda proposal: decision)
     monkeypatch.setattr(
@@ -489,4 +502,62 @@ def test_publish_question_decides_mode(monkeypatch, capsys):
     )
     assert result == 0
     assert "PREVIEW" in shown
+    assert EDITS == []
+
+
+def test_publish_ignores_wikis_without_bot_permission(monkeypatch, capsys):
+    class UnflaggedAr(MultiWikiApi):
+        def user_rights(self):
+            rights = set(super().user_rights())
+            if self.host == "ar.wikipedia.org":
+                rights.discard("bot")
+            return rights
+
+    result, shown, _ = run_multiwiki(
+        monkeypatch,
+        capsys,
+        api_class=UnflaggedAr,
+        tty=True,
+        publish_answer=True,
+        decision="approve",
+    )
+    assert result == 0
+    assert ("commons.wikimedia.org", "File:Old.png") in EDITS
+    assert ("en.wikipedia.org", "En page") in EDITS
+    assert not any(host == "ar.wikipedia.org" for host, _ in EDITS)
+    assert "skip Ar page: bot permission required on ar.wikipedia.org" in shown
+
+
+def test_publish_ignores_commons_notice_without_bot_permission(monkeypatch, capsys):
+    class UnflaggedCommons(MultiWikiApi):
+        def user_rights(self):
+            rights = set(super().user_rights())
+            if self.host == "commons.wikimedia.org":
+                rights.discard("bot")
+            return rights
+
+    result, shown, _ = run_multiwiki(
+        monkeypatch,
+        capsys,
+        api_class=UnflaggedCommons,
+        tty=True,
+        publish_answer=True,
+        decision="approve",
+    )
+    assert result == 0
+    assert ("commons.wikimedia.org", "File:Old.png") not in EDITS
+    assert ("en.wikipedia.org", "En page") in EDITS
+    assert ("ar.wikipedia.org", "Ar page") in EDITS
+    assert "skip File:Old.png: bot permission required on commons.wikimedia.org" in shown
+    assert "Commons notice: skipped" in shown
+
+
+def test_preview_stays_anonymous_and_does_not_query_rights(monkeypatch, capsys):
+    class NoRightsQueries(MultiWikiApi):
+        def user_rights(self):
+            raise AssertionError("preview must not query user rights")
+
+    result, shown, _ = run_multiwiki(monkeypatch, capsys, api_class=NoRightsQueries)
+    assert result == 0
+    assert "Ar page" in shown
     assert EDITS == []

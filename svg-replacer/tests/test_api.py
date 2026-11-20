@@ -385,3 +385,23 @@ def test_page_revisions_keys_results_by_requested_titles_despite_normalization()
     assert revisions["Жалезная_карона"].revid == 555
     assert revisions["Жалезная_карона"].missing is False
     assert revisions["Італія"].revid == 556
+
+
+def test_user_rights_parsed_and_fetched_once() -> None:
+    calls: list[str] = []
+
+    def handler(url, query, body):
+        params = {**query, **body}
+        calls.append(str(params.get("action", ["?"])[0]))
+        assert params.get("meta") == ["userinfo"]
+        assert params.get("uiprop") == ["rights"]
+        return {
+            "query": {
+                "userinfo": {"id": 5, "name": "Example@bot", "rights": ["read", "edit", "bot"]}
+            }
+        }
+
+    api = make_api(handler)
+    assert api.user_rights() == frozenset({"read", "edit", "bot"})
+    assert api.user_rights() == frozenset({"read", "edit", "bot"})
+    assert calls == ["query"]

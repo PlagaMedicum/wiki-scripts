@@ -139,6 +139,7 @@ class MediaWikiApi:
         self.transport = transport if transport is not None else self._build_transport()
         self._file_namespaces: FileNamespace | None = None
         self._logged_in = False
+        self._user_rights: frozenset[str] | None = None
 
     def _build_transport(self) -> Transport:
         opener = build_opener(HTTPCookieProcessor(CookieJar()))
@@ -391,6 +392,18 @@ class MediaWikiApi:
         if result.get("result") != "Success":
             raise AuthError("loginfailed", "login did not establish a session")
         self._logged_in = True
+
+    def user_rights(self) -> frozenset[str]:
+        """Rights of the logged-in account on this wiki, fetched at most once.
+
+        Meaningful only after `login()`; an anonymous answer lists anonymous
+        rights and must not drive permission decisions.
+        """
+        if self._user_rights is None:
+            response = self._request({"action": "query", "meta": "userinfo", "uiprop": "rights"})
+            rights = response.get("query", {}).get("userinfo", {}).get("rights", [])
+            self._user_rights = frozenset(str(right) for right in rights)
+        return self._user_rights
 
     def csrf_token(self) -> str:
         response = self._request({"action": "query", "meta": "tokens", "type": "csrf"})

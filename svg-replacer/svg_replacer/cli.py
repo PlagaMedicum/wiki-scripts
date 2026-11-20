@@ -175,12 +175,29 @@ def _unused(title: str, text: str, summary: str, base_revid: int) -> int:
     raise AssertionError("publishing requested in read-only mode")
 
 
+def _bot_permission_reason(api: MediaWikiApi, credentials: Credentials | None) -> str | None:
+    """Publish-mode gate: a skip reason when this wiki must be ignored.
+
+    A wiki where the account holds no bot flag needs a local bot request
+    first, and unflagged bot edits risk a block, so publishing is skipped
+    there. Preview has no credentials and never logs in, so it cannot know.
+    """
+    if credentials is None:
+        return None
+    api.login(credentials)
+    if "bot" in api.user_rights():
+        return None
+    return f"bot permission required on {api.host} (account has no bot flag there)"
+
+
 def _publisher(api: MediaWikiApi, credentials: Credentials | None):
     if credentials is None:
         raise AssertionError("publishing requested without credentials")
 
     def publish(title: str, text: str, summary: str, base_revid: int) -> int:
         api.login(credentials)
+        if "bot" not in api.user_rights():
+            raise AssertionError(f"refusing edit on {api.host}: no bot permission")
         return api.edit(title=title, text=text, summary=summary, base_revid=base_revid)
 
     return publish
@@ -278,9 +295,16 @@ def _run(args: argparse.Namespace) -> int:
     svg_name = svg_info.title.partition(":")[2]
     summary = Summary()
 
-    # The Commons raster description edit is proposed first, separately approved.
-    raster_revision = _page_revision(commons, raster_info.title)
-    if raster_revision is None or raster_revision.missing:
+    # The Commons raster description edit is proposed first, separately approved;
+    # a wiki without bot permission for the account is never touched at all.
+    permission_gap = _bot_permission_reason(commons, credentials)
+    raster_revision = (
+        None if permission_gap is not None else _page_revision(commons, raster_info.title)
+    )
+    if permission_gap is not None:
+        print(f"skip {raster_info.title}: {permission_gap}")
+        commons_outcome = "skipped"
+    elif raster_revision is None or raster_revision.missing:
         print(f"Commons notice failed: page missing ({raster_info.title}).", color="31")
         commons_outcome = "failed"
     else:
@@ -310,10 +334,16 @@ def _run(args: argparse.Namespace) -> int:
     for candidate in candidates:
         by_host.setdefault(candidate.wiki, []).append(candidate)
     for host, host_candidates in by_host.items():
+        target = MediaWikiApi(host)
+        permission_gap = _bot_permission_reason(target, credentials)
+        if permission_gap is not None:
+            for candidate in host_candidates:
+                print(f"skip {candidate.title}: {permission_gap}")
+                summary.skipped.append((candidate.title, permission_gap))
+            continue
         # all-mode: hosts are only known after GlobalUsage answers.
         if hosts is None:
-            _verify_shared_files(MediaWikiApi(host), host, raster_info, svg_info)
-        target = MediaWikiApi(host)
+            _verify_shared_files(target, host, raster_info, svg_info)
         reviews = build_page_reviews(
             host_candidates,
             target.page_revisions,
